@@ -17,7 +17,7 @@ return [
 
     // Set true by the install wizard. Survives update ZIPs because the updater
     // never overwrites .env — used so /install cannot reappear after an update.
-    'installed' => (bool) env('APP_INSTALLED', false),
+    'installed' => filter_var(env('APP_INSTALLED', false), FILTER_VALIDATE_BOOLEAN),
 
     // Live read-only demo. When true (DEMO_MODE=true in .env), the whole app
     // is browsable but logged-in users can't create/update/delete anything.

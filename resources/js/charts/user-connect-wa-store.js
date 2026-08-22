@@ -337,7 +337,12 @@ function wireBaileys() {
             }
 
             btn.textContent = 'Polling for QR…';
-            setQrSlot(`<div style="font-family:monospace;color:${themeColor('ink-500')}">Waiting for Node to generate QR…</div>`);
+            if (j.qr_data) {
+                renderQr(j.qr_data);
+                showStatusBanner('Scan the QR with your WhatsApp app.', 'pending');
+            } else {
+                setQrSlot(`<div style="font-family:monospace;color:${themeColor('ink-500')}">Waiting for Node to generate QR…</div>`);
+            }
             startQrPoll(j.qr_poll_url);
         } catch (e) {
             setQrSlot(`<div style="color:${themeColor('accent-coral')}">${e.message}</div>`);

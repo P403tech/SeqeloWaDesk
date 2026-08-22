@@ -24,6 +24,25 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
     sleep 2
   done
   php artisan migrate --force --no-interaction
+  # Ephemeral disks lose storage/installed on every deploy. If MySQL already
+  # has users, restore the marker so EnsureInstalled never bounces to /install.
+  php -r '
+    require "vendor/autoload.php";
+    $app = require "bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    try {
+      if (Illuminate\Support\Facades\Schema::hasTable("users") && Illuminate\Support\Facades\DB::table("users")->exists()) {
+        App\Support\InstallState::forgetMemo();
+        App\Support\InstallState::markInstalled();
+        echo "Install marker restored (live users table).\n";
+      }
+    } catch (Throwable $e) {
+      echo "Install marker skip: ".$e->getMessage()."\n";
+    }
+  ' || true
+  # Gallery templates live in MySQL (not the image). Re-seed on boot so
+  # /flows "Start from a template" is never empty after a deploy.
+  php artisan db:seed --class=Database\\Seeders\\FlowTemplateSeeder --force --no-interaction || true
 else
   echo "Skipping migrate (DB_CONNECTION=${DB_CONNECTION:-unset}; no MYSQLHOST)."
 fi

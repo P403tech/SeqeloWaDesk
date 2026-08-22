@@ -448,7 +448,13 @@ class InstallController extends Controller
 
     public function run(Request $request): View|RedirectResponse
     {
-        if ($r = $this->ensureStep($request, 6)) return $r;
+        if ($r = $this->ensureStep($request, 6)) {
+            if ($this->adminUserExists()) {
+                $request->session()->put('install_step', 6);
+            } else {
+                return $r;
+            }
+        }
         return view('install.progress', ['currentStep' => 7]);
     }
 
@@ -478,17 +484,18 @@ class InstallController extends Controller
         $admin = $request->session()->get('admin_data', []);
         $node  = $request->session()->get('node', []);
 
-        if (empty($db) || empty($app) || empty($admin)) {
+        // After a container restart the wizard session is gone, but steps 1–4
+        // already wrote MySQL. Permissions + finalize must still return JSON.
+        $canResume = $step >= 5 && $this->adminUserExists();
+
+        if (! $canResume && (empty($db) || empty($app) || empty($admin))) {
             return response()->json([
                 'success' => false,
-                'message' => 'Installation state lost. Restart the wizard from /install.',
+                'message' => 'Installation state lost. Open /install/run and retry, or restart the wizard from /install.',
             ], 422);
         }
 
-        // Substep ≥ 2 needs DB access — apply runtime config so it
-        // picks up the values the user just entered, before any
-        // Artisan/Eloquent call.
-        if ($step >= 2) {
+        if ($step >= 2 && ! empty($db)) {
             $this->applyDatabaseConfig($db);
         }
 
@@ -833,6 +840,13 @@ class InstallController extends Controller
         try { Artisan::call('route:clear');  } catch (\Throwable $e) {}
         try { Artisan::call('view:clear');   } catch (\Throwable $e) {}
 
+        if (($admin['email'] ?? '') === '') {
+            try {
+                $admin['email'] = (string) (User::query()->value('email') ?? '');
+            } catch (\Throwable $e) {
+            }
+        }
+
         $payload = [
             'installed_at' => now()->toIso8601String(),
             'version'      => (string) config('version.version', '1.0.0'),
@@ -855,6 +869,15 @@ class InstallController extends Controller
     }
 
     /* ===================== HELPERS ===================== */
+
+    private function adminUserExists(): bool
+    {
+        try {
+            return Schema::hasTable('users') && User::query()->exists();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
 
     private function resolveAppKey(string $envContent): string
     {

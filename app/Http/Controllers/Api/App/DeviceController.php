@@ -419,10 +419,12 @@ class DeviceController extends Controller
             if ($terminateFirst) {
                 try {
                     Http::timeout(8)->acceptJson()
+                        ->withHeaders(['X-Node-Token' => node_token()])
                         ->get(rtrim($base, '/') . '/api/terminate-client/' . urlencode($phone));
                 } catch (\Throwable $e) { /* best-effort */ }
             }
-            $r = Http::timeout(15)->acceptJson()
+            $r = Http::timeout(40)->acceptJson()
+                ->withHeaders(['X-Node-Token' => node_token()])
                 ->get(rtrim($base, '/') . '/api/initialize-client/' . urlencode($phone));
             return $r->json() ?: ['qr' => null, 'status' => 'pending'];
         } catch (\Throwable $e) {

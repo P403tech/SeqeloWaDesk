@@ -2534,31 +2534,38 @@ class DevicesController extends Controller
             ]);
         }
         try {
-            // Reconnect / regenerate-QR must reach Node in the SAME clean state
-            // a brand-new "Add device" hits — i.e. with NO leftover in-memory
-            // session for this number. A device that connected before leaves a
-            // stale manager (dead socket / old QR) in Node, so reusing it made
-            // the QR un-scannable while Add device (no prior manager) worked.
-            // For a not-currently-connected device, terminate any stale Node
-            // session first; initialize-client then builds a fresh socket + QR.
-            // Best-effort — ignore failures so the QR still loads.
-            if ($d->status !== 'connected') {
-                try {
-                    Http::timeout(8)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])->get(rtrim($base, '/') . '/api/terminate-client/' . urlencode($phone));
-                } catch (\Throwable $e) {
-                }
+            // Polling this URL every ~2s used to GET /terminate-client first.
+            // That logged the socket out the instant a QR was minted, so
+            // WhatsApp showed "Couldn't link device. Try again later."
+            // If a QR is already live, return it. Otherwise start one.
+            $statusRes = Http::timeout(8)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])
+                ->get(rtrim($base, '/') . '/api/client-status/' . urlencode($phone));
+            $statusBody = $statusRes->json() ?: [];
+            if (($statusBody['status'] ?? '') === 'connected') {
+                return response()->json([
+                    'success' => true,
+                    'qr'      => null,
+                    'status'  => 'connected',
+                ]);
+            }
+            if (! empty($statusBody['qr'])) {
+                return response()->json([
+                    'success' => true,
+                    'qr'      => $statusBody['qr'],
+                    'status'  => $statusBody['status'] ?? 'qr_ready',
+                    'message' => 'QR code generated',
+                ]);
             }
 
-            // Node's actual endpoint: GET /api/initialize-client/:phoneNumber
-            // Returns { qr, message, status: "qr_ready" | "connected" }.
-            $res = Http::timeout(15)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])->get(rtrim($base, '/') . '/api/initialize-client/' . urlencode($phone));
+            $res = Http::timeout(40)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])->get(rtrim($base, '/') . '/api/initialize-client/' . urlencode($phone));
             $body = $res->json() ?: [];
             return response()->json([
                 'success' => $res->successful(),
                 'qr'      => $body['qr'] ?? null,
                 'status'  => $body['status'] ?? 'pending',
-                'message' => $body['message'] ?? null,
-            ], $res->status());
+                'message' => $body['message'] ?? $body['details'] ?? null,
+                'error'   => $body['error'] ?? null,
+            ], $res->successful() ? 200 : $res->status());
         } catch (\Throwable $e) {
             return response()->json(['success' => false, 'error' => $e->getMessage()], 502);
         }

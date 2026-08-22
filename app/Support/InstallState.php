@@ -42,14 +42,10 @@ class InstallState
         }
 
         if (self::hasLiveDatabase()) {
-            // Honor an explicit APP_INSTALLED=false (e.g. Railway) so a
-            // half-finished wizard — admin user already in MySQL — can still
-            // complete. Auto-heal only when the flag is absent, which is the
-            // update-ZIP case.
-            if (self::envExplicitlyFalse() || self::isWizardRequest()) {
-                return self::$memo = false;
-            }
-
+            // Users already exist: this is a live product. Do not send
+            // traffic back to /install after a deploy (Railway wipes
+            // storage/installed and often keeps APP_INSTALLED=false in
+            // the dashboard). The wizard still runs on a truly empty DB.
             self::$memo = true;
             self::persistQuietly();
 
@@ -101,17 +97,6 @@ class InstallState
         self::$memo = null;
     }
 
-    private static function isWizardRequest(): bool
-    {
-        try {
-            $path = trim(request()->getPathInfo(), '/');
-
-            return $path === 'install' || str_starts_with($path, 'install/');
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
     private static function persistQuietly(): void
     {
         static $done = false;
@@ -147,24 +132,6 @@ class InstallState
                 return true;
             }
         } catch (\Throwable $e) {
-        }
-
-        return false;
-    }
-
-    private static function envExplicitlyFalse(): bool
-    {
-        foreach ([
-            $_ENV['APP_INSTALLED'] ?? null,
-            $_SERVER['APP_INSTALLED'] ?? null,
-            getenv('APP_INSTALLED') ?: null,
-        ] as $raw) {
-            if ($raw === false || $raw === 0 || $raw === '0') {
-                return true;
-            }
-            if (is_string($raw) && $raw !== '' && ! self::truthy($raw)) {
-                return true;
-            }
         }
 
         return false;

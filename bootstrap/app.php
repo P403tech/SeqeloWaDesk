@@ -333,6 +333,7 @@ return Application::configure(basePath: dirname(__DIR__))
             's/*/checkout',
             's/*/coupon',
             's/*/review',
+            'install/execute',
             's/*/abandon',
             // Razorpay storefront-payment webhook — authed via HMAC signature.
             'webhooks/storefront-pay',

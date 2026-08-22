@@ -16,16 +16,21 @@ export async function initializeClient(req, res, app) {
   const phoneNumber = req.params.phoneNumber;
   
   try {
-
-    
-    // Check if client already exists and is ready
     const existingClient = app.locals.clients[phoneNumber];
     if (existingClient && app.locals.client_ready[phoneNumber]) {
-
       return res.json({
         message: "Client already ready",
         qr: null,
         status: "connected"
+      });
+    }
+
+    const liveQr = app.locals.clientManagers[phoneNumber];
+    if (liveQr && liveQr.qrCode && !app.locals.client_ready[phoneNumber]) {
+      return res.json({
+        qr: liveQr.qrCode,
+        message: "QR code generated",
+        status: "qr_ready"
       });
     }
     
@@ -35,7 +40,6 @@ export async function initializeClient(req, res, app) {
       const timeSinceLock = Date.now() - lockTime;
       
       if (timeSinceLock < 60000) { // 1 minute lock
-
         return res.status(429).json({
           error: "Connection in progress. Please wait."
         });
@@ -60,10 +64,19 @@ export async function initializeClient(req, res, app) {
     let clientManager = app.locals.clientManagers[phoneNumber];
 
     if (clientManager && !app.locals.client_ready[phoneNumber]) {
+      if (clientManager.qrCode) {
+        delete app.locals.connectionLocks[phoneNumber];
+        return res.json({
+          qr: clientManager.qrCode,
+          message: "QR code generated",
+          status: "qr_ready"
+        });
+      }
       console.log(`[${phoneNumber}] [QR] reconnect → discarding old manager, rebuilding fresh (same as Add device)`);
       try { await clientManager.resetForFreshAuth(); } catch (e) {}
       if (clientManager.healthTimer)    { clearInterval(clientManager.healthTimer);    clientManager.healthTimer = null; }
       if (clientManager.reconnectTimer) { clearTimeout(clientManager.reconnectTimer);  clientManager.reconnectTimer = null; }
+      try { await clientManager.deleteSessionFiles(); } catch (e) {}
       delete app.locals.clientManagers[phoneNumber];
       delete app.locals.clients[phoneNumber];
       app.locals.client_ready[phoneNumber] = false;
@@ -76,6 +89,10 @@ export async function initializeClient(req, res, app) {
         app.locals,
         app.locals.appDomainName
       );
+      // Leftover creds in baileys_auth/session_<phone> make Baileys skip
+      // the QR event (it thinks the device is already registered). Wipe
+      // them whenever we are not currently connected so a new QR can mint.
+      try { await clientManager.deleteSessionFiles(); } catch (e) {}
       app.locals.clientManagers[phoneNumber] = clientManager;
     }
 
@@ -93,7 +110,7 @@ export async function initializeClient(req, res, app) {
       
       // Check if client became ready (already connected)
       if (app.locals.client_ready[phoneNumber]) {
-
+        delete app.locals.connectionLocks[phoneNumber];
         return res.json({
           message: "Client already ready",
           qr: null,
@@ -103,7 +120,7 @@ export async function initializeClient(req, res, app) {
     }
     
     if (clientManager.qrCode) {
-
+      delete app.locals.connectionLocks[phoneNumber];
       res.json({
         qr: clientManager.qrCode,
         message: "QR code generated",

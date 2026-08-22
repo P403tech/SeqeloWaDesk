@@ -942,7 +942,7 @@
                             <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">2. Scan QR
                             </div>
 
-                            <div
+                            <div id="device-qr-slot"
                                 class="bg-paper-50 border border-paper-200 rounded-2xl p-6 flex flex-col items-center justify-center min-h-[260px]">
                                 <div
                                     class="w-32 h-32 rounded-2xl border border-dashed border-paper-300 grid place-items-center text-paper-300">

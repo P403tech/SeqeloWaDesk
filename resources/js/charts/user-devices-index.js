@@ -415,6 +415,10 @@ function pollConnectionStatus() {
             $('connect-status-pct').textContent   = progress + '%';
             $('connect-status-bar').style.width   = Math.max(2, progress) + '%';
             paintConnectSteps(classifyStatus(status));
+            if (connectMode === 'qr' && data.qr) {
+                const src = await renderQrDataUrl(data.qr, 320);
+                if (src) $('connect-qr-img').src = src;
+            }
 
             if (classifyStatus(status) === 'ready') {
                 clearInterval(connectPollTimer);
@@ -622,8 +626,15 @@ function wireAddModal() {
         // details stay readable beside the QR — see the submit handler).
         unlockFormFields($('device-form'));
         // Reset QR slot to placeholder state every time we open
-        const qrSlot = modal.querySelector('.bg-paper-50.border-paper-200.rounded-2xl > div:first-child');
-        if (qrSlot) qrSlot.innerHTML = '<svg viewBox="0 0 16 16" class="w-12 h-12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h2v2H9zM13 9v2M9 13h2"/></svg>';
+        const qrSlot = $('device-qr-slot');
+        if (qrSlot) {
+            qrSlot.innerHTML = `
+              <div class="w-32 h-32 rounded-2xl border border-dashed border-paper-300 grid place-items-center text-paper-300">
+                <svg viewBox="0 0 16 16" class="w-12 h-12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h2v2H9zM13 9v2M9 13h2"/></svg>
+              </div>
+              <div class="font-serif text-[16px] mt-4 text-ink-900">Connect to see the QR</div>
+              <div class="text-[11px] text-ink-500 mt-1 font-mono">QR appears once you click Connect</div>`;
+        }
     };
     const close = () => {
         modal.classList.add('hidden');
@@ -673,7 +684,7 @@ function wireAddModal() {
                 // form cleared the moment the QR appears.
                 lockFormFields(form);
                 renderQrSlotLoading('Generating QR…');
-                startQrPoll(j.device_id, j.qr_url, j.status_url);
+                startQrPoll(j.device_id);
             } catch (err) {
                 renderQrSlotError('Network error: ' + err.message);
                 if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origLabel; }
@@ -685,9 +696,7 @@ function wireAddModal() {
 let qrPollTimer = null;
 
 function getQrSlotContainer() {
-    const modal = $('device-modal');
-    if (!modal) return null;
-    return modal.querySelector('.bg-paper-50.border-paper-200.rounded-2xl');
+    return $('device-qr-slot');
 }
 
 function renderQrSlotLoading(msg) {
@@ -719,7 +728,10 @@ async function renderQrSlotImage(qrData, statusLine) {
     // WhatsApp pairing string; renderQrDataUrl draws it to a PNG
     // data: URL we can drop into <img src>.
     const src = await renderQrDataUrl(qrData, 320);
-    if (!src) return;
+    if (!src) {
+        renderQrSlotError('Got a pairing payload but could not draw the QR. Try again.');
+        return;
+    }
     box.innerHTML = `
       <img src="${src}" alt="WhatsApp QR" class="w-48 h-48 object-contain rounded-xl bg-white p-2 border border-paper-200" />
       <div class="font-serif text-[16px] mt-3 text-ink-900">Scan with WhatsApp</div>
@@ -737,27 +749,47 @@ function renderQrSlotSuccess(phone) {
       <div class="text-[11px] text-ink-500 mt-1 font-mono">${phone || 'Device paired'}</div>`;
 }
 
-function startQrPoll(deviceId, qrUrl, statusUrl) {
+function startQrPoll(deviceId) {
     if (qrPollTimer) clearInterval(qrPollTimer);
     let attempt = 0;
     let qrLoaded = false;
+    let inflight = false;
+    // Always hit the same origin as this page — never trust an APP_URL-built
+    // absolute route (empty/stale APP_URL sent the browser to localhost).
+    const qrUrl = `${DEVICES_PATH}/${deviceId}/qr-code`;
+    const statusUrl = `${DEVICES_PATH}/${deviceId}/connection-status`;
 
     const tick = async () => {
+        if (inflight) return;
+        inflight = true;
         attempt++;
         try {
             // First call asks Node to spin up the session and returns the
             // initial QR. Subsequent calls only poll status.
             const url = qrLoaded ? statusUrl : qrUrl;
             const res = await fetch(url, { headers: { Accept: 'application/json' } });
-            const j = await res.json();
+            const j = await res.json().catch(() => ({}));
+
+            if (!res.ok && !j.qr) {
+                const msg = j.error || j.details || j.message || ('HTTP ' + res.status);
+                if (res.status === 429) {
+                    renderQrSlotLoading('Waiting for the bridge…');
+                    return;
+                }
+                if (attempt > 3) {
+                    clearInterval(qrPollTimer);
+                    qrPollTimer = null;
+                    renderQrSlotError(msg);
+                } else {
+                    renderQrSlotLoading('Generating QR…');
+                }
+                return;
+            }
 
             if (j.status === 'connected' || j.paired) {
                 clearInterval(qrPollTimer);
                 qrPollTimer = null;
                 renderQrSlotSuccess(j.phone);
-                // Inside the global Connect-device popover (iframe): tell the
-                // parent to close + refresh the picker instead of reloading the
-                // iframe. On the real /devices page, reload as before.
                 if (window.parent && window.parent !== window) {
                     setTimeout(() => { try { window.parent.postMessage({ type: 'wadesk:device-connected' }, '*'); } catch (e) {} }, 900);
                 } else {
@@ -776,19 +808,20 @@ function startQrPoll(deviceId, qrUrl, statusUrl) {
             if (attempt > 60) {
                 clearInterval(qrPollTimer);
                 qrPollTimer = null;
-                renderQrSlotError("Timed out waiting for pair. Check that the Node bridge is running, then try again.");
+                renderQrSlotError(j.error || j.message || "Timed out waiting for pair. Check that the Node bridge is running, then try again.");
             }
         } catch (e) {
-            // Keep polling on transient errors; only abort if too many.
             if (attempt > 10 && !qrLoaded) {
                 clearInterval(qrPollTimer);
                 qrPollTimer = null;
                 renderQrSlotError(e.message);
             }
+        } finally {
+            inflight = false;
         }
     };
     tick();
-    qrPollTimer = setInterval(tick, 2000);
+    qrPollTimer = setInterval(tick, 2500);
 }
 
 /* ---- Add-device chooser modal (multi-engine /devices only) ----

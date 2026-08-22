@@ -567,6 +567,7 @@ export class BaileysClientManager {
         this.connectionRetries++;
         setTimeout(() => this.start(), 5000);
       }
+      throw error;
     }
   }
 
@@ -793,20 +794,19 @@ export class BaileysClientManager {
 
     if (qr) {
       const now = Date.now();
+      this.qrCode = qr;
       if (now - this.lastQRTime < 5000) {
-
         return;
       }
       this.lastQRTime = now;
       this.qrShownAt  = now;
       if (!this.qrFirstShownAt) this.qrFirstShownAt = now; // start the 90s stall clock once
-      this.qrCode = qr;
       this.isQRScanned = false;
       this.isConnecting = true;
 
       console.log(`[${this.phoneNumber}] [QR] generated — waiting for scan (refresh #${this.connectionRetries + 1}). QR will rotate every ~20s; rotate count grows with each Baileys regenerate cycle.`);
       qrcode.generate(qr, { small: true });
-      await updateStatusInLaravel("Qr generated", 0, this.phoneNumber, this.appDomainName);
+      await updateStatusInLaravel("Qr generated", 0, this.phoneNumber, this.appDomainName, qr);
       return;
     }
 
@@ -911,14 +911,17 @@ export class BaileysClientManager {
       // existing backoff retry it.
       const isTransientPostPair = (statusCode === 515 || statusCode === 500);
 
-      // Failed first-time pair: the socket never reached `open` AND the
-      // close was a hard reject (not the transient 515/500 above). Means
-      // the pair was rejected (QR timed out, WhatsApp refused the scan,
-      // session conflict, too many linked devices, etc.). Retrying just
-      // spawns another QR the user has to look at — useless when the
-      // underlying problem is on WhatsApp's side. Stop hard, surface the
-      // reason loudly, and let the user retry from /devices.
-      if (!this.hasEverConnected && !isTransientPostPair) {
+      // Only abort a first-time pair on a HARD WhatsApp reject. Generic
+      // closes (408 timeout, 428 connectionClosed, undefined status, QR
+      // rotation) happen WHILE Baileys is minting the first QR — treating
+      // those as failure wiped this.qrCode and left the UI stuck on
+      // "Generating QR…". 515/500 are already excluded above.
+      const hardPairReject =
+        statusCode === 403 ||
+        statusCode === DisconnectReason.multideviceMismatch ||
+        /mismatch|device.?limit|couldn'?t link|multidevice/i.test(String(errorMessage || ''));
+
+      if (!this.hasEverConnected && hardPairReject) {
         if (this.qrStallTimer) { clearInterval(this.qrStallTimer); this.qrStallTimer = null; }
         const ageMs = this.qrShownAt ? Date.now() - this.qrShownAt : null;
         console.error(
@@ -930,6 +933,7 @@ export class BaileysClientManager {
         );
         this.shouldStayConnected = false;
         this.connectionRetries = this.maxRetries;
+        this.qrCode = null;
         try { if (this.sock) await this.sock.end?.(); } catch (e) {}
         try { await this.deleteSessionFiles(); } catch (e) {}
         delete this.appLocals.clientManagers[this.phoneNumber];
@@ -938,27 +942,39 @@ export class BaileysClientManager {
         return;
       }
 
-      if (statusCode === 401) {
-        console.warn(`[${this.phoneNumber}] 401 — WhatsApp invalidated this device's session (probably unlinked from the phone's Linked Devices screen)`);
-        this.shouldStayConnected = false;
-
-        try {
-          if (this.sock) {
-            await this.sock.logout();
-          }
-        } catch (e) {
-
-        }
-
-        await this.deleteSessionFiles();
-        await updateStatusInLaravel("Logged Out", 0, this.phoneNumber, this.appDomainName);
-
-        return;
+      if (!this.hasEverConnected && !isTransientPostPair && !hardPairReject) {
+        console.log(`[${this.phoneNumber}] [QR] pre-open close (${reasonLabel}, statusCode=${statusCode}) — keeping session so a QR can still be minted`);
       }
 
-      const isLoggedOut = 
-        statusCode === DisconnectReason.loggedOut ||
-        statusCode === 403;
+      if (statusCode === 401) {
+        if (!this.hasEverConnected) {
+          // Unpaired QR sockets often close with 401 "Intentional Logout"
+          // when a second /qr-code poll hits terminate-client, or when
+          // WhatsApp rotates the pairing session. Logging out here killed
+          // the QR and the phone showed "Try again later."
+          console.warn(`[${this.phoneNumber}] 401 during QR wait — keeping pairing alive for a new QR`);
+        } else {
+          console.warn(`[${this.phoneNumber}] 401 — WhatsApp invalidated this device's session (probably unlinked from the phone's Linked Devices screen)`);
+          this.shouldStayConnected = false;
+
+          try {
+            if (this.sock) {
+              await this.sock.logout();
+            }
+          } catch (e) {
+
+          }
+
+          await this.deleteSessionFiles();
+          await updateStatusInLaravel("Logged Out", 0, this.phoneNumber, this.appDomainName);
+
+          return;
+        }
+      }
+
+      const isLoggedOut =
+        this.hasEverConnected &&
+        (statusCode === DisconnectReason.loggedOut || statusCode === 403);
 
       const isBadSession = statusCode === DisconnectReason.badSession;
 

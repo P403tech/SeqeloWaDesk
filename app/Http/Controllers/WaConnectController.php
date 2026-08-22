@@ -328,27 +328,38 @@ class WaConnectController extends Controller
 
         // Kick off Node's QR flow. The endpoint is GET (Node's design).
         // Response is either { qr, status: 'qr_ready' } or { status: 'connected' }.
+        // Node waits up to 30s for the first QR — this timeout must be higher
+        // or Laravel aborts while Baileys is still connecting. Remote Node
+        // (Railway / split host) also requires X-Node-Token; loopback-only
+        // auth is not enough there.
+        $qr = null;
         try {
-            $res = \Illuminate\Support\Facades\Http::timeout(15)
+            $res = \Illuminate\Support\Facades\Http::timeout(40)
                 ->acceptJson()
+                ->withHeaders(['X-Node-Token' => node_token()])
                 ->get(rtrim($serverUrl, '/') . '/api/initialize-client/' . urlencode($phone));
 
-            if ($res->successful()) {
-                $body = $res->json();
-                $qr = $body['qr'] ?? null;
-                $status = $body['status'] ?? 'qr_ready';
-
-                // Persist whatever Node gave us — frontend polls config
-                // status to drive the UI.
-                $creds = $config->creds();
-                $creds['qr_data'] = $qr;
-                $config->setCreds($creds);
-                if ($status === 'connected') {
-                    $config->status = WaProviderConfig::STATUS_CONNECTED;
-                    $config->connected_at = now();
-                }
-                $config->save();
+            $body = $res->json() ?: [];
+            if (! $res->successful()) {
+                $detail = $body['details'] ?? $body['error'] ?? $body['message'] ?? ('HTTP '.$res->status());
+                return response()->json([
+                    'ok'        => false,
+                    'config_id' => $config->id,
+                    'message'   => 'Node bridge could not generate a QR: '.$detail,
+                ], 200);
             }
+
+            $qr = $body['qr'] ?? null;
+            $status = $body['status'] ?? 'qr_ready';
+
+            $creds = $config->creds();
+            $creds['qr_data'] = $qr;
+            $config->setCreds($creds);
+            if ($status === 'connected') {
+                $config->status = WaProviderConfig::STATUS_CONNECTED;
+                $config->connected_at = now();
+            }
+            $config->save();
         } catch (\Throwable $e) {
             return response()->json([
                 'ok'        => false,
@@ -363,6 +374,7 @@ class WaConnectController extends Controller
             'ok'             => true,
             'config_id'      => $config->id,
             'phone_number'   => $phone,
+            'qr_data'        => $qr,
             'qr_poll_url'    => route('baileys.qr.poll', ['configId' => $config->id]),
             'status_poll_url'=> route('baileys.status.poll', ['configId' => $config->id]),
         ]);
@@ -385,6 +397,8 @@ class WaConnectController extends Controller
             if ($serverUrl && $phone) {
                 try {
                     \Illuminate\Support\Facades\Http::timeout(8)
+                        ->acceptJson()
+                        ->withHeaders(['X-Node-Token' => node_token()])
                         ->get(rtrim($serverUrl, '/') . '/api/terminate-client/' . urlencode($phone));
                 } catch (\Throwable $e) { /* swallow — local row still gets cleared */ }
             }
@@ -415,8 +429,9 @@ class WaConnectController extends Controller
 
         if ($serverUrl !== '' && $phone !== '') {
             try {
-                $res = \Illuminate\Support\Facades\Http::timeout(6)
+                $res = \Illuminate\Support\Facades\Http::timeout(8)
                     ->acceptJson()
+                    ->withHeaders(['X-Node-Token' => node_token()])
                     ->get(rtrim($serverUrl, '/') . '/api/client-status/' . urlencode($phone));
                 if ($res->successful()) {
                     $body = $res->json();

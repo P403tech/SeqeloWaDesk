@@ -190,15 +190,22 @@
                         try {
                             const r = await fetch(@json(route('install.execute')), {
                                 method: 'POST',
+                                redirect: 'manual',
                                 headers: {
                                     'Content-Type': 'application/json',
-                                    'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content,
+                                    'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]')?.content || '',
                                     'Accept': 'application/json',
                                 },
                                 body: JSON.stringify({
                                     step: i + 1
                                 }),
                             });
+                            if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400)) {
+                                this.stopTimer(step);
+                                step.status = 'failed';
+                                this.error = 'Installer was redirected. Hard-refresh this page (/install/run) and retry.';
+                                return false;
+                            }
                             const raw = await r.text();
                             let data;
                             try {
