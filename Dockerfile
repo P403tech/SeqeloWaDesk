@@ -14,14 +14,23 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /app
 COPY . .
 
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+# These dirs are gitignored, so they are missing in the image until we create
+# them. Composer runs `php artisan package:discover`, which needs a view cache path.
+RUN mkdir -p \
+      storage/framework/cache/data \
+      storage/framework/sessions \
+      storage/framework/views \
+      storage/logs \
+      bootstrap/cache \
+ && chmod -R ug+rwx storage bootstrap/cache \
+ && chmod +x railway-start.sh
+
 RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist \
  && npm ci \
  && npm run build \
  && rm -rf node_modules
-
-RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
- && chmod -R ug+rwx storage bootstrap/cache \
- && chmod +x railway-start.sh
 
 ENV PORT=8080
 EXPOSE 8080
