@@ -59,6 +59,11 @@ class EnsureInstalled
         }
 
         if ($installed && $isInstallRoute) {
+            // JSON wizard steps must never receive an HTML redirect.
+            if ($request->expectsJson()) {
+                return $next($request);
+            }
+
             return redirect('/');
         }
 

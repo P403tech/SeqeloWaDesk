@@ -199,7 +199,16 @@
                                     step: i + 1
                                 }),
                             });
-                            const data = await r.json();
+                            const raw = await r.text();
+                            let data;
+                            try {
+                                data = JSON.parse(raw);
+                            } catch (parseErr) {
+                                this.stopTimer(step);
+                                step.status = 'failed';
+                                this.error = 'Server returned a web page instead of JSON (HTTP ' + r.status + '). Refresh and retry this step.';
+                                return false;
+                            }
                             this.stopTimer(step);
                             if (r.ok && data.success) {
                                 step.status = 'done';
