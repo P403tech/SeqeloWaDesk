@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "php",
+  "packages": {
+    "php": "8.2",
+    "node": "22"
+  },
+  "deploy": {
+    "startCommand": "sh railway-start.sh",
+    "aptPackages": ["git"]
+  }
+}

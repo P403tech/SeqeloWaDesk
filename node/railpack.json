@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "packages": {
+    "node": "22"
+  },
+  "buildAptPackages": ["git", "python3", "make", "g++"],
+  "deploy": {
+    "startCommand": "node index.js"
+  }
+}
