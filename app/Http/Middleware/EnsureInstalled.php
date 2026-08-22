@@ -49,7 +49,12 @@ class EnsureInstalled
             ]);
         }
 
-        if (! $installed && ! $isInstallRoute) {
+        // Railway (and other hosts) probe GET /up. That route must return 200
+        // even before the installer has run — a redirect to /install fails the
+        // healthcheck and the deploy never goes live.
+        $isHealthRoute = $path === 'up';
+
+        if (! $installed && ! $isInstallRoute && ! $isHealthRoute) {
             return redirect('/install');
         }
 
