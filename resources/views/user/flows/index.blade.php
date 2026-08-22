@@ -221,34 +221,41 @@
                                 'call' => ['Call', 'bg-accent-amber/15 text-[#7B5A14]'],
                                 'instagram' => ['Instagram', 'bg-[#EFE5F5] text-[#5B3D8A]'],
                             ];
+                            $tplByIndustry = $flowTemplates->groupBy(fn ($t) => $t->industry_label);
                         @endphp
-                        <section class="mb-6">
+                        <section class="mb-6" id="fl-templates">
                             <div class="mb-3">
                                 <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Starter templates') }}</div>
                                 <h2 class="font-serif text-[20px] leading-tight">{{ __('Start from a template') }}</h2>
+                                <p class="text-[12.5px] text-ink-500 mt-1">{{ __('Meta-compliant chat flows grouped by industry. Clone one, then map your approved WhatsApp templates.') }}</p>
                             </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                                @foreach ($flowTemplates as $tpl)
-                                    @php $tb = $tplTypeBadge[$tpl->flow_type] ?? ['—', 'bg-paper-100 text-ink-500']; @endphp
-                                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card flex flex-col hover:border-wa-deep hover:shadow-soft transition">
-                                        <div class="flex items-start justify-between gap-2 mb-1.5">
-                                            <span class="font-semibold text-[13px] text-ink-900 break-words">{{ $tpl->name }}</span>
-                                            <span class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium {{ $tb[1] }}">{{ $tb[0] }}</span>
-                                        </div>
-                                        <p class="text-[12px] text-ink-500 leading-snug flex-1">{{ $tpl->description ?: __('A ready-made flow you can customise.') }}</p>
-                                        <div class="flex items-center justify-between gap-2 mt-3">
-                                            <span class="font-mono text-[10.5px] text-ink-500">{{ $tpl->node_count }} {{ __('steps') }}@if ($tpl->category) · {{ $tpl->category }}@endif</span>
-                                            <form method="POST" action="{{ route('user.flows.templates.clone', $tpl->id) }}">
-                                                @csrf
-                                                <button type="submit" class="px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11.5px] font-semibold hover:bg-wa-teal inline-flex items-center gap-1.5">
-                                                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="5" width="8" height="8" rx="1.5" /><path d="M3 10.5H2.5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v.5" /></svg>
-                                                    {{ __('Use template') }}
-                                                </button>
-                                            </form>
-                                        </div>
+                            @foreach ($tplByIndustry as $industry => $tpls)
+                                <div class="mb-4">
+                                    <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500 mb-2">{{ $industry }}</div>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                                        @foreach ($tpls as $tpl)
+                                            @php $tb = $tplTypeBadge[$tpl->flow_type] ?? ['—', 'bg-paper-100 text-ink-500']; @endphp
+                                            <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card flex flex-col hover:border-wa-deep hover:shadow-soft transition">
+                                                <div class="flex items-start justify-between gap-2 mb-1.5">
+                                                    <span class="font-semibold text-[13px] text-ink-900 break-words">{{ $tpl->name }}</span>
+                                                    <span class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium {{ $tb[1] }}">{{ $tb[0] }}</span>
+                                                </div>
+                                                <p class="text-[12px] text-ink-500 leading-snug flex-1">{{ $tpl->description ?: __('A ready-made flow you can customise.') }}</p>
+                                                <div class="flex items-center justify-between gap-2 mt-3">
+                                                    <span class="font-mono text-[10.5px] text-ink-500">{{ $tpl->node_count }} {{ __('steps') }}</span>
+                                                    <form method="POST" action="{{ route('user.flows.templates.clone', $tpl->id) }}">
+                                                        @csrf
+                                                        <button type="submit" class="px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11.5px] font-semibold hover:bg-wa-teal inline-flex items-center gap-1.5">
+                                                            <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="5" width="8" height="8" rx="1.5" /><path d="M3 10.5H2.5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v.5" /></svg>
+                                                            {{ __('Use template') }}
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        @endforeach
                                     </div>
-                                @endforeach
-                            </div>
+                                </div>
+                            @endforeach
                         </section>
                     @endif
 

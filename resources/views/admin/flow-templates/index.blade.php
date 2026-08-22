@@ -87,7 +87,7 @@
                                 @endif
                             </div>
                             <div><span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium {{ $tb[1] }}">{{ $tb[0] }}</span></div>
-                            <div class="text-[12px] text-ink-600 truncate">{{ $t->category ?: '—' }}</div>
+                            <div class="text-[12px] text-ink-600 truncate">{{ $t->industry_label }}</div>
                             <div class="font-mono text-[12px] text-ink-700">{{ $t->node_count }}</div>
                             <div class="font-mono text-[12px] text-ink-700">{{ number_format($t->clone_count) }}</div>
                             <div class="flex items-center gap-1 justify-end">

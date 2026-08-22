@@ -27,6 +27,29 @@ class FlowTemplate extends Model
 
     public const FLOW_TYPES = ['chat', 'call', 'instagram'];
 
+    /** Industry tags used by the seeder + tenant gallery grouping. */
+    public const INDUSTRIES = [
+        'support'      => 'Support',
+        'lead'         => 'Lead capture',
+        'ecommerce'    => 'E-commerce',
+        'healthcare'   => 'Healthcare',
+        'hospitality'  => 'Hospitality',
+        'education'    => 'Education',
+        'finance'      => 'Finance',
+        'travel'       => 'Travel',
+        'saas'         => 'SaaS',
+        'agency'       => 'Agency',
+        'realestate'   => 'Real estate',
+        'beauty'       => 'Beauty & wellness',
+        'logistics'    => 'Logistics',
+    ];
+
+    public function getIndustryLabelAttribute(): string
+    {
+        $key = strtolower((string) $this->category);
+        return self::INDUSTRIES[$key] ?? ($this->category ?: 'General');
+    }
+
     public function scopeActive(Builder $q): Builder
     {
         return $q->where('is_active', true);

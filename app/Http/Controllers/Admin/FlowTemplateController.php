@@ -19,7 +19,7 @@ class FlowTemplateController extends Controller
 {
     public function index()
     {
-        $templates = FlowTemplate::ordered()->paginate(20);
+        $templates = FlowTemplate::ordered()->paginate(40);
         $stats = [
             'total'  => FlowTemplate::count(),
             'active' => FlowTemplate::where('is_active', true)->count(),

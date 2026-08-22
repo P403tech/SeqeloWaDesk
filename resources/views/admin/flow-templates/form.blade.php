@@ -79,8 +79,14 @@
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Category') }}</span>
                                 <input name="category" value="{{ old('category', $template->category ?? '') }}" maxlength="64"
-                                    placeholder="{{ __('welcome / lead / support') }}"
+                                    list="flow-industry-list"
+                                    placeholder="{{ __('ecommerce / healthcare / hospitality') }}"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
+                                <datalist id="flow-industry-list">
+                                    @foreach (\App\Models\FlowTemplate::INDUSTRIES as $slug => $label)
+                                        <option value="{{ $slug }}">{{ $label }}</option>
+                                    @endforeach
+                                </datalist>
                             </label>
                         </div>
                     </div>

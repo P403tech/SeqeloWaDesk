@@ -47,6 +47,7 @@ class DatabaseSeeder extends Seeder
             CheckoutDefaultsSeeder::class,
             GuidebookArticleSeeder::class,
             LegalPagesSeeder::class,
+            FlowTemplateSeeder::class,
         ]);
     }
 }
