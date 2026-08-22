@@ -4,12 +4,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git unzip curl \
     libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
     libzip-dev libonig-dev libicu-dev libxml2-dev \
-    nodejs npm \
  && docker-php-ext-configure gd --with-freetype --with-jpeg \
  && docker-php-ext-install -j$(nproc) pdo_mysql gd zip bcmath intl mbstring exif pcntl opcache \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+# Debian's nodejs is 18; Vite 7 / Tailwind oxide need Node 20.19+ or 22.12+.
+COPY --from=node:22-bookworm /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 WORKDIR /app
 COPY . .
