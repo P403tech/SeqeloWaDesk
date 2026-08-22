@@ -1,0 +1,8 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "sh railway-start.sh"
+restartPolicyType = "ON_FAILURE"
+healthcheckPath = "/up"
+healthcheckTimeout = 300

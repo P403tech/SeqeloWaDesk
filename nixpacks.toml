@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["php82", "php82Extensions.pdo_mysql", "php82Extensions.mbstring", "php82Extensions.gd", "php82Extensions.bcmath", "php82Extensions.ctype", "php82Extensions.xml", "php82Extensions.tokenizer", "php82Extensions.fileinfo", "php82Extensions.curl", "php82Extensions.zip", "php82Packages.composer", "nodejs_22"]
+
+[phases.install]
+cmds = [
+  "composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist",
+  "npm ci --omit=optional",
+]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "sh railway-start.sh"
