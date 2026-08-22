@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+vendor
+node/node_modules
+node/baileys_auth
+storage/logs
+storage/framework/cache
+storage/framework/sessions
+storage/framework/views
+storage/installed
+public/storage
+*.zip
+.idea
+.vscode
