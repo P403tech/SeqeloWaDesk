@@ -23,6 +23,7 @@ class FlowTemplateSeeder extends Seeder
             $this->supportDesk(),
             $this->faqMenu(),
             $this->optInLeadCapture(),
+            $this->shopSelfService(),
             $this->orderStatus(),
             $this->whatsappCatalogShop(),
             $this->shopifyStorefront(),
@@ -57,6 +58,8 @@ class FlowTemplateSeeder extends Seeder
             $row->save();
             $this->command?->info('  • '.$tpl['name'].' ('.count($tpl['graph']['flowNodes']).' steps)');
         }
+
+        FlowTemplate::query()->where('name', 'Shop self-service (list)')->delete();
 
         $this->command?->info('[FlowTemplate] '.count($templates).' industry Meta-compliant chat templates ready.');
     }
@@ -720,6 +723,322 @@ class FlowTemplateSeeder extends Seeder
         return [
             'name'        => 'Product help (e-commerce)',
             'description' => 'Size guide, shipping times, and stock check — then offer catalog products or hand off to a teammate.',
+            'category'    => 'ecommerce',
+            'graph'       => $this->graph($n, $e),
+        ];
+    }
+
+    /**
+     * Complete ecommerce self-service desk (K-Electric pattern).
+     * One list bubble with a numbered 1–10 menu (empty section so typed
+     * digits match the printed order). Tenant maps catalog, pin, pay URL,
+     * and Meta UTILITY templates after clone.
+     */
+    private function shopSelfService(): array
+    {
+        $i = 0;
+        $n = [];
+        $n[] = $this->node($i++, 'trigger', 'trigger', [
+            'kind' => 'keyword', 'keywordMode' => 'keywords',
+            'keywords' => 'hi, hello, shop, menu, help, order, return, catalog, store',
+            'channel' => 'chat', 'deviceId' => '',
+        ], ['isStart' => true]);
+        $n[] = $this->node($i++, 'list', 'menu', [
+            'prompt' => "Hi *{{name}}*,👋\nWelcome to our WhatsApp shop self service! Type an option number or tap *View menu*.👇\n\n"
+                ."1️⃣ Browse *Products*\n"
+                ."2️⃣ *Track* my order\n"
+                ."3️⃣ Confirm *COD*\n"
+                ."4️⃣ *Return* or exchange\n"
+                ."5️⃣ Size & *shipping*\n"
+                ."6️⃣ *Stock* check\n"
+                ."7️⃣ Finish *checkout*\n"
+                ."8️⃣ *Payment* help\n"
+                ."9️⃣ *Find* our store\n"
+                ."🔟 Talk to a *person*\n\n"
+                ."*Already ordered?* Pick 2, 3, or 8 and reply with your order number.",
+            'button' => 'View menu',
+            'var'    => 'shop_need',
+            'options' => [
+                ['title' => 'Browse products', 'description' => 'Catalog and checkout', 'section' => ''],
+                ['title' => 'Track my order', 'description' => 'Status and tracking', 'section' => ''],
+                ['title' => 'Confirm COD', 'description' => 'Cash on delivery', 'section' => ''],
+                ['title' => 'Return or exchange', 'description' => 'Send an item back', 'section' => ''],
+                ['title' => 'Size & shipping', 'description' => 'Fit and delivery times', 'section' => ''],
+                ['title' => 'Stock check', 'description' => 'Is this item available?', 'section' => ''],
+                ['title' => 'Finish checkout', 'description' => 'Complete a saved cart', 'section' => ''],
+                ['title' => 'Payment help', 'description' => 'Pay or confirm payment', 'section' => ''],
+                ['title' => 'Find our store', 'description' => 'Address and map pin', 'section' => ''],
+                ['title' => 'Talk to a person', 'description' => 'A teammate joins this chat', 'section' => ''],
+            ],
+        ]);
+        $n[] = $this->node($i++, 'whatsapp_shop', 'shop', [
+            'storeId' => '',
+            'productItems' => [],
+            'headerText' => 'Featured products',
+            'bodyText' => 'Tap a product to see details and checkout.',
+            'footerText' => 'Secure checkout · help in this chat',
+            'abandonedWaitMinutes' => 15,
+        ]);
+        $n[] = $this->node($i++, 'message', 'thanks', [
+            'text' => "Thanks for your order, {{name}}.\nWe'll send updates in this chat. Reply STOP if you no longer want order alerts.",
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_buyer', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'purchased',
+        ]);
+        $n[] = $this->node($i++, 'deal', 'deal', [
+            'action' => 'create', 'dealName' => '{{name}} — WhatsApp order',
+            'stageId' => '', 'value' => '', 'ownerId' => '', 'saveAs' => 'deal_id',
+        ]);
+        $n[] = $this->node($i++, 'template', 'tpl_order', [
+            'tpl'     => '',
+            'preview' => 'Attach Meta-approved UTILITY order_confirmation / order_update.',
+        ]);
+        $n[] = $this->node($i++, 'message', 'nudge', [
+            'text' => "Your cart is saved.\nReply SHOP or *menu* to browse again. This is an order reminder, not a promotion.",
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_cart', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'abandoned-cart',
+        ]);
+        $n[] = $this->node($i++, 'cta', 'cta_shop', [
+            'actions' => [
+                ['type' => 'url', 'label' => 'Complete checkout', 'value' => 'https://example.com/checkout'],
+            ],
+            'headerText' => 'Checkout',
+            'bodyText' => 'Tap below to finish your order. Replace the URL with your store checkout after clone.',
+            'footerText' => '',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_track', [
+            'prompt' => 'What is your order number? (for example WD-1042)',
+            'var'    => 'order_id', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'list', 'track_next', [
+            'prompt'  => 'What do you need for order {{order_id}}?',
+            'button'  => 'Order options',
+            'var'     => 'order_next',
+            'options' => [
+                ['title' => 'Where is it?', 'description' => 'Latest status and tracking', 'section' => ''],
+                ['title' => 'Change address', 'description' => 'Update delivery details', 'section' => ''],
+                ['title' => 'Cancel order', 'description' => 'Request a cancellation', 'section' => ''],
+                ['title' => 'Talk to support', 'description' => 'A teammate will join', 'section' => ''],
+            ],
+        ]);
+        $n[] = $this->node($i++, 'message', 'track_ack', [
+            'text' => "Thanks. We're checking order {{order_id}} and will reply here with status and tracking.",
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_address', [
+            'prompt' => 'Reply with the full updated delivery address for order {{order_id}} (street, city, postcode).',
+            'var'    => 'new_address', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'message', 'address_ack', [
+            'text' => 'Got it. A teammate will confirm the new address for {{order_id}} in this chat before we update the shipment.',
+        ]);
+        $n[] = $this->node($i++, 'buttons', 'cancel_confirm', [
+            'prompt'  => 'Cancel order {{order_id}}? If it has already shipped we may not be able to stop it.',
+            'options' => ['Yes, cancel it', 'Keep my order'],
+            'var'     => 'cancel_yes',
+        ]);
+        $n[] = $this->node($i++, 'message', 'cancel_ack', [
+            'text' => 'Cancellation request received for {{order_id}}. We will confirm here once it is processed.',
+        ]);
+        $n[] = $this->node($i++, 'message', 'keep_ack', [
+            'text' => 'No change — order {{order_id}} stays as is. Message *menu* any time for other help.',
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_cancel', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'order-cancel-request',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_cod', [
+            'prompt' => 'What is the cash-on-delivery order number we should confirm?',
+            'var'    => 'order_id', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'buttons', 'cod_btns', [
+            'prompt'  => 'Confirm cash on delivery for order {{order_id}}?',
+            'options' => ['Confirm COD', 'Change address', 'Cancel order'],
+            'var'     => 'cod_action',
+        ]);
+        $n[] = $this->node($i++, 'message', 'cod_ok', [
+            'text' => "Confirmed. We'll pack order {{order_id}} for cash on delivery. Please keep the exact amount ready for the courier.",
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_cod', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'cod-confirmed',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_cod_addr', [
+            'prompt' => 'Reply with the full delivery address for {{order_id}}.',
+            'var'    => 'cod_address', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'message', 'cod_addr_ack', [
+            'text' => 'Address received for {{order_id}}. A teammate will confirm it before dispatch.',
+        ]);
+        $n[] = $this->node($i++, 'message', 'cod_cancel', [
+            'text' => 'Cancellation request received for {{order_id}}. We will stop packing if it has not shipped yet.',
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_cod_cancel', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'cod-cancelled',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_return_order', [
+            'prompt' => 'What is the order number for this return or exchange?',
+            'var'    => 'order_id', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'buttons', 'return_kind', [
+            'prompt'  => 'What do you need for order {{order_id}}?',
+            'options' => ['Start a return', 'Exchange item', 'Refund status'],
+            'var'     => 'return_need',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_return_reason', [
+            'prompt' => 'Which item, and why? (wrong size, damaged, changed mind)',
+            'var'    => 'return_reason', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'condition', 'is_exchange', [
+            'conditions' => [['variable' => 'return_need', 'operator' => 'equals', 'value' => 'Exchange item']],
+            'operators' => [],
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_exchange', [
+            'prompt' => 'What size or colour should we send instead?',
+            'var'    => 'exchange_for', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'message', 'return_ack', [
+            'text' => "Return noted for {{order_id}}.\nReason: {{return_reason}}\nA teammate will send the return address or pickup details here.",
+        ]);
+        $n[] = $this->node($i++, 'message', 'exchange_ack', [
+            'text' => "Exchange noted for {{order_id}} → {{exchange_for}}.\nWe'll confirm stock and shipping in this chat.",
+        ]);
+        $n[] = $this->node($i++, 'message', 'refund_ack', [
+            'text' => "Thanks. We're checking the refund for {{order_id}} and will confirm the status here. Bank timing depends on your payment method.",
+        ]);
+        $n[] = $this->node($i++, 'tag', 'tag_return', [
+            'action' => 'add', 'tagId' => '', 'tag' => 'return-request',
+        ]);
+        $n[] = $this->node($i++, 'deal', 'deal_return', [
+            'action' => 'create', 'dealName' => 'Return {{order_id}}',
+            'stageId' => '', 'value' => '', 'ownerId' => '', 'saveAs' => 'deal_id',
+        ]);
+        $n[] = $this->node($i++, 'template', 'tpl_rma', [
+            'tpl'     => '',
+            'preview' => 'Attach Meta-approved UTILITY return_update / refund_update.',
+        ]);
+        $n[] = $this->node($i++, 'message', 'sizing', [
+            'text' => "Size & shipping (update this in the builder):\n• S — chest 86–91 cm · M — 96–101 cm · L — 106–111 cm\n• Local: 1–3 working days · Nationwide: 3–7 working days\nWe send tracking in this chat after dispatch.",
+        ]);
+        $n[] = $this->node($i++, 'buttons', 'size_next', [
+            'prompt'  => 'Would you like to browse products next?',
+            'options' => ['Shop now', 'Talk to us'],
+            'var'     => 'size_next',
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_sku', [
+            'prompt' => 'Reply with the product name or SKU and we will check stock.',
+            'var'    => 'sku', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'message', 'stock_ack', [
+            'text' => "Thanks. We're checking stock for {{sku}} and will confirm availability here. You can also tap a product below.",
+        ]);
+        $n[] = $this->node($i++, 'ask', 'ask_pay_order', [
+            'prompt' => 'Reply with your order number so we can match the payment.',
+            'var'    => 'order_id', 'validate' => 'text', 'options' => [],
+        ]);
+        $n[] = $this->node($i++, 'message', 'payment_msg', [
+            'text' => "Payment help for order {{order_id}}.\nA teammate can confirm payment, or tap the pay link if your store uses one. Replace the URL after clone.",
+        ]);
+        $n[] = $this->node($i++, 'cta', 'cta_pay', [
+            'actions' => [
+                ['type' => 'url', 'label' => 'Pay now', 'value' => 'https://example.com/pay'],
+            ],
+            'headerText' => 'Payment',
+            'bodyText' => 'Tap to complete payment for {{order_id}}.',
+            'footerText' => '',
+        ]);
+        $n[] = $this->node($i++, 'location', 'store_pin', [
+            'lat' => '', 'lng' => '',
+            'title' => 'Our store',
+            'address' => 'Replace with your shop address after clone.',
+        ]);
+        $n[] = $this->node($i++, 'message', 'hours', [
+            'text' => "Store hours (update in the builder):\nMon–Sat 10:00–20:00\nSunday closed\nReply *menu* for other help.",
+        ]);
+        $n[] = $this->node($i++, 'message', 'handoff', [
+            'text' => 'Connecting you with a teammate now. Please stay in this chat.',
+        ]);
+        $n[] = $this->node($i++, 'assign', 'assign', [
+            'team' => '', 'userId' => '',
+            'message' => 'Shop desk {{shop_need}} · {{order_next}} · {{return_need}} · order {{order_id}} · {{return_reason}} · {{exchange_for}} · {{sku}}',
+        ]);
+        $n[] = $this->node($i++, 'end', 'end', ['label' => 'Done']);
+
+        $e = [
+            $this->edge('trigger', 'out', 'menu'),
+            $this->edge('menu', 'p0', 'shop'),
+            $this->edge('menu', 'p1', 'ask_track'),
+            $this->edge('menu', 'p2', 'ask_cod'),
+            $this->edge('menu', 'p3', 'ask_return_order'),
+            $this->edge('menu', 'p4', 'sizing'),
+            $this->edge('menu', 'p5', 'ask_sku'),
+            $this->edge('menu', 'p6', 'shop'),
+            $this->edge('menu', 'p7', 'ask_pay_order'),
+            $this->edge('menu', 'p8', 'store_pin'),
+            $this->edge('menu', 'p9', 'handoff'),
+            $this->edge('shop', 'purchased', 'thanks'),
+            $this->edge('shop', 'abandoned', 'nudge'),
+            $this->edge('thanks', 'out', 'tag_buyer'),
+            $this->edge('tag_buyer', 'out', 'deal'),
+            $this->edge('deal', 'created', 'tpl_order'),
+            $this->edge('deal', 'error', 'tpl_order'),
+            $this->edge('tpl_order', 'out', 'end'),
+            $this->edge('nudge', 'out', 'tag_cart'),
+            $this->edge('tag_cart', 'out', 'cta_shop'),
+            $this->edge('cta_shop', 'out', 'assign'),
+            $this->edge('ask_track', 'out', 'track_next'),
+            $this->edge('track_next', 'p0', 'track_ack'),
+            $this->edge('track_next', 'p1', 'ask_address'),
+            $this->edge('track_next', 'p2', 'cancel_confirm'),
+            $this->edge('track_next', 'p3', 'assign'),
+            $this->edge('track_ack', 'out', 'tpl_order'),
+            $this->edge('ask_address', 'out', 'address_ack'),
+            $this->edge('address_ack', 'out', 'assign'),
+            $this->edge('cancel_confirm', 'p0', 'cancel_ack'),
+            $this->edge('cancel_confirm', 'p1', 'keep_ack'),
+            $this->edge('cancel_ack', 'out', 'tag_cancel'),
+            $this->edge('tag_cancel', 'out', 'assign'),
+            $this->edge('keep_ack', 'out', 'end'),
+            $this->edge('ask_cod', 'out', 'cod_btns'),
+            $this->edge('cod_btns', 'p0', 'cod_ok'),
+            $this->edge('cod_btns', 'p1', 'ask_cod_addr'),
+            $this->edge('cod_btns', 'p2', 'cod_cancel'),
+            $this->edge('cod_ok', 'out', 'tag_cod'),
+            $this->edge('tag_cod', 'out', 'tpl_order'),
+            $this->edge('ask_cod_addr', 'out', 'cod_addr_ack'),
+            $this->edge('cod_addr_ack', 'out', 'assign'),
+            $this->edge('cod_cancel', 'out', 'tag_cod_cancel'),
+            $this->edge('tag_cod_cancel', 'out', 'assign'),
+            $this->edge('ask_return_order', 'out', 'return_kind'),
+            $this->edge('return_kind', 'p0', 'ask_return_reason'),
+            $this->edge('return_kind', 'p1', 'ask_return_reason'),
+            $this->edge('return_kind', 'p2', 'refund_ack'),
+            $this->edge('ask_return_reason', 'out', 'is_exchange'),
+            $this->edge('is_exchange', 'yes', 'ask_exchange'),
+            $this->edge('is_exchange', 'no', 'return_ack'),
+            $this->edge('ask_exchange', 'out', 'exchange_ack'),
+            $this->edge('return_ack', 'out', 'tag_return'),
+            $this->edge('exchange_ack', 'out', 'tag_return'),
+            $this->edge('refund_ack', 'out', 'tag_return'),
+            $this->edge('tag_return', 'out', 'deal_return'),
+            $this->edge('deal_return', 'created', 'tpl_rma'),
+            $this->edge('deal_return', 'error', 'assign'),
+            $this->edge('tpl_rma', 'out', 'end'),
+            $this->edge('sizing', 'out', 'size_next'),
+            $this->edge('size_next', 'p0', 'shop'),
+            $this->edge('size_next', 'p1', 'handoff'),
+            $this->edge('ask_sku', 'out', 'stock_ack'),
+            $this->edge('stock_ack', 'out', 'shop'),
+            $this->edge('ask_pay_order', 'out', 'payment_msg'),
+            $this->edge('payment_msg', 'out', 'cta_pay'),
+            $this->edge('cta_pay', 'out', 'assign'),
+            $this->edge('store_pin', 'out', 'hours'),
+            $this->edge('hours', 'out', 'end'),
+            $this->edge('handoff', 'out', 'assign'),
+            $this->edge('assign', 'out', 'end'),
+        ];
+
+        return [
+            'name'        => 'Shop self-service (e-commerce)',
+            'description' => 'Complete shop desk like a utility self-service bot: numbered 1–10 menu (browse, track, COD, returns, size, stock, checkout, payment, store, human). Clone then map catalog, address, pay link, and UTILITY templates.',
             'category'    => 'ecommerce',
             'graph'       => $this->graph($n, $e),
         ];
