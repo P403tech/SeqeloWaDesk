@@ -66,15 +66,11 @@ class FlowTemplateSeeder extends Seeder
 
     private function node(int $i, string $type, string $id, array $data, array $extra = []): array
     {
-        $perRow = 4;
-        $dx = 280;
-        $dy = 170;
-
         return array_merge([
             'id'   => $id,
             'type' => $type,
-            'x'    => 80 + ($i % $perRow) * $dx,
-            'y'    => 80 + intdiv($i, $perRow) * $dy,
+            'x'    => 80 + $i * 40,
+            'y'    => 80,
             'data' => $data,
         ], $extra);
     }
@@ -95,7 +91,188 @@ class FlowTemplateSeeder extends Seeder
 
     private function graph(array $nodes, array $edges): array
     {
-        return ['flowNodes' => $nodes, 'flowEdges' => $edges, 'vars' => []];
+        return [
+            'flowNodes' => $this->layoutNodes($nodes, $edges),
+            'flowEdges' => $edges,
+            'vars'      => [],
+        ];
+    }
+
+    /** p0, p1, … then out, then yes/purchased, then no/abandoned. */
+    private function handleSortKey(?string $handle): int
+    {
+        $h = $handle ?: 'out';
+        if (preg_match('/^p(\d+)$/', $h, $m)) {
+            return (int) $m[1];
+        }
+        return match ($h) {
+            'out' => 50,
+            'yes', 'purchased', 'created', 'booked', 'submitted' => 80,
+            'no', 'abandoned', 'error', 'else', 'nomatch', 'timeout', 'no_slots' => 81,
+            default => 60,
+        };
+    }
+
+    /**
+     * Place templates like the mockup: trunk on the left, branch hub in the
+     * middle, one horizontal lane per menu port so wires do not pile up.
+     */
+    private function layoutNodes(array $nodes, array $edges): array
+    {
+        if ($nodes === []) {
+            return $nodes;
+        }
+
+        $out = [];
+        foreach ($edges as $e) {
+            $src = (string) ($e['source'] ?? '');
+            $tgt = (string) ($e['target'] ?? '');
+            if ($src === '' || $tgt === '') {
+                continue;
+            }
+            $out[$src][] = [
+                'handle' => (string) ($e['sourceHandle'] ?? 'out'),
+                'target' => $tgt,
+            ];
+        }
+
+        $start = null;
+        foreach ($nodes as $n) {
+            if (! empty($n['isStart']) || ($n['type'] ?? '') === 'trigger') {
+                $start = (string) $n['id'];
+                break;
+            }
+        }
+        $start = $start ?: (string) $nodes[0]['id'];
+
+        $hub = $start;
+        $guard = 0;
+        while ($guard++ < 80) {
+            $outs = $out[$hub] ?? [];
+            $handles = array_unique(array_column($outs, 'handle'));
+            $targets = array_unique(array_column($outs, 'target'));
+            if (count($handles) > 1 || count($targets) > 1 || $outs === []) {
+                break;
+            }
+            $next = $outs[0]['target'];
+            if ($next === $hub) {
+                break;
+            }
+            $hub = $next;
+        }
+
+        $trunk = [];
+        $cur = $start;
+        $seen = [];
+        while ($cur && ! isset($seen[$cur])) {
+            $seen[$cur] = true;
+            $trunk[] = $cur;
+            if ($cur === $hub) {
+                break;
+            }
+            $outs = $out[$cur] ?? [];
+            if ($outs === []) {
+                break;
+            }
+            $cur = $outs[0]['target'];
+        }
+
+        $dx = 360;
+        $dy = 200;
+        $pos = [];
+        $placed = [];
+
+        $hubOuts = $out[$hub] ?? [];
+        usort($hubOuts, fn ($a, $b) => $this->handleSortKey($a['handle']) <=> $this->handleSortKey($b['handle']));
+
+        $hubX = 80 + max(0, count($trunk) - 1) * $dx;
+        $cursorY = 80.0;
+
+        foreach ($hubOuts as $o) {
+            $target = $o['target'];
+            if (isset($placed[$target]) || $target === $hub) {
+                continue;
+            }
+            $before = $placed;
+            $this->layoutPlaceTree($target, $hubX + $dx, $cursorY, $placed, $pos, $out, $hub);
+            $newMax = $cursorY;
+            foreach ($placed as $id => $_) {
+                if (! isset($before[$id]) && isset($pos[$id])) {
+                    $newMax = max($newMax, (float) $pos[$id]['y']);
+                }
+            }
+            $cursorY = $newMax + $dy;
+        }
+
+        $branchYs = array_column($pos, 'y');
+        $trunkY = $branchYs === [] ? 80.0 : (float) min($branchYs);
+
+        foreach ($trunk as $i => $id) {
+            if (! isset($placed[$id])) {
+                $placed[$id] = true;
+            }
+            $pos[$id] = ['x' => 80 + $i * $dx, 'y' => $trunkY];
+        }
+
+        $col = 0;
+        foreach ($nodes as $n) {
+            $id = (string) $n['id'];
+            if (isset($pos[$id])) {
+                continue;
+            }
+            $pos[$id] = [
+                'x' => 80 + ($col % 4) * $dx,
+                'y' => $cursorY + intdiv($col, 4) * $dy,
+            ];
+            $col++;
+        }
+
+        foreach ($nodes as &$n) {
+            $id = (string) $n['id'];
+            if (! isset($pos[$id])) {
+                continue;
+            }
+            $n['x'] = (int) round($pos[$id]['x']);
+            $n['y'] = (int) round($pos[$id]['y']);
+        }
+        unset($n);
+
+        return $nodes;
+    }
+
+    private function layoutPlaceTree(
+        string $id,
+        float $x,
+        float $y,
+        array &$placed,
+        array &$pos,
+        array $out,
+        string $hubId,
+    ): void {
+        if (isset($placed[$id]) || $id === $hubId) {
+            return;
+        }
+        $placed[$id] = true;
+        $pos[$id] = ['x' => $x, 'y' => $y];
+
+        $kids = [];
+        foreach ($out[$id] ?? [] as $o) {
+            if ($o['target'] === $hubId) {
+                continue;
+            }
+            if (! in_array($o['target'], $kids, true)) {
+                $kids[] = $o['target'];
+            }
+        }
+        $unplaced = [];
+        foreach ($kids as $k) {
+            if (! isset($placed[$k])) {
+                $unplaced[] = $k;
+            }
+        }
+        foreach ($unplaced as $i => $kid) {
+            $this->layoutPlaceTree($kid, $x + 360, $y + $i * 200, $placed, $pos, $out, $hubId);
+        }
     }
 
     /** Customer-initiated support — session messages only. */
