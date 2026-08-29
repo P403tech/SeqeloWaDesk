@@ -663,12 +663,12 @@ html[data-theme="dark"] .node-card                        { background:#13312D !
 html[data-theme="dark"] .node-card .border-paper-100,
 html[data-theme="dark"] .node-card .border-paper-200      { border-color:#2D5A53 !important; }
 html[data-theme="dark"] .node-row:hover                   { background:#1F4540 !important; }
-html[data-theme="dark"] .port                             { background:#1F4540 !important; }
+html[data-theme="dark"] .port:not(.lane)                  { background:#1F4540 !important; }
 
 /* edge stroke / preview */
-html[data-theme="dark"] .edge-path                        { stroke:#6B807C !important; }
-html[data-theme="dark"] .edge-path.hover,
-html[data-theme="dark"] .edge-path:hover                  { stroke:var(--wa-brand-text) !important; }
+html[data-theme="dark"] .edge-path:not(.lane)              { stroke:#6B807C !important; }
+html[data-theme="dark"] .edge-path:not(.lane).hover,
+html[data-theme="dark"] .edge-path:not(.lane):hover        { stroke:var(--wa-brand-text) !important; }
 
 /* GREEN-ON-GREEN fix:
    when text-wa-deep sits inside a green-tinted surface, swap to a
@@ -1110,7 +1110,7 @@ html[data-theme="doodle"] .canvas-dots{
   background-image: radial-gradient(rgba(21,40,31,0.16) 1.4px, transparent 1.5px) !important;
   background-size: 20px 20px !important;
 }
-html[data-theme="doodle"] .edge-path                             { stroke: var(--d-ink) !important; stroke-width: 2.4px !important; }
+html[data-theme="doodle"] .edge-path:not(.lane)                  { stroke: var(--d-ink) !important; stroke-width: 2.4px !important; }
 
 /* ── DROPDOWN MENUS / MODALS ────────────────────────────── */
 html[data-theme="doodle"] .menu,
@@ -2006,10 +2006,19 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .port:hover, .port.active { background:var(--color-wa-mint); border-color:var(--color-wa-deep); box-shadow:0 0 0 4px color-mix(in srgb, var(--color-wa-deep) 14%, transparent); }
   .port.out:hover, .port.out.active, .port.in:hover, .port.in.active { transform: translateY(-50%) scale(1.18); }
 
-  .edge-path { fill:none; stroke:#B5BAB6; stroke-width:1.6; stroke-dasharray:6 6; transition: stroke .14s, stroke-width .14s; }
+  .port.lane { border-width:0; }
+  .port.lane-num {
+    width:16px; height:16px; right:-8px;
+    font-size:8.5px; font-weight:700; line-height:1;
+    display:grid; place-items:center; color:#fff;
+  }
+  .port.lane:hover, .port.lane.active { box-shadow:0 0 0 4px color-mix(in srgb, currentColor 22%, transparent); }
+
+  .edge-path { fill:none; stroke:#B5BAB6; stroke-width:1.6; stroke-dasharray:6 6; transition: stroke .14s, stroke-width .14s, opacity .14s; }
   .edge-path:hover, .edge-path.hover { stroke:var(--color-ink-500); stroke-width:2; cursor:pointer; }
   .edge-path.no { stroke:#E0A39A; }
   .edge-path.no:hover, .edge-path.no.hover { stroke:#C56B4F; }
+  .edge-path.lane { stroke-dasharray:none; stroke-linecap:round; }
   .edge-path.preview { stroke:var(--color-wa-deep); stroke-dasharray:5 4; stroke-width:2; pointer-events:none; }
   /* invisible wider hit-target overlay for easier clicking */
   .edge-hit { fill:none; stroke:transparent; stroke-width:14; cursor:pointer; pointer-events:stroke; }

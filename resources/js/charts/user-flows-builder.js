@@ -518,9 +518,81 @@ export default function init() {
       return [];
     }
 
-    const bezierPath = (x1, y1, x2, y2) => {
-      const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
-      return `M ${x1} ${y1} C ${x1+dx} ${y1}, ${x2-dx} ${y2}, ${x2} ${y2}`;
+    const LANE_PALETTE = ['#0F766E','#2563EB','#D97706','#7C3AED','#16A34A','#0891B2','#EA580C','#DB2777','#92400E','#DC2626'];
+    const LANE_YES = '#0D9488';
+    const LANE_NO  = '#E87A5D';
+
+    const bezierPath = (x1, y1, x2, y2, fan = 0) => {
+      const dx = Math.max(48, Math.abs(x2 - x1) * 0.45);
+      const lift = fan * 22;
+      const c1x = x1 + dx, c1y = y1 + lift;
+      const c2x = x2 - dx, c2y = y2 + lift;
+      const t = 0.5, u = 0.5;
+      const midX = u*u*u*x1 + 3*u*u*t*c1x + 3*u*t*t*c2x + t*t*t*x2;
+      const midY = u*u*u*y1 + 3*u*u*t*c1y + 3*u*t*t*c2y + t*t*t*y2;
+      return {
+        d: `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`,
+        midX, midY,
+      };
+    };
+
+    const portLaneMeta = (node, handleId) => {
+      if (!node) return { color:null, index:-1, label:'', branched:false };
+      const rows = nodeRows(node);
+      const h = handleId || 'out';
+      const idx = rows.findIndex(r => r.id === h);
+      const row = idx >= 0 ? rows[idx] : null;
+      if (row?.kind === 'yes') return { color:LANE_YES, index:idx, label:row.label || '', branched: rows.length > 1 };
+      if (row?.kind === 'no')  return { color:LANE_NO,  index:idx, label:row.label || '', branched: rows.length > 1 };
+      if (rows.length > 1 && idx >= 0) {
+        return { color: LANE_PALETTE[idx % LANE_PALETTE.length], index: idx, label: row.label || '', branched: true };
+      }
+      return { color:null, index:-1, label:'', branched:false };
+    };
+
+    const shortLaneLabel = (label, index) => {
+      const n = index >= 0 ? String(index + 1) : '';
+      const raw = String(label || '').replace(/\s+/g, ' ').trim();
+      const word = raw.split(' ')[0] || '';
+      const text = word.slice(0, 10);
+      if (!n && !text) return '';
+      return (n && text) ? `${n} ${text}` : (text || n);
+    };
+
+    const resolveEdgeLane = (edge, nodes, allEdges, memo, stack) => {
+      const key = edge.id;
+      if (memo.has(key)) return memo.get(key);
+      if (stack.has(key)) return { color:null, index:-1, label:'', branched:false, inherited:true };
+      stack.add(key);
+      const src = nodes.find(n => n.id === edge.source);
+      const meta = portLaneMeta(src, edge.sourceHandle);
+      if (meta.color) {
+        const out = { ...meta, inherited:false };
+        memo.set(key, out);
+        stack.delete(key);
+        return out;
+      }
+      const incoming = allEdges.filter(e => e.target === src?.id);
+      let found = null;
+      for (const inc of incoming) {
+        const L = resolveEdgeLane(inc, nodes, allEdges, memo, stack);
+        if (!L?.color) continue;
+        if (found && found.color !== L.color) { found = null; break; }
+        found = L;
+      }
+      const out = found
+        ? { color:found.color, index:found.index, label:'', branched:false, inherited:true }
+        : { color:null, index:-1, label:'', branched:false, inherited:true };
+      memo.set(key, out);
+      stack.delete(key);
+      return out;
+    };
+
+    const laneMarkerId = (color) => {
+      if (color === LANE_YES) return 'arrow-yes';
+      if (color === LANE_NO) return 'arrow-no';
+      const i = LANE_PALETTE.indexOf(color);
+      return i >= 0 ? ('arrow-lane-' + i) : 'arrow';
     };
 
     function Toolbar({ flowId, flowName, setFlowName, status, onSave, onPublish, onTest, onVars, onUndo, onRedo, canUndo, canRedo, onAIGen }) {
@@ -928,16 +1000,7 @@ export default function init() {
       return null;
     }
 
-    const isMultiPort = (node) => {
-      const t = typeof node === 'string' ? node : node?.type;
-      if (['buttons','list','condition','poll','google_form'].includes(t)) return true;
-      // A template node is multi-port when its template has quick-reply buttons.
-      if (t === 'template' && typeof node === 'object' && templateQrButtons(node).length) return true;
-      // Ask question becomes multi-port once the operator defines
-      // expected answers — each one becomes its own branch port.
-      if (t === 'ask' && Array.isArray(node?.data?.options) && node.data.options.length > 0) return true;
-      return false;
-    };
+    const isMultiPort = (node) => nodeRows(node).length > 1;
 
     const NodeCard = memo(function NodeCard({ node, selected, invalid, onMouseDown, onClick, onPortMouseDown, onPortHover, hoveredPort, dragging }) {
       const t = NTYPES[node.type];
@@ -985,10 +1048,13 @@ export default function init() {
 
           ${multi ? html`
             <div className="px-2 pt-1 pb-2 border-t border-paper-100">
-              ${rows.map((r) => html`
+              ${rows.map((r) => {
+                const lane = portLaneMeta(node, r.id);
+                const num = (r.kind === 'flow' && r.id && String(r.id).startsWith('p')) ? (parseInt(String(r.id).slice(1), 10) + 1) : 0;
+                return html`
                 <div key=${r.id} className="node-row relative flex items-center gap-2 px-2 py-2">
-                  <span className="chip-icon-sm" style=${{ background: r.kind === 'yes' ? themeColor('wa-mint') : r.kind === 'no' ? '#FBE9E7' : themeColor('paper-50'), color: r.kind === 'yes' ? themeColor('wa-deep') : r.kind === 'no' ? '#A1431F' : '#3A5A55' }}>
-                    <${Icon} d=${r.kind === 'yes' ? 'M3 8l3 3 7-7' : r.kind === 'no' ? 'M4 4l8 8M12 4l-8 8' : 'M3 8h10M9 4l4 4-4 4'} className="w-3 h-3" />
+                  <span className="chip-icon-sm" style=${{ background: lane.color ? (lane.color + '22') : (r.kind === 'yes' ? themeColor('wa-mint') : r.kind === 'no' ? '#FBE9E7' : themeColor('paper-50')), color: lane.color || (r.kind === 'yes' ? themeColor('wa-deep') : r.kind === 'no' ? '#A1431F' : '#3A5A55') }}>
+                    ${num ? html`<span className="text-[9px] font-bold leading-none">${num}</span>` : html`<${Icon} d=${r.kind === 'yes' ? 'M3 8l3 3 7-7' : r.kind === 'no' ? 'M4 4l8 8M12 4l-8 8' : 'M3 8h10M9 4l4 4-4 4'} className="w-3 h-3" />`}
                   </span>
                   <div className=${'min-w-0 flex-1 text-[12px] truncate ' + (r.kind === 'yes' ? 'text-wa-deep font-semibold' : r.kind === 'no' ? 'text-accent-coral font-semibold' : 'text-ink-700')}>${r.label}</div>
                   <div
@@ -996,11 +1062,12 @@ export default function init() {
                     onPointerDown=${(e) => { e.stopPropagation(); onPortMouseDown(e, node.id, r.id); }}
                     onMouseEnter=${() => onPortHover(node.id+':'+r.id)}
                     onMouseLeave=${() => onPortHover(null)}
-                    className=${'port out ' + (r.kind === 'yes' ? 'is-yes ' : r.kind === 'no' ? 'is-no ' : '') + (hoveredPort === node.id+':'+r.id ? 'active' : '')}
+                    className=${'port out ' + (lane.color ? 'lane ' : '') + (r.kind === 'yes' ? 'is-yes ' : r.kind === 'no' ? 'is-no ' : '') + (num ? 'lane-num ' : '') + (hoveredPort === node.id+':'+r.id ? 'active' : '')}
+                    style=${lane.color ? { background: lane.color, borderColor: lane.color, color:'#fff' } : undefined}
                     title=${'out: ' + r.label}
-                  ></div>
-                </div>
-              `)}
+                  >${num ? num : ''}</div>
+                </div>`;
+              })}
             </div>
           ` : null}
 
@@ -4627,6 +4694,7 @@ export default function init() {
       };
 
       const edgePaths = useMemo(() => {
+        const memo = new Map();
         return edges.map(edge => {
           const src = nodes.find(n => n.id === edge.source);
           const tgt = nodes.find(n => n.id === edge.target);
@@ -4636,7 +4704,24 @@ export default function init() {
           if (!o || !i) return null;
           const x1 = src.x + o.x, y1 = src.y + o.y;
           const x2 = tgt.x + i.x, y2 = tgt.y + i.y;
-          return { id: edge.id, kind: edge.kind, d: bezierPath(x1, y1, x2, y2) };
+          const lane = resolveEdgeLane(edge, nodes, edges, memo, new Set());
+          const rowCount = nodeRows(src).length;
+          const fan = lane.branched && lane.index >= 0 ? (lane.index - (rowCount - 1) / 2) : 0;
+          const geom = bezierPath(x1, y1, x2, y2, fan);
+          return {
+            id: edge.id,
+            kind: edge.kind,
+            source: edge.source,
+            sourceHandle: edge.sourceHandle || 'out',
+            target: edge.target,
+            d: geom.d,
+            midX: geom.midX,
+            midY: geom.midY,
+            color: lane.color,
+            label: (!lane.inherited && lane.branched) ? shortLaneLabel(lane.label, lane.index) : '',
+            branched: !!lane.branched,
+            inherited: !!lane.inherited,
+          };
         }).filter(Boolean);
       }, [nodes, edges, portVer]);
 
@@ -4810,13 +4895,39 @@ export default function init() {
                     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
                       <path d="M0 0 L10 5 L0 10 z" fill="#3A5A55" />
                     </marker>
-                    <marker id="arrow-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-                      <path d="M0 0 L10 5 L0 10 z" fill="#E87A5D" />
+                    <marker id="arrow-yes" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                      <path d="M0 0 L10 5 L0 10 z" fill=${LANE_YES} />
                     </marker>
+                    <marker id="arrow-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                      <path d="M0 0 L10 5 L0 10 z" fill=${LANE_NO} />
+                    </marker>
+                    ${LANE_PALETTE.map((c, i) => html`
+                      <marker key=${'m'+i} id=${'arrow-lane-'+i} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                        <path d="M0 0 L10 5 L0 10 z" fill=${c} />
+                      </marker>`)}
                   </defs>
                   <g style=${{ pointerEvents:'auto' }}>
-                    ${edgePaths.map(e => html`
-                      <g key=${e.id}>
+                    ${edgePaths.map(e => {
+                      const portKey = e.source + ':' + e.sourceHandle;
+                      let dim = false, hot = false;
+                      if (hoveredEdge) {
+                        hot = hoveredEdge === e.id;
+                        dim = !hot;
+                      } else if (hoveredPort) {
+                        hot = portKey === hoveredPort || (e.target + ':in') === hoveredPort;
+                        dim = !hot;
+                      } else if (selectedId) {
+                        hot = e.source === selectedId || e.target === selectedId;
+                        dim = !hot;
+                      }
+                      const colored = !!e.color;
+                      const stroke = e.color || (e.kind === 'no' ? LANE_NO : '#B5BAB6');
+                      const width = hot ? 3 : (colored ? 2.4 : 1.6);
+                      const dash = colored ? 'none' : '6 6';
+                      const showLabel = e.label && zoom >= 0.62;
+                      const labelW = Math.max(36, e.label.length * 6.2 + 14);
+                      return html`
+                      <g key=${e.id} className=${dim ? 'edge-dim' : ''}>
                         <path d=${e.d} className="edge-hit"
                           onMouseEnter=${() => setHoveredEdge(e.id)}
                           onMouseLeave=${() => setHoveredEdge(null)}
@@ -4829,16 +4940,25 @@ export default function init() {
                           }}
                         />
                         <path d=${e.d}
-                          className=${'edge-path ' + (e.kind === 'no' ? 'no ' : '') + (hoveredEdge === e.id ? 'hover' : '')}
-                          style=${{ pointerEvents:'none' }}
+                          className=${'edge-path ' + (colored ? 'lane ' : '') + (e.kind === 'no' && !colored ? 'no ' : '') + (hoveredEdge === e.id ? 'hover ' : '') + (hot ? 'hot ' : '') + (dim ? 'dim ' : '')}
+                          marker-end=${'url(#' + laneMarkerId(e.color) + ')'}
+                          style=${{ pointerEvents:'none', stroke, strokeWidth: width, strokeDasharray: dash, opacity: dim ? 0.18 : 1 }}
                         />
-                      </g>`)}
+                        ${showLabel ? html`
+                          <g transform=${`translate(${e.midX}, ${e.midY})`} style=${{ pointerEvents:'none', opacity: dim ? 0.18 : 1 }}>
+                            <rect x=${-labelW/2} y="-9" width=${labelW} height="18" rx="9" fill=${e.color} />
+                            <text x="0" y="3.5" text-anchor="middle" fill="#fff" font-size="9" font-weight="700" font-family="ui-sans-serif, system-ui, sans-serif">${e.label}</text>
+                          </g>` : null}
+                      </g>`;
+                    })}
                     ${tempEdge && pendingFrom ? (() => {
                       const src = nodes.find(n => n.id === pendingFrom.nodeId);
                       if (!src) return null;
                       const o = portOffsetsRef.current[`out:${pendingFrom.nodeId}:${pendingFrom.handleId}`];
                       if (!o) return null;
-                      return html`<path className="edge-path preview" d=${bezierPath(src.x+o.x, src.y+o.y, tempEdge.x, tempEdge.y)} />`;
+                      const lane = portLaneMeta(src, pendingFrom.handleId);
+                      const geom = bezierPath(src.x+o.x, src.y+o.y, tempEdge.x, tempEdge.y, 0);
+                      return html`<path className="edge-path preview" d=${geom.d} style=${lane.color ? { stroke: lane.color, strokeDasharray:'5 4' } : undefined} />`;
                     })() : null}
                   </g>
                 </svg>
