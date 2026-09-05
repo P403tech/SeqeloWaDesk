@@ -33,3 +33,6 @@ public/*.bak
 
 # wd-sync local secret — never commit
 /tools/.wd-sync.json
+
+# Local Shop Manager chat demo — keep on disk, do not ship until ready
+/demo/shop-manager-chat/
