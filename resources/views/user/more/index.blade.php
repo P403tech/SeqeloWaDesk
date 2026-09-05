@@ -1032,6 +1032,29 @@
                         </div>
                     </a>
 
+                    <a href="{{ route('user.flows.analytics') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-wa-mint text-wa-deep grid place-items-center">
+                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M2 13V3M2 13h12M5 11V8M8 11V5M11 11V9.5" />
+                                    <circle cx="8" cy="4" r="1.2" />
+                                </svg>
+                            </span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('Flow Analytics') }}<x-plan-crown
+                                feature="autoflow" :link="false" size="sm" /></h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Every automation run end to end — execution history, the errors that stopped a run, and the retry records for the ones you re-ran.') }}
+                        </p>
+                        <div
+                            class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ __('retry failed runs') }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
+                        </div>
+                    </a>
+
                     <a href="{{ url('/webhooks') }}"
                         class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
                         <div class="flex items-start justify-between gap-3">

@@ -60,15 +60,10 @@ class ConversationResolver
             return null;
         }
 
-        // Instagram + Facebook (and any non-phone channel) JIDs carry NO phone
-        // identity: `ig:<self>:<other>` (two 16–17 digit IGSIDs) and
-        // `fb:<pageId>:<psid>` / `fb:<pageId>:post:<postId>:<fromId>` (page id +
-        // PSID / comment ids). Flattening them to digits both (a) collides the
-        // parts into one 28–53-char number that overflows contact_digits(32) —
-        // crashing every insert — and (b) is meaningless for matching, since
-        // these threads are keyed on the full raw_jid, never on digits. Return
-        // null so the column stays empty.
-        if (str_starts_with($v, 'ig:') || str_starts_with($v, 'fb:')) {
+        // Instagram / Facebook / Telegram / TikTok / SMS JIDs carry NO phone
+        // identity. Flattening them to digits collides parts into a number that
+        // can overflow contact_digits(32) and forge a WhatsApp phone match.
+        if (preg_match('/^(ig|fb|telegram|tg|tiktok|tt|sms):/i', $v)) {
             return null;
         }
 

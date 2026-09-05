@@ -248,6 +248,7 @@ const PAGE_INITIALIZERS = {
     'user-devices-index': () => import('./charts/user-devices-index.js').then((m) => m.default()),
     'user-devices-detail': () => import('./charts/user-devices-detail.js').then((m) => m.default()),
     'user-flows-index':   () => import('./charts/user-flows-index.js').then((m) => m.default()),
+    'user-flows-analytics': () => import('./charts/user-flows-analytics.js').then((m) => m.default()),
     'user-flows-builder': () => import('./charts/user-flows-builder.js').then((m) => m.default()),
     'user-ai-assistants-wizard': () => import('./charts/user-ai-assistants-wizard.js').then((m) => m.default()),
     'user-wa-forms-builder': () => import('./charts/user-wa-forms-builder.js').then((m) => m.default()),

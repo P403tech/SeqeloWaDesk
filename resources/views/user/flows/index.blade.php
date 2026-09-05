@@ -113,6 +113,16 @@
                             </p>
                         </div>
                         <div class="flex items-center gap-2">
+                            <a href="{{ route('user.flows.analytics') }}"
+                                class="px-4 py-2 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium flex items-center gap-2"
+                                title="{{ __('Flow execution history, error logs and retry records') }}">
+                                <svg viewBox="0 0 16 16" class="w-3.5 h-3.5 text-wa-deep" fill="none"
+                                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                                    stroke-linejoin="round">
+                                    <path d="M2 13V3M2 13h12M5 11V8M8 11V5M11 11V9.5" />
+                                </svg>
+                                {{ __('Analytics') }}
+                            </a>
                             {{-- Opens the builder with the "Generate with AI" modal already
                                  open — the builder reads ?ai=1 on mount (useState regex
                                  /[?&]ai(_prompt)?=/). Was a dead <button> with no handler. --}}

@@ -98,7 +98,7 @@ class FlowEnrollmentService
                 return;
             }
             $contact = $q->get()->first(function ($c) use ($jidDigits) {
-                $stored = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
+                $stored = Contact::canonicalizePhone($c->country_code, $c->mobile);
                 return $stored !== '' && $stored === $jidDigits;
             });
             if ($contact) $this->onTagAdded($contact, $tagId);
@@ -304,7 +304,7 @@ class FlowEnrollmentService
         $digits = preg_replace('/\D+/', '', $phone);
         if ($digits === '' || !$workspaceId) return null;
         return Contact::where('workspace_id', $workspaceId)->get()->first(function ($c) use ($digits) {
-            $stored = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
+            $stored = Contact::canonicalizePhone($c->country_code, $c->mobile);
             return $stored !== '' && $stored === $digits;
         });
     }
@@ -383,7 +383,7 @@ class FlowEnrollmentService
             return;
         }
 
-        $recipient = preg_replace('/\D+/', '', (string) (($contact->country_code ?? '') . $contact->mobile));
+        $recipient = Contact::canonicalizePhone($contact->country_code, $contact->mobile);
         if ($recipient === '') {
             $sub->update(['status' => 'failed', 'failed_at' => now(), 'failure_reason' => 'Contact has no usable mobile number']);
             return;

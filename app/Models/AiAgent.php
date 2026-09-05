@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class AiAgent extends Model
 {
     protected $fillable = [
-        'workspace_id', 'name', 'provider', 'model',
+        'workspace_id', 'name', 'provider', 'model', 'knowledge_assistant_id',
         'system_prompt', 'tone', 'avatar_color',
         'auto_respond', 'max_tokens', 'temperature', 'is_active',
         'messages_sent',
@@ -20,6 +20,8 @@ class AiAgent extends Model
         'handoff_low_score_window',
         'handoff_enabled',
         'use_saved_replies',
+        // Shop Manager router — one voice, specialist jobs underneath.
+        'shop_router',
         // Multi-device — null/empty array = any device (default).
         'device_ids',
         // Voice-AI channels (Phase A: voice notes on both stacks;
@@ -43,6 +45,7 @@ class AiAgent extends Model
         'handoff_low_score_window'     => 'integer',
         'handoff_enabled'              => 'boolean',
         'use_saved_replies'            => 'boolean',
+        'shop_router'                  => 'boolean',
         'device_ids'                   => 'array',
         'voice_note_enabled'           => 'boolean',
         'voice_call_enabled'           => 'boolean',
@@ -97,6 +100,7 @@ class AiAgent extends Model
             'name'          => $this->name,
             'provider'      => $this->provider,
             'model'         => $this->model,
+            'knowledge_assistant_id' => $this->knowledge_assistant_id,
             'system_prompt' => (string) $this->system_prompt,
             'tone'          => $this->tone,
             'avatar_color'  => $this->avatar_color,
@@ -112,6 +116,7 @@ class AiAgent extends Model
             'handoff_low_score_window'     => (int) ($this->handoff_low_score_window ?? 3),
             'handoff_enabled'              => (bool) ($this->handoff_enabled ?? true),
             'use_saved_replies'            => (bool) ($this->use_saved_replies ?? false),
+            'shop_router'                  => (bool) ($this->shop_router ?? false),
             'device_ids'                   => is_array($this->device_ids) ? array_values(array_map('intval', $this->device_ids)) : [],
             // Voice-AI config so the Voice tab on the edit form can rehydrate.
             'voice_note_enabled'      => (bool) ($this->voice_note_enabled ?? false),

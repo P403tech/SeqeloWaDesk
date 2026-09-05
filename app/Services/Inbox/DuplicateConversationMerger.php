@@ -96,7 +96,7 @@ class DuplicateConversationMerger
             ->whereIn('origin', ['inbox', 'chat', 'chatbot'])
             ->get([
                 'id', 'workspace_id', 'user_id', 'device_id', 'provider', 'origin', 'channel',
-                'raw_jid', 'alt_jid', 'title', 'preview', 'status', 'inbox_status', 'priority',
+                'raw_jid', 'alt_jid', 'contact_digits', 'title', 'preview', 'status', 'inbox_status', 'priority',
                 'archived', 'pinned_at', 'muted_at', 'unread_count',
                 'assignee_user_id', 'assignee_team_id', 'assignee_agent_id',
                 'last_message_at', 'last_inbound_at', 'last_outbound_at', 'created_at',
@@ -562,6 +562,14 @@ class DuplicateConversationMerger
             if ($d !== '' && strlen($d) >= 8) {
                 $out[] = $d;
             }
+        }
+        // Also bridge on the RESOLVED contact phone. WhatsApp's '@lid' (linked
+        // identity) forks a second thread keyed by an id that shares NO digits
+        // with the phone JID, so raw_jid/alt_jid alone can't join the phone
+        // thread to its @lid twin — but both resolve to the same contact_digits.
+        $cd = $this->digits((string) ($c->contact_digits ?? ''));
+        if ($cd !== '' && strlen($cd) >= 8) {
+            $out[] = $cd;
         }
         return array_values(array_unique($out));
     }

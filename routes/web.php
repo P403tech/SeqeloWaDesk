@@ -768,6 +768,15 @@ Route::middleware('auth')->group(function () {
             Route::get('/{id}/subscribers',                 [\App\Http\Controllers\FlowsController::class, 'apiSubscribers'])->whereNumber('id')->name('subscribers');
             Route::post('/{id}/subscribers/{cid}/pause',    [\App\Http\Controllers\FlowsController::class, 'apiSubscriberPause'])->whereNumber('id')->whereNumber('cid')->name('subscribers.pause');
             Route::post('/{id}/subscribers/{cid}/resume',   [\App\Http\Controllers\FlowsController::class, 'apiSubscriberResume'])->whereNumber('id')->whereNumber('cid')->name('subscribers.resume');
+
+            Route::get ('/analytics',                  [\App\Http\Controllers\FlowsController::class, 'analytics'])->name('analytics');
+            Route::get ('/analytics/data',             [\App\Http\Controllers\FlowsController::class, 'apiAnalytics'])->name('analytics.data');
+            Route::get ('/analytics/runs',             [\App\Http\Controllers\FlowsController::class, 'apiRuns'])->name('analytics.runs');
+            Route::get ('/analytics/errors',           [\App\Http\Controllers\FlowsController::class, 'apiErrors'])->name('analytics.errors');
+            Route::get ('/analytics/retries',          [\App\Http\Controllers\FlowsController::class, 'apiRetries'])->name('analytics.retries');
+            Route::post('/analytics/runs/retry',       [\App\Http\Controllers\FlowsController::class, 'retryFailed'])->name('analytics.retry-bulk');
+            Route::post('/analytics/runs/{subscriber}/retry', [\App\Http\Controllers\FlowsController::class, 'retryRun'])->whereNumber('subscriber')->name('analytics.retry');
+            Route::get ('/analytics/{id}',             [\App\Http\Controllers\FlowsController::class, 'analytics'])->whereNumber('id')->name('analytics.show');
         });
 
         // (Node-bridge facing /api/commerce/checkout-link is registered

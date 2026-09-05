@@ -4326,6 +4326,10 @@ Limits:
             form.querySelector('[name="auto_respond"]').checked = !!agent.auto_respond;
             const useSaved = form.querySelector('[name="use_saved_replies"]');
             if (useSaved) useSaved.checked = !!agent.use_saved_replies;
+            const shopRouter = form.querySelector('[name="shop_router"]');
+            if (shopRouter) shopRouter.checked = !!agent.shop_router;
+            const kbSel = form.querySelector('[name="knowledge_assistant_id"]');
+            if (kbSel) kbSel.value = agent.knowledge_assistant_id ? String(agent.knowledge_assistant_id) : '';
             // Handoff settings
             const handoffEnabled = form.querySelector('[name="handoff_enabled"]');
             if (handoffEnabled) handoffEnabled.checked = agent.handoff_enabled !== false;
@@ -4466,6 +4470,8 @@ Limits:
             temperature:   parseInt(fd.get('temperature') || '7', 10),
             auto_respond:  fd.has('auto_respond') ? 1 : 0,
             use_saved_replies: fd.has('use_saved_replies') ? 1 : 0,
+            shop_router:       fd.has('shop_router') ? 1 : 0,
+            knowledge_assistant_id: (fd.get('knowledge_assistant_id') || '') === '' ? null : parseInt(fd.get('knowledge_assistant_id'), 10),
             avatar_color:  fd.get('avatar_color') || '#6366f1',
             is_active:     1,
             // Handoff config

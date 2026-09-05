@@ -125,6 +125,17 @@ class AiVoiceReplyService
         // workspace's wallet/plan dashboards.
         $this->bumpUsage($agent, $transcript->durationSec, $tts->charCount);
 
+        try {
+            $convo->refresh();
+            if (\App\Services\Ai\ShopManagerRouter::enabled($agent)
+                && app(\App\Services\Ai\ShopManagerRouter::class)->consumeHandoffAfterReply($convo)
+                && ($agent->handoff_enabled ?? true)) {
+                $this->aiAgents->triggerHandoff($agent, $convo, 'shop_manager:human');
+            }
+        } catch (\Throwable $e) {
+            Log::info('[VOICE-AI] shop manager handoff skipped: '.$e->getMessage());
+        }
+
         return $outbound;
     }
 

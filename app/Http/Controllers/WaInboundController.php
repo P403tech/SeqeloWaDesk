@@ -193,13 +193,16 @@ class WaInboundController extends Controller
 
         $userId = $device->user_id;
 
-        // Server-side LID detection. Node sends is_lid when it could
-        // tell, but in case the old Node code is still running (before
-        // the LID fix) we also treat anything longer than 13 digits
-        // as a LID. Real E.164 phones max out at 13.
+        // LID detection from EXPLICIT signals only — the `is_lid` flag Node
+        // sends, or an `@lid` suffix on either jid. Length is not a LID test:
+        // E.164 allows up to 15 digits, and a doubled country code was enough
+        // to trip the old 8–13 guess and open a numberless "WhatsApp contact".
+        $lidJidHint = (string) ($data['lid_jid'] ?? '');
+        $rawJidHint = (string) ($data['raw_jid'] ?? '');
         $isLid = (bool) ($data['is_lid'] ?? false)
-              || strlen($senderPhoneDigits) > 13
-              || strlen($senderPhoneDigits) < 8;
+              || str_ends_with($rawJidHint, '@lid')
+              || str_ends_with($lidJidHint, '@lid')
+              || $senderPhoneDigits === '';
 
         // Canonical JID for outbound routing — preferred when we have
         // a real phone. The `lid_jid` is the alternate identifier

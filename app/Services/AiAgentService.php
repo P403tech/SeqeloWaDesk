@@ -11,6 +11,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\WalletService;
+use App\Services\Ai\ShopManagerRouter;
 use App\Services\InboxDispatcher;
 use App\Services\PlanLimitGuard;
 use Illuminate\Support\Facades\Http;
@@ -169,6 +170,8 @@ class AiAgentService
         ]);
 
         $agent->increment('messages_sent');
+
+        $this->finishShopManagerHandoff($agent, $convo);
 
         // Dispatch via the same dispatcher used by human replies. This handles
         // provider resolution (Baileys/WABA/Twilio), auth, URL building, logging
@@ -436,11 +439,34 @@ class AiAgentService
             }
         }
 
+        $kbId = (int) ($agent->knowledge_assistant_id ?? 0);
+        if ($kbId > 0) {
+            try {
+                $assistant = \App\Models\AiChatAssistant::query()
+                    ->where('workspace_id', (int) ($agent->workspace_id ?? 0))
+                    ->find($kbId);
+                if ($assistant) {
+                    $ctx = app(\App\Services\AiChat\AiChatService::class)->contextFor($assistant);
+                    if (trim($ctx) !== '') {
+                        $systemPrompt .= "\n\n--- Knowledge base ---\n" . $ctx . "\n--- End knowledge base ---"
+                            . "\n\nAnswer using the knowledge base above when it is relevant. If the answer isn't there, say so rather than inventing details.";
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('[AI-AGENT] knowledge base inject failed: ' . $e->getMessage(), ['agent' => $agent->id]);
+            }
+        }
+
         // Vision — if the customer's latest inbound message is an image,
         // attach it so the agent can actually SEE and answer about it
         // (product photo, screenshot, receipt, damaged item, etc.). When
         // there's no image this is null and the call is unchanged.
         $image = $this->resolveInboundImage($convo);
+
+        $shopCanned = $this->applyShopManagerRouter($agent, $convo, $history, $image !== null, $systemPrompt);
+        if ($shopCanned !== null) {
+            return $shopCanned;
+        }
 
         $userPrompt = "Conversation history:\n" . $transcript
             . ($image ? "\n\nThe customer's latest message includes an image (attached). Look at it and reply about what it shows." : "")
@@ -477,6 +503,41 @@ class AiAgentService
         }
 
         return $reply;
+    }
+
+    /**
+     * Opt-in Shop Manager: classify intent, keep sub-agent on the thread,
+     * inject the specialist job into the prompt. Human intent returns a
+     * canned line so we don't LLM-loop before handoff.
+     */
+    private function applyShopManagerRouter(AiAgent $agent, Conversation $convo, $history, bool $hasPhoto, string &$systemPrompt): ?string
+    {
+        if (!ShopManagerRouter::enabled($agent)) {
+            return null;
+        }
+        $lastIn = $history->last(fn ($m) => ($m->direction ?? '') === 'in');
+        $text = trim((string) ($lastIn->body ?? ''));
+        $turn = app(ShopManagerRouter::class)->apply($convo, $text, $hasPhoto);
+        $systemPrompt .= "\n\n".$turn['specialist'];
+        if (!empty($turn['canned'])) {
+            return $turn['canned'];
+        }
+
+        return null;
+    }
+
+    private function finishShopManagerHandoff(AiAgent $agent, Conversation $convo): void
+    {
+        if (!ShopManagerRouter::enabled($agent)) {
+            return;
+        }
+        $convo->refresh();
+        if (!app(ShopManagerRouter::class)->consumeHandoffAfterReply($convo)) {
+            return;
+        }
+        if ($agent->handoff_enabled ?? true) {
+            $this->triggerHandoff($agent, $convo, 'shop_manager:human');
+        }
     }
 
     /**

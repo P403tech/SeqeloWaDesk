@@ -80,9 +80,10 @@ function classify(text, st) {
   if (/\b(checkout|cart|buy now)\b/.test(t)) return "checkout";
   if (/\b(price|how much|cover|a24|tee|shirt|product|catalog|red|black|navy)\b/.test(t)) return "catalog";
   if (looksOrderId(t)) return st.sub === "returns" ? "returns" : "track";
-  if (st.sub === "orders" && t.length > 2) return "track";
-  if (st.sub === "returns") return "returns";
-  if (st.sub === "cod") return "cod";
+  // Stay on a specialist only when the follow-up still belongs to that job.
+  if (st.sub === "orders" && (looksOrderId(t) || /\b(address|cancel|courier|packed)\b/.test(t))) return "track";
+  if (st.sub === "returns" && /\b(wrong|damaged|size|exchange|refund|pickup|reason|changed mind)\b/.test(t)) return "returns";
+  if (st.sub === "cod" && /\b(confirm|address|cancel|cash)\b/.test(t)) return "cod";
   return "chitchat";
 }
 

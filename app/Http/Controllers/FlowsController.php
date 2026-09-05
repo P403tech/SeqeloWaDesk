@@ -1187,6 +1187,824 @@ SYS;
         return response()->json(['ok' => true]);
     }
 
+    // =================================================================
+    // Flow analytics — /flows/analytics (+ /flows/analytics/{id}).
+    //
+    // Everything on this surface is derived from rows that already exist:
+    //   • execution history + error reasons  → `flow_subscribers`
+    //     (enrolled_at → completed_at | failed_at + failure_reason)
+    //   • retry records                      → `flow_retry_logs`
+    // Nothing here estimates, samples or back-fills a metric: if a number
+    // cannot be counted from real rows it is returned as null/0, never
+    // invented.
+    //
+    // Tenancy: every query is bounded by analyticsFlowIds(), the set of flow
+    // ids visible to the current workspace (Flow::forCurrentWorkspace).
+    // `flow_subscribers` has no workspace_id of its own, so the flow id set IS
+    // the tenancy gate — it must be applied to every query in this block.
+    // =================================================================
+
+    /** Ranges the analytics endpoints accept on ?range=. Days, or the whole history. */
+    private const ANALYTICS_RANGES = ['7', '30', '90', 'all'];
+
+    /**
+     * Per-request memos. Flow names and contact names/numbers are encrypted
+     * columns, so resolving them means decrypting every row in PHP — and
+     * apiErrors() rebuilds its base query half a dozen times. The controller is
+     * instantiated per request, so caching here is request-scoped.
+     */
+    private ?array $analyticsFlowMapCache = null;
+    private array  $analyticsContactSearchCache = [];
+
+    /** Default / maximum page size for the paginated analytics tables. */
+    private const ANALYTICS_PER_PAGE     = 25;
+    private const ANALYTICS_MAX_PER_PAGE = 100;
+
+    /**
+     * GET /flows/analytics            → all automations in the workspace
+     * GET /flows/analytics/{id}       → scoped to one automation
+     *
+     * Renders the page and server-side seeds it with the same payload
+     * apiAnalytics() returns, so the first paint has real numbers before any
+     * fetch resolves (same pattern as the campaign detail page's $chartData).
+     */
+    public function analytics(Request $request, ?int $id = null)
+    {
+        // Accept the id as a route segment OR ?flow_id= so a filter change can
+        // stay on /flows/analytics without a new URL shape.
+        $id = $id ?: ((int) $request->query('flow_id', 0) ?: null);
+
+        $flow = null;
+        if ($id) {
+            $flow = Flow::query()->forCurrentWorkspace()->find($id);
+            if (!$flow) abort(404);
+        }
+
+        $flowMap = $this->analyticsFlowMap();
+        $flows = collect($flowMap)
+            ->map(fn (array $f, $fid) => [
+                'id'    => (int) $fid,
+                'name'  => $f['name'],
+                'state' => $f['state'],
+            ])
+            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values();
+
+        return view('user.flows.analytics', [
+            'flow'   => $flow,
+            'flowId' => $flow?->id,
+            'flows'  => $flows,
+            'range'  => $this->analyticsRangeKey($request),
+            'stats'  => $this->buildAnalytics($request, $flow?->id),
+        ]);
+    }
+
+    /**
+     * GET /flows/analytics/data — KPI + chart JSON.
+     * Filters: ?flow_id= (single automation) and ?range=7|30|90|all.
+     */
+    public function apiAnalytics(Request $request): JsonResponse
+    {
+        $flowId = (int) $request->query('flow_id', 0) ?: null;
+        return response()->json(['ok' => true] + $this->buildAnalytics($request, $flowId));
+    }
+
+    /**
+     * GET /flows/analytics/runs — paginated FLOW EXECUTION HISTORY.
+     *
+     * Filters: flow_id, status, date_from/date_to (Y-m-d) or range, q (search),
+     * page, per_page. The search term is matched against the failure reason in
+     * SQL and against contact name / phone / automation name in PHP — those
+     * columns are encrypted at rest, so they can never be filtered in SQL.
+     */
+    public function apiRuns(Request $request): JsonResponse
+    {
+        $flowMap = $this->analyticsFlowMap();
+        $query   = $this->analyticsRunQuery($request, $flowMap);
+
+        // Status tab counts use the SAME filters minus `status`, so the tabs
+        // always add up to the unfiltered result set.
+        $counts = (clone $query)->selectRaw('status, COUNT(*) as c')->groupBy('status')->pluck('c', 'status');
+        $counts = [
+            'all'       => (int) $counts->sum(),
+            'active'    => (int) ($counts['active'] ?? 0),
+            'paused'    => (int) ($counts['paused'] ?? 0),
+            'completed' => (int) ($counts['completed'] ?? 0),
+            'failed'    => (int) ($counts['failed'] ?? 0),
+        ];
+
+        $status = (string) $request->query('status', '');
+        if (in_array($status, \App\Models\FlowSubscriber::STATUSES, true)) {
+            $query->where('status', $status);
+        }
+
+        $paginator = $query->orderByDesc('id')->paginate(
+            $this->analyticsPerPage($request), ['*'], 'page', max(1, (int) $request->query('page', 1))
+        );
+
+        return response()->json([
+            'ok'                    => true,
+            'runs'                  => $this->analyticsRunRows($paginator->items(), $flowMap),
+            'pagination'            => $this->analyticsPagination($paginator),
+            'counts'                => $counts,
+            'retry_cooldown_seconds'=> \App\Services\Flow\FlowRetryService::COOLDOWN_SECONDS,
+            'retry_max_batch'       => \App\Services\Flow\FlowRetryService::MAX_BATCH,
+        ]);
+    }
+
+    /**
+     * GET /flows/analytics/errors — ERROR LOGS.
+     *
+     * Two views of the same failed rows: `groups` rolls them up by failure
+     * reason (count, first/last seen, which automations it hit, and the ids to
+     * bulk-retry), `rows` is the raw paginated failure list. Same filters as
+     * apiRuns() minus `status`, which is pinned to failed.
+     */
+    public function apiErrors(Request $request): JsonResponse
+    {
+        $flowMap = $this->analyticsFlowMap();
+        $base    = fn () => $this->analyticsRunQuery($request, $flowMap)->where('status', 'failed');
+
+        // reason × flow rollup — one query, aggregated in PHP so NULL and ''
+        // reasons collapse into a single "no reason recorded" bucket.
+        $rows = $base()
+            ->selectRaw('failure_reason, flow_id, COUNT(*) as c, MIN(failed_at) as first_seen, MAX(failed_at) as last_seen')
+            ->groupBy('failure_reason', 'flow_id')
+            ->get();
+
+        $groups = [];
+        foreach ($rows as $r) {
+            $reason = trim((string) $r->failure_reason);
+            $key    = $reason === '' ? '' : $reason;
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'reason'         => $reason === '' ? null : $reason,
+                    'count'          => 0,
+                    'first_seen'     => null,
+                    'last_seen'      => null,
+                    'flows'          => [],
+                    'subscriber_ids' => [],
+                ];
+            }
+            $groups[$key]['count'] += (int) $r->c;
+            $groups[$key]['first_seen'] = $this->analyticsMinDate($groups[$key]['first_seen'], $r->first_seen);
+            $groups[$key]['last_seen']  = $this->analyticsMaxDate($groups[$key]['last_seen'], $r->last_seen);
+            $fid = (int) $r->flow_id;
+            $groups[$key]['flows'][] = [
+                'flow_id'   => $fid,
+                'flow_name' => $flowMap[$fid]['name'] ?? null,
+                'count'     => (int) $r->c,
+            ];
+        }
+
+        // Subscriber ids per reason so the UI can offer "retry these" without a
+        // second round-trip. Bounded scan + per-group cap = never an unbounded
+        // "retry everything" payload.
+        if (!empty($groups)) {
+            $idRows = $base()->orderByDesc('id')->limit(2000)->get(['id', 'failure_reason']);
+            foreach ($idRows as $ir) {
+                $key = trim((string) $ir->failure_reason);
+                if (!isset($groups[$key])) continue;
+                if (count($groups[$key]['subscriber_ids']) >= \App\Services\Flow\FlowRetryService::MAX_BATCH) continue;
+                $groups[$key]['subscriber_ids'][] = (int) $ir->id;
+            }
+        }
+
+        $groups = collect($groups)->values()
+            ->map(function (array $g) {
+                usort($g['flows'], fn ($a, $b) => $b['count'] <=> $a['count']);
+                $g['first_seen'] = $g['first_seen'] ? \Illuminate\Support\Carbon::parse($g['first_seen'])->toIso8601String() : null;
+                $g['last_seen']  = $g['last_seen'] ? \Illuminate\Support\Carbon::parse($g['last_seen'])->toIso8601String() : null;
+                return $g;
+            })
+            ->sortByDesc('count')->values()->all();
+
+        $paginator = $base()->orderByDesc('failed_at')->orderByDesc('id')->paginate(
+            $this->analyticsPerPage($request), ['*'], 'page', max(1, (int) $request->query('page', 1))
+        );
+
+        return response()->json([
+            'ok'     => true,
+            'groups' => $groups,
+            'totals' => [
+                'failed'            => (int) $base()->count(),
+                'distinct_reasons'  => count($groups),
+                'affected_flows'    => (int) $base()->distinct()->count('flow_id'),
+                'affected_contacts' => (int) $base()->whereNotNull('contact_id')->distinct()->count('contact_id'),
+                'retried'           => (int) $base()->where('retry_count', '>', 0)->count(),
+            ],
+            'rows'                  => $this->analyticsRunRows($paginator->items(), $flowMap),
+            'pagination'            => $this->analyticsPagination($paginator),
+            'retry_cooldown_seconds'=> \App\Services\Flow\FlowRetryService::COOLDOWN_SECONDS,
+            'retry_max_batch'       => \App\Services\Flow\FlowRetryService::MAX_BATCH,
+        ]);
+    }
+
+    /**
+     * GET /flows/analytics/retries — RETRY RECORDS (flow_retry_logs).
+     * Filters: flow_id, outcome (queued|succeeded|failed), date_from/date_to
+     * or range, page, per_page.
+     */
+    public function apiRetries(Request $request): JsonResponse
+    {
+        $flowMap  = $this->analyticsFlowMap();
+        $scopeIds = $this->analyticsScopeIds($request, $flowMap);
+
+        $q = \App\Models\FlowRetryLog::query()
+            ->forCurrentWorkspace()
+            ->whereIn('flow_id', $scopeIds);
+
+        [, $from, $to] = $this->analyticsWindow($request);
+        [$dFrom, $dTo] = $this->analyticsExplicitDates($request);
+        $from = $dFrom ?: $from;
+        $to   = $dTo ?: $to;
+        if ($from) $q->where('created_at', '>=', $from);
+        $q->where('created_at', '<=', $to);
+
+        // Outcome tab counts use the SAME filters minus `outcome` — cloned
+        // BEFORE the filter is applied, exactly like apiRuns() — so picking a
+        // chip narrows the table without zeroing the other chips.
+        $totals = (clone $q)->selectRaw('outcome, COUNT(*) as c')->groupBy('outcome')->pluck('c', 'outcome');
+
+        $outcome = (string) $request->query('outcome', '');
+        if (in_array($outcome, \App\Models\FlowRetryLog::OUTCOMES, true)) {
+            $q->where('outcome', $outcome);
+        }
+
+        $paginator = $q->orderByDesc('id')->paginate(
+            $this->analyticsPerPage($request), ['*'], 'page', max(1, (int) $request->query('page', 1))
+        );
+
+        $items      = collect($paginator->items());
+        $contactMap = $this->analyticsContactMap($items->pluck('contact_id')->filter()->unique()->all());
+        $userMap    = \App\Models\User::whereIn('id', $items->pluck('retried_by_user_id')->filter()->unique()->all())
+            ->pluck('name', 'id');
+
+        return response()->json([
+            'ok'      => true,
+            'retries' => $items->map(function ($r) use ($flowMap, $contactMap, $userMap) {
+                $c = $contactMap[(int) $r->contact_id] ?? null;
+                return [
+                    'id'                      => (int) $r->id,
+                    'flow_id'                 => (int) $r->flow_id,
+                    'flow_name'               => $flowMap[(int) $r->flow_id]['name'] ?? null,
+                    'flow_subscriber_id'      => (int) $r->flow_subscriber_id,
+                    'contact_id'              => $r->contact_id ? (int) $r->contact_id : null,
+                    'contact_name'            => $c['name'] ?? null,
+                    'contact_phone'           => $c['phone'] ?? null,
+                    'retried_by_user_id'      => $r->retried_by_user_id ? (int) $r->retried_by_user_id : null,
+                    'retried_by'              => $r->retried_by_user_id ? ($userMap[$r->retried_by_user_id] ?? null) : null,
+                    'source'                  => $r->retried_by_user_id ? 'manual' : 'system',
+                    'previous_status'         => $r->previous_status,
+                    'previous_failure_reason' => $r->previous_failure_reason,
+                    'outcome'                 => $r->outcome,
+                    'outcome_reason'          => $r->outcome_reason,
+                    'created_at'              => $r->created_at?->toIso8601String(),
+                ];
+            })->all(),
+            'pagination' => $this->analyticsPagination($paginator),
+            'totals'     => [
+                'all'       => (int) $totals->sum(),
+                'queued'    => (int) ($totals['queued'] ?? 0),
+                'succeeded' => (int) ($totals['succeeded'] ?? 0),
+                'failed'    => (int) ($totals['failed'] ?? 0),
+            ],
+        ]);
+    }
+
+    /**
+     * POST /flows/analytics/runs/{subscriber}/retry — re-run ONE failed run.
+     * All the rules (failed-only, cooldown, re-enrolment, audit row) live in
+     * FlowRetryService; this only enforces workspace visibility first.
+     */
+    public function retryRun(Request $request, int $subscriberId): JsonResponse
+    {
+        $notFound = ['ok' => false, 'reason' => 'not_found', 'message' => __('This run no longer exists.'), 'outcome' => null, 'run' => null];
+
+        $sub = \App\Models\FlowSubscriber::find($subscriberId);
+        if (!$sub) return response()->json($notFound, 404);
+
+        // Visibility gate BEFORE the service, so a run in another workspace is
+        // indistinguishable from one that never existed.
+        $flow = Flow::query()->forCurrentWorkspace()->find($sub->flow_id);
+        if (!$flow) return response()->json($notFound, 404);
+
+        // Same resolution Flow::scopeForCurrentWorkspace uses — the route is
+        // behind auth, but never let a missing request-user silently degrade
+        // into workspace 0 (which would reject as "wrong workspace").
+        $user = $request->user() ?: Auth::user();
+        $res  = app(\App\Services\Flow\FlowRetryService::class)
+            ->retry($sub, (int) $user->id, (int) ($user->current_workspace_id ?? 0));
+
+        $flowMap    = $this->analyticsFlowMap();
+        $contactMap = $this->analyticsContactMap([(int) $sub->contact_id]);
+
+        return response()->json([
+            'ok'      => (bool) $res['ok'],
+            'message' => $res['message'],
+            'reason'  => $res['reason'],
+            'outcome' => $res['outcome'],
+            'run'     => $this->analyticsRunRow($sub->refresh(), $flowMap, $contactMap),
+        ], $res['ok'] ? 200 : 422);
+    }
+
+    /**
+     * POST /flows/analytics/runs/retry — re-run an EXPLICIT list of failed runs.
+     * Never a blind "retry everything": the caller must name the ids and the
+     * batch is capped at FlowRetryService::MAX_BATCH.
+     */
+    public function retryFailed(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids'   => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer'],
+        ]);
+
+        $ids = array_values(array_unique(array_filter(array_map('intval', $data['ids']))));
+        $max = \App\Services\Flow\FlowRetryService::MAX_BATCH;
+        if (count($ids) > $max) {
+            return response()->json([
+                'ok'      => false,
+                'reason'  => 'batch_too_large',
+                'message' => __('Select up to :max runs at a time.', ['max' => $max]),
+            ], 422);
+        }
+
+        // Only ids this workspace can see reach the service; the rest are
+        // reported as missing rather than confirming they exist elsewhere.
+        $allowed = \App\Models\FlowSubscriber::whereIn('id', $ids)
+            ->whereIn('flow_id', $this->analyticsFlowIds())
+            ->pluck('id')->map(fn ($v) => (int) $v)->all();
+        $missing = array_values(array_diff($ids, $allowed));
+
+        $user = $request->user() ?: Auth::user();
+        $res  = app(\App\Services\Flow\FlowRetryService::class)
+            ->retryMany($allowed, (int) $user->id, (int) ($user->current_workspace_id ?? 0));
+
+        foreach ($missing as $m) {
+            $res['skipped']++;
+            $res['results'][] = [
+                'id' => $m, 'ok' => false, 'outcome' => null,
+                'reason' => 'not_found', 'message' => __('This run no longer exists.'),
+            ];
+        }
+        $res['requested'] = count($ids);
+
+        return response()->json([
+            'ok'        => true,
+            'message'   => __(':queued re-started, :succeeded completed, :failed failed, :skipped skipped.', [
+                'queued'    => $res['queued'],
+                'succeeded' => $res['succeeded'],
+                'failed'    => $res['failed'],
+                'skipped'   => $res['skipped'],
+            ]),
+            'requested' => $res['requested'],
+            'attempted' => $res['attempted'],
+            'queued'    => $res['queued'],
+            'succeeded' => $res['succeeded'],
+            'failed'    => $res['failed'],
+            'skipped'   => $res['skipped'],
+            'results'   => $res['results'],
+        ]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Analytics internals
+    // ---------------------------------------------------------------------
+
+    /**
+     * The whole KPI + chart payload. Shared by the page render and the JSON
+     * endpoint so both can never drift.
+     */
+    private function buildAnalytics(Request $request, ?int $flowId = null): array
+    {
+        $flowMap = $this->analyticsFlowMap();
+        $allIds  = array_keys($flowMap);
+        $scoped  = $flowId && isset($flowMap[$flowId]);
+        $ids     = $scoped ? [$flowId] : $allIds;
+
+        [$rangeKey, $from, $to] = $this->analyticsWindow($request);
+        // Explicit dates beat the period chip and the upper bound is ALWAYS
+        // applied — same resolution as analyticsRunQuery()/apiRetries(), so the
+        // KPI band, the charts and the tables always describe the same window.
+        [$dFrom, $dTo] = $this->analyticsExplicitDates($request);
+        $from = $dFrom ?: $from;
+        $to   = $dTo ?: $to;
+
+        // Run scope = runs STARTED inside the window (all-time when range=all).
+        $base = function () use ($ids, $from, $to) {
+            $q = \App\Models\FlowSubscriber::query()->whereIn('flow_id', $ids);
+            if ($from) $q->where('enrolled_at', '>=', $from);
+            return $q->where('enrolled_at', '<=', $to);
+        };
+
+        $byStatus = $base()->selectRaw('status, COUNT(*) as c')->groupBy('status')->pluck('c', 'status');
+        $active    = (int) ($byStatus['active'] ?? 0);
+        $paused    = (int) ($byStatus['paused'] ?? 0);
+        $completed = (int) ($byStatus['completed'] ?? 0);
+        $failed    = (int) ($byStatus['failed'] ?? 0);
+        $runs      = (int) $byStatus->sum();
+
+        $avgSeconds = $base()->whereNotNull('enrolled_at')->whereNotNull('completed_at')
+            ->avg(\Illuminate\Support\Facades\DB::raw('TIMESTAMPDIFF(SECOND, enrolled_at, completed_at)'));
+        $avgSeconds = $avgSeconds !== null ? max(0, (int) round((float) $avgSeconds)) : null;
+
+        $retriedRuns   = (int) $base()->where('retry_count', '>', 0)->count();
+        $retryAttempts = \App\Models\FlowRetryLog::query()->forCurrentWorkspace()->whereIn('flow_id', $ids)
+            ->when($from, fn ($q) => $q->where('created_at', '>=', $from))
+            ->where('created_at', '<=', $to)
+            ->count();
+
+        // ----- per-flow leaderboard -----
+        $perFlow = $base()->selectRaw('flow_id, status, COUNT(*) as c')->groupBy('flow_id', 'status')->get();
+        $perFlowAvg = $base()->whereNotNull('enrolled_at')->whereNotNull('completed_at')
+            ->selectRaw('flow_id, AVG(TIMESTAMPDIFF(SECOND, enrolled_at, completed_at)) as a')
+            ->groupBy('flow_id')->pluck('a', 'flow_id');
+
+        $board = [];
+        foreach ($perFlow as $row) {
+            $fid = (int) $row->flow_id;
+            $board[$fid] ??= [
+                'flow_id'         => $fid,
+                'name'            => $flowMap[$fid]['name'] ?? null,
+                'state'           => $flowMap[$fid]['state'] ?? null,
+                'runs'            => 0,
+                'active'          => 0,
+                'paused'          => 0,
+                'completed'       => 0,
+                'failed'          => 0,
+                'completion_rate' => null,
+                'failure_rate'    => null,
+                'avg_complete_seconds' => null,
+            ];
+            $board[$fid]['runs'] += (int) $row->c;
+            if (isset($board[$fid][$row->status])) $board[$fid][$row->status] = (int) $row->c;
+        }
+        foreach ($board as $fid => &$b) {
+            $b['completion_rate'] = $b['runs'] > 0 ? round($b['completed'] * 100 / $b['runs'], 1) : null;
+            $b['failure_rate']    = $b['runs'] > 0 ? round($b['failed'] * 100 / $b['runs'], 1) : null;
+            $avg = $perFlowAvg[$fid] ?? null;
+            $b['avg_complete_seconds'] = $avg !== null ? max(0, (int) round((float) $avg)) : null;
+        }
+        unset($b);
+        $board = collect($board)->sortByDesc('runs')->values()->all();
+
+        // ----- top failure reasons -----
+        $failRows = $base()->where('status', 'failed')
+            ->selectRaw('failure_reason, COUNT(*) as c, MIN(failed_at) as first_seen, MAX(failed_at) as last_seen')
+            ->groupBy('failure_reason')->get();
+        $reasons = [];
+        foreach ($failRows as $r) {
+            $reason = trim((string) $r->failure_reason);
+            $key    = $reason === '' ? '' : $reason;
+            $reasons[$key] ??= ['reason' => $reason === '' ? null : $reason, 'count' => 0, 'first_seen' => null, 'last_seen' => null];
+            $reasons[$key]['count'] += (int) $r->c;
+            $reasons[$key]['first_seen'] = $this->analyticsMinDate($reasons[$key]['first_seen'], $r->first_seen);
+            $reasons[$key]['last_seen']  = $this->analyticsMaxDate($reasons[$key]['last_seen'], $r->last_seen);
+        }
+        $reasons = collect($reasons)->values()->map(function (array $r) {
+            $r['first_seen'] = $r['first_seen'] ? \Illuminate\Support\Carbon::parse($r['first_seen'])->toIso8601String() : null;
+            $r['last_seen']  = $r['last_seen'] ? \Illuminate\Support\Carbon::parse($r['last_seen'])->toIso8601String() : null;
+            return $r;
+        })->sortByDesc('count')->values()->all();
+
+        $series = $this->analyticsSeries($ids, $from, $to);
+
+        return [
+            'range'    => $rangeKey,
+            'from'     => $from?->toIso8601String(),
+            'to'       => $to->toIso8601String(),
+            'flow_id'  => $scoped ? (int) $flowId : null,
+            'totals'   => [
+                'runs'                 => $runs,
+                'active'               => $active,
+                'paused'               => $paused,
+                'completed'            => $completed,
+                'failed'               => $failed,
+                'completion_rate'      => $runs > 0 ? round($completed * 100 / $runs, 1) : null,
+                'failure_rate'         => $runs > 0 ? round($failed * 100 / $runs, 1) : null,
+                'flows_total'          => count($allIds),
+                'flows_live'           => count(array_filter($flowMap, fn ($f) => $f['state'] === 'live')),
+                'flows_with_runs'      => count($board),
+                'contacts_reached'     => (int) $base()->whereNotNull('contact_id')->distinct()->count('contact_id'),
+                'avg_complete_seconds' => $avgSeconds,
+                'retried_runs'         => $retriedRuns,
+                'retry_attempts'       => $retryAttempts,
+            ],
+            'status'   => [
+                'labels' => ['active', 'paused', 'completed', 'failed'],
+                'series' => [$active, $paused, $completed, $failed],
+            ],
+            'series'   => $series,
+            'flows'    => $board,
+            'failures' => [
+                'labels' => array_map(fn ($r) => $r['reason'], array_slice($reasons, 0, 8)),
+                'series' => array_map(fn ($r) => (int) $r['count'], array_slice($reasons, 0, 8)),
+            ],
+            'failure_reasons'        => $reasons,
+            'retry_cooldown_seconds' => \App\Services\Flow\FlowRetryService::COOLDOWN_SECONDS,
+            'retry_max_batch'        => \App\Services\Flow\FlowRetryService::MAX_BATCH,
+            'generated_at'           => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Enrolments / completions / failures bucketed over the window. Each metric
+     * is keyed on its OWN timestamp (a run that started before the window but
+     * completed inside it counts on the day it completed), so the lines describe
+     * what actually happened on each day rather than re-slicing the totals.
+     */
+    private function analyticsSeries(array $ids, ?\Illuminate\Support\Carbon $from, \Illuminate\Support\Carbon $to): array
+    {
+        // Timestamps are stored in UTC but the operator reads the chart in the
+        // workspace's calendar, so the UTC values are shifted by its current
+        // offset before grouping — same technique as
+        // WaCampaignsController::buildChartData. Without it a run at 03:00
+        // local lands on the previous day's bar.
+        $tz     = wa_tz();
+        $offset = (int) \Illuminate\Support\Carbon::now($tz)->utcOffset(); // minutes east of UTC (may be negative)
+
+        $start = $from?->copy();
+        if (!$start) {
+            $earliest = \App\Models\FlowSubscriber::whereIn('flow_id', $ids)->min('enrolled_at');
+            $start = $earliest
+                ? \Illuminate\Support\Carbon::parse($earliest)->setTimezone($tz)->startOfDay()->utc()
+                : $to->copy()->setTimezone($tz)->startOfDay()->utc();
+        }
+
+        // Bounds stay UTC for the WHERE, local for the axis they label.
+        $startLocal = $start->copy()->setTimezone($tz);
+        $toLocal    = $to->copy()->setTimezone($tz);
+
+        // Whole-history views collapse to monthly buckets once a daily line
+        // would run past ~3 months, so the chart stays readable.
+        $granularity = $startLocal->diffInDays($toLocal) > 92 ? 'month' : 'day';
+        $fmt = $granularity === 'month' ? '%Y-%m' : '%Y-%m-%d';
+
+        $grab = function (string $col) use ($ids, $start, $to, $fmt, $offset) {
+            return \App\Models\FlowSubscriber::query()
+                ->whereIn('flow_id', $ids)
+                ->whereNotNull($col)
+                ->where($col, '>=', $start)
+                ->where($col, '<=', $to)
+                ->selectRaw("DATE_FORMAT(`{$col}` + INTERVAL {$offset} MINUTE, '{$fmt}') as bucket, COUNT(*) as c")
+                ->groupBy('bucket')
+                ->pluck('c', 'bucket');
+        };
+
+        // Column names are literals from this method only — never request input.
+        $enrolled  = $grab('enrolled_at');
+        $completed = $grab('completed_at');
+        $failed    = $grab('failed_at');
+
+        $categories = [];
+        $cursor = $granularity === 'month' ? $startLocal->copy()->startOfMonth() : $startLocal->copy()->startOfDay();
+        while ($cursor->lessThanOrEqualTo($toLocal) && count($categories) < 400) {
+            $categories[] = $granularity === 'month' ? $cursor->format('Y-m') : $cursor->format('Y-m-d');
+            $granularity === 'month' ? $cursor->addMonth() : $cursor->addDay();
+        }
+
+        return [
+            'granularity' => $granularity,
+            'categories'  => $categories,
+            'enrolled'    => array_map(fn ($k) => (int) ($enrolled[$k] ?? 0), $categories),
+            'completed'   => array_map(fn ($k) => (int) ($completed[$k] ?? 0), $categories),
+            'failed'      => array_map(fn ($k) => (int) ($failed[$k] ?? 0), $categories),
+        ];
+    }
+
+    /** Flow ids the current workspace may read — the tenancy gate for every analytics query. */
+    private function analyticsFlowIds(): array
+    {
+        return array_map('intval', array_keys($this->analyticsFlowMap()));
+    }
+
+    /**
+     * id => [name, state, is_active] for every visible flow. `flow_name` is an
+     * encrypted column, so it is decrypted here in PHP and never searched or
+     * sorted in SQL.
+     */
+    private function analyticsFlowMap(): array
+    {
+        if ($this->analyticsFlowMapCache !== null) return $this->analyticsFlowMapCache;
+
+        $map = [];
+        Flow::query()->forCurrentWorkspace()
+            ->get(['id', 'flow_name', 'flow_type', 'provider', 'category', 'is_published', 'is_active'])
+            ->each(function (Flow $f) use (&$map) {
+                $name = trim((string) $f->flow_name);
+                $map[(int) $f->id] = [
+                    'name'      => $name !== '' ? $name : null,
+                    'state'     => $f->is_published ? ($f->is_active ? 'live' : 'paused') : 'draft',
+                    'is_active' => (bool) $f->is_active,
+                    'flow_type' => (string) ($f->flow_type ?: 'chat'),
+                    'provider'  => $f->provider,
+                    'category'  => $f->category,
+                ];
+            });
+        return $this->analyticsFlowMapCache = $map;
+    }
+
+    /** id => [name, phone] for the given contacts. Both columns are encrypted casts. */
+    private function analyticsContactMap(array $contactIds): array
+    {
+        $contactIds = array_values(array_filter(array_map('intval', $contactIds)));
+        if (empty($contactIds)) return [];
+
+        $map = [];
+        \App\Models\Contact::query()
+            ->whereIn('id', $contactIds)
+            ->get(['id', 'first_name', 'last_name', 'name', 'country_code', 'mobile'])
+            ->each(function ($c) use (&$map) {
+                $name = trim(((string) $c->first_name) . ' ' . ((string) $c->last_name));
+                if ($name === '') $name = trim((string) $c->name);
+                $map[(int) $c->id] = [
+                    'name'  => $name !== '' ? $name : null,
+                    'phone' => \App\Models\Contact::canonicalizePhone($c->country_code, $c->mobile) ?: null,
+                ];
+            });
+        return $map;
+    }
+
+    /** Shared filter builder for the runs + errors tables (status NOT applied). */
+    private function analyticsRunQuery(Request $request, array $flowMap)
+    {
+        $ids = $this->analyticsScopeIds($request, $flowMap);
+
+        $q = \App\Models\FlowSubscriber::query()->whereIn('flow_id', $ids);
+
+        [, $from, $to] = $this->analyticsWindow($request);
+        [$dFrom, $dTo] = $this->analyticsExplicitDates($request);
+        $from = $dFrom ?: $from;
+        $to   = $dTo ?: $to;
+        // The upper bound is ALWAYS applied — range=all only drops the lower
+        // one, so a bare ?date_to= still narrows the table (mirrors apiRetries).
+        if ($from) $q->where('enrolled_at', '>=', $from);
+        $q->where('enrolled_at', '<=', $to);
+
+        $term = trim((string) $request->query('q', ''));
+        if ($term !== '') {
+            // Contact name/phone and flow name are encrypted at rest — resolve
+            // the matching ids in PHP first, then filter on the plain id columns.
+            $contactIds = $this->analyticsSearchContactIds($term);
+            $flowIds    = [];
+            foreach ($flowMap as $fid => $f) {
+                if ($f['name'] && str_contains(mb_strtolower($f['name']), mb_strtolower($term))) $flowIds[] = (int) $fid;
+            }
+            $q->where(function ($w) use ($term, $contactIds, $flowIds) {
+                $w->where('failure_reason', 'like', '%' . $term . '%');
+                if (!empty($contactIds)) $w->orWhereIn('contact_id', $contactIds);
+                if (!empty($flowIds))    $w->orWhereIn('flow_id', $flowIds);
+                if (ctype_digit($term))  $w->orWhere('id', (int) $term);
+            });
+        }
+
+        return $q;
+    }
+
+    /** Contacts in the current workspace whose (decrypted) name or number matches. */
+    private function analyticsSearchContactIds(string $term): array
+    {
+        if (array_key_exists($term, $this->analyticsContactSearchCache)) {
+            return $this->analyticsContactSearchCache[$term];
+        }
+
+        $needle = mb_strtolower($term);
+        $digits = preg_replace('/\D+/', '', $term);
+
+        return $this->analyticsContactSearchCache[$term] = \App\Models\Contact::query()->forCurrentWorkspace()
+            ->get(['id', 'first_name', 'last_name', 'name', 'country_code', 'mobile'])
+            ->filter(function ($c) use ($needle, $digits) {
+                $name = mb_strtolower(trim(((string) $c->first_name) . ' ' . ((string) $c->last_name) . ' ' . ((string) $c->name)));
+                if ($needle !== '' && str_contains($name, $needle)) return true;
+                if ($digits !== '') {
+                    $phone = \App\Models\Contact::canonicalizePhone($c->country_code, $c->mobile);
+                    return $phone !== '' && str_contains($phone, $digits);
+                }
+                return false;
+            })
+            ->pluck('id')->map(fn ($v) => (int) $v)->all();
+    }
+
+    /** ?flow_id= narrowed to one visible flow, else every visible flow. */
+    private function analyticsScopeIds(Request $request, array $flowMap): array
+    {
+        $flowId = (int) $request->query('flow_id', 0);
+        if ($flowId && isset($flowMap[$flowId])) return [$flowId];
+        return array_map('intval', array_keys($flowMap));
+    }
+
+    private function analyticsRangeKey(Request $request): string
+    {
+        $r = (string) $request->query('range', '30');
+        return in_array($r, self::ANALYTICS_RANGES, true) ? $r : '30';
+    }
+
+    /** @return array{0:string,1:?\Illuminate\Support\Carbon,2:\Illuminate\Support\Carbon} */
+    private function analyticsWindow(Request $request): array
+    {
+        // "Last 7 days" means the operator's last 7 calendar days, not UTC's:
+        // the window is built in the workspace timezone and handed back in UTC
+        // because every timestamp column is stored in UTC.
+        $tz  = wa_tz();
+        $now = \Illuminate\Support\Carbon::now($tz);
+        $key = $this->analyticsRangeKey($request);
+        $to  = $now->copy()->endOfDay()->utc();
+        if ($key === 'all') return ['all', null, $to];
+        return [$key, $now->copy()->subDays((int) $key - 1)->startOfDay()->utc(), $to];
+    }
+
+    /** Explicit ?date_from / ?date_to (Y-m-d) override ?range when both parse. */
+    private function analyticsExplicitDates(Request $request): array
+    {
+        // Read in the workspace calendar (same as analyticsWindow), returned in
+        // UTC so both kinds of bound compare against the stored values alike.
+        $tz = wa_tz();
+        $parse = function (?string $v, bool $end) use ($tz) {
+            $v = trim((string) $v);
+            if ($v === '') return null;
+            try {
+                $d = \Illuminate\Support\Carbon::parse($v, $tz);
+                return ($end ? $d->endOfDay() : $d->startOfDay())->utc();
+            } catch (\Throwable $e) { return null; }
+        };
+        return [$parse($request->query('date_from'), false), $parse($request->query('date_to'), true)];
+    }
+
+    private function analyticsPerPage(Request $request): int
+    {
+        $n = (int) $request->query('per_page', self::ANALYTICS_PER_PAGE);
+        if ($n < 1) $n = self::ANALYTICS_PER_PAGE;
+        return min($n, self::ANALYTICS_MAX_PER_PAGE);
+    }
+
+    private function analyticsPagination($paginator): array
+    {
+        return [
+            'page'      => $paginator->currentPage(),
+            'per_page'  => $paginator->perPage(),
+            'total'     => $paginator->total(),
+            'last_page' => $paginator->lastPage(),
+            'from'      => $paginator->firstItem(),
+            'to'        => $paginator->lastItem(),
+            'has_more'  => $paginator->hasMorePages(),
+        ];
+    }
+
+    /** @param iterable<\App\Models\FlowSubscriber> $items */
+    private function analyticsRunRows($items, array $flowMap): array
+    {
+        $items      = collect($items);
+        $contactMap = $this->analyticsContactMap($items->pluck('contact_id')->filter()->unique()->all());
+        return $items->map(fn ($s) => $this->analyticsRunRow($s, $flowMap, $contactMap))->values()->all();
+    }
+
+    private function analyticsRunRow(\App\Models\FlowSubscriber $s, array $flowMap, array $contactMap): array
+    {
+        $f = $flowMap[(int) $s->flow_id] ?? null;
+        $c = $contactMap[(int) $s->contact_id] ?? null;
+        $reason = trim((string) $s->failure_reason);
+        $duration = ($s->enrolled_at && $s->completed_at)
+            ? max(0, $s->completed_at->getTimestamp() - $s->enrolled_at->getTimestamp())
+            : null;
+
+        return [
+            'id'               => (int) $s->id,
+            'flow_id'          => (int) $s->flow_id,
+            'flow_name'        => $f['name'] ?? null,
+            'flow_state'       => $f['state'] ?? null,
+            'contact_id'       => $s->contact_id ? (int) $s->contact_id : null,
+            'contact_name'     => $c['name'] ?? null,
+            'contact_phone'    => $c['phone'] ?? null,
+            'status'           => (string) $s->status,
+            'enrolled_at'      => $s->enrolled_at?->toIso8601String(),
+            'completed_at'     => $s->completed_at?->toIso8601String(),
+            'failed_at'        => $s->failed_at?->toIso8601String(),
+            'failure_reason'   => $reason !== '' ? $reason : null,
+            'retry_count'      => (int) ($s->retry_count ?? 0),
+            'last_retried_at'  => $s->last_retried_at?->toIso8601String(),
+            'duration_seconds' => $duration,
+            'can_retry'        => $s->status === 'failed' && (bool) ($f['is_active'] ?? false),
+        ];
+    }
+
+    private function analyticsMinDate(?string $current, $candidate): ?string
+    {
+        $candidate = $candidate ? (string) $candidate : null;
+        if (!$candidate) return $current;
+        if (!$current) return $candidate;
+        return $candidate < $current ? $candidate : $current;
+    }
+
+    private function analyticsMaxDate(?string $current, $candidate): ?string
+    {
+        $candidate = $candidate ? (string) $candidate : null;
+        if (!$candidate) return $current;
+        if (!$current) return $candidate;
+        return $candidate > $current ? $candidate : $current;
+    }
+
+
     /** GET /flows/api/picker — tags + groups + devices for the trigger inspector. */
     public function apiPicker(Request $request): JsonResponse
     {

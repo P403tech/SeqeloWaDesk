@@ -409,7 +409,7 @@ class KeywordReplyDispatcher
             if ($target && (int) ($target->workspace_id ?? 0) === $workspaceId) {
                 $tName = $target->name
                     ?: (trim(($target->first_name ?? '') . ' ' . ($target->last_name ?? '')) ?: 'Contact');
-                $tNum = preg_replace('/\D+/', '', (string) ($target->country_code . $target->mobile))
+                $tNum = Contact::canonicalizePhone($target->country_code, $target->mobile);
                     ?: preg_replace('/\D+/', '', (string) $target->mobile);
                 // InboxDispatcher has no native contact-card builder for
                 // WABA/Twilio — ship a clean readable text card so the

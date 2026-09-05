@@ -2900,6 +2900,25 @@ Tips:
                             @endforeach
                         </select>
                     </div>
+                    <div class="col-span-2">
+                        <label
+                            class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Knowledge base') }}
+                            <span class="text-ink-400 font-normal">{{ __('(optional)') }}</span></label>
+                        @php
+                            $__kbAssistants = \App\Models\AiChatAssistant::query()
+                                ->where('workspace_id', auth()->user()->current_workspace_id ?? 0)
+                                ->orderBy('name')->get(['id', 'name']);
+                        @endphp
+                        <select name="knowledge_assistant_id" id="agent-knowledge-assistant"
+                            class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[13px] focus:outline-none focus:border-wa-deep">
+                            <option value="">{{ __('None — use the prompt only') }}</option>
+                            @foreach ($__kbAssistants as $__a)
+                                <option value="{{ $__a->id }}">{{ $__a->name }}</option>
+                            @endforeach
+                        </select>
+                        <div class="text-[10.5px] text-ink-500 mt-1">
+                            {{ __('Folds a trained AI-Training agent’s knowledge into this agent’s answers.') }}</div>
+                    </div>
                     <div>
                         <label
                             class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Tone') }}</label>
@@ -2980,8 +2999,17 @@ Tips:
                     <p class="text-[10.5px] text-ink-500 mt-1.5 ml-6">
                         The AI sees your workspace's <a href="#" data-open-quick-replies
                             class="text-wa-deep font-semibold hover:underline">{{ __('Quick Replies') }}</a> and
-                        uses them verbatim (or paraphrased) when a customer's question matches.
-                        Top 15 by usage are sent on every reply.
+                    </p>
+                </div>
+                <div class="border border-paper-200 rounded-xl p-3 bg-wa-mint/10">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="shop_router"
+                            class="w-4 h-4 rounded border-paper-200 accent-wa-deep" />
+                        <span
+                            class="text-[12px] text-ink-700 font-semibold">{{ __('Shop Manager router') }}</span>
+                    </label>
+                    <p class="text-[10.5px] text-ink-500 mt-1.5 ml-6">
+                        {{ __('Customer still talks to one shop person. Underneath, catalog / orders / COD / returns are separate jobs. Voice notes use the same routing. You can also put [shop-manager] in the system prompt.') }}
                     </p>
                 </div>
                 {{-- Human handoff — stop the AI from looping forever in a support

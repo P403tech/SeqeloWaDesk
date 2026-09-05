@@ -5377,6 +5377,7 @@ class TeamInboxController extends Controller
             'name'          => 'required|string|max:191',
             'provider'      => 'required|in:openai,anthropic,gemini',
             'model'         => 'required|string|max:64',
+            'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
             'tone'          => 'nullable|in:friendly,professional,concise,empathetic',
             'avatar_color'  => 'nullable|string|max:7',
@@ -5392,6 +5393,7 @@ class TeamInboxController extends Controller
             'handoff_low_score_window'     => 'nullable|integer|min:1|max:10',
             'handoff_enabled'              => 'nullable|boolean',
             'use_saved_replies'            => 'nullable|boolean',
+            'shop_router'                  => 'nullable|boolean',
             // Multi-device scoping. Empty / omitted = any device.
             'device_ids'                   => 'nullable|array',
             'device_ids.*'                 => 'integer|exists:devices,id',
@@ -5444,6 +5446,7 @@ class TeamInboxController extends Controller
             'name'          => 'sometimes|string|max:191',
             'provider'      => 'sometimes|in:openai,anthropic,gemini',
             'model'         => 'sometimes|string|max:64',
+            'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
             'tone'          => 'nullable|in:friendly,professional,concise,empathetic',
             'avatar_color'  => 'nullable|string|max:7',
@@ -5458,6 +5461,7 @@ class TeamInboxController extends Controller
             'handoff_low_score_window'     => 'nullable|integer|min:1|max:10',
             'handoff_enabled'              => 'nullable|boolean',
             'use_saved_replies'            => 'nullable|boolean',
+            'shop_router'                  => 'nullable|boolean',
             'device_ids'                   => 'nullable|array',
             'device_ids.*'                 => 'integer|exists:devices,id',
             // Voice-AI config — same rules as the Store endpoint.
