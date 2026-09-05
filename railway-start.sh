@@ -23,7 +23,17 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
     i=$((i + 1))
     sleep 2
   done
+  php artisan migrate:status --no-ansi || true
   php artisan migrate --force --no-interaction
+  php -r '
+    require "vendor/autoload.php";
+    $app = require "bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    $ok = function ($label, $yes) { echo $label.": ".($yes ? "yes" : "MISSING")."\n"; };
+    $ok("col ai_agents.knowledge_assistant_id", Illuminate\Support\Facades\Schema::hasColumn("ai_agents", "knowledge_assistant_id"));
+    $ok("col ai_agents.shop_router", Illuminate\Support\Facades\Schema::hasColumn("ai_agents", "shop_router"));
+    $ok("table flow_retry_logs", Illuminate\Support\Facades\Schema::hasTable("flow_retry_logs"));
+  ' || true
   # Ephemeral disks lose storage/installed on every deploy. If MySQL already
   # has users, restore the marker so EnsureInstalled never bounces to /install.
   php -r '

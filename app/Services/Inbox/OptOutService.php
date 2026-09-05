@@ -179,7 +179,7 @@ class OptOutService
             ->where('workspace_id', $workspaceId)
             ->get(['id', 'workspace_id', 'mobile', 'country_code', 'is_unsubscribed'])
             ->first(function ($c) use ($digits, $last10) {
-                $d = Contact::canonicalizePhone($c->country_code, $c->mobile);
+                $d = Contact::canonicalizePhone($c->country_code, $c->mobile)
                     ?: preg_replace('/\D+/', '', (string) $c->mobile);
                 return $d !== '' && ($d === $digits || str_ends_with($d, $last10));
             });
