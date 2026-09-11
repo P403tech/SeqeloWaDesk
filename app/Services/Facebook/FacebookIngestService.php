@@ -374,25 +374,6 @@ class FacebookIngestService
             ->orderByDesc('updated_at')
             ->get();
 
-        foreach ($flows as $flow) {
-            $raw = trim((string) $flow->trigger_keywords);
-            if ($raw === '') {
-                continue;
-            }
-            foreach (preg_split('/\s*,\s*/', mb_strtolower($raw)) as $kw) {
-                $kw = trim($kw);
-                if ($kw === '') {
-                    continue;
-                }
-                if (in_array($kw, ['any', '*', '.*', '.+'], true)) {
-                    return $flow; // catch-all
-                }
-                if (str_contains($text, $kw)) {
-                    return $flow;
-                }
-            }
-        }
-
-        return null;
+        return app(\App\Services\Inbox\CatchAllMatcher::class)->pickFlowForInbound($flows, $text);
     }
 }

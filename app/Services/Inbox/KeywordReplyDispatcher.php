@@ -8,6 +8,7 @@ use App\Models\Conversation;
 use App\Models\InboxMessage;
 use App\Models\Contact;
 use App\Services\InboxDispatcher;
+use App\Services\Inbox\CatchAllMatcher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
@@ -314,6 +315,46 @@ class KeywordReplyDispatcher
         $rule = $igNoKeyword
             ? $candidates->first()
             : $candidates->first(fn ($c) => $c->matchesNeedle($body));
+
+        // PASS 2 — default route. matchKeyword() excludes is_catch_all, so
+        // WABA / Instagram DMs / Facebook / SMS never fired "any inbound"
+        // until this pass. Empty-body media and no-keyword IG events keep
+        // their own first-match path above.
+        if (! $rule && ! $igNoKeyword && $body !== '') {
+            $catchAllQuery = KeywordReply::query()
+                ->where('workspace_id', $workspaceId)
+                ->where('status', true)
+                ->where('is_catch_all', true)
+                ->whereNotIn('trigger_type', ['welcome', 'away', 'out_of_hours'])
+                ->where(function ($q) use ($provider) {
+                    $q->where('provider', $provider)
+                      ->orWhereNull('provider')
+                      ->orWhere('provider', '');
+                })
+                ->where(function ($q) use ($convo) {
+                    $q->whereNull('device_id');
+                    if (! empty($convo->device_id)) {
+                        $q->orWhere('device_id', (int) $convo->device_id);
+                    }
+                });
+            if ($igTrigger !== null) {
+                $catchAllQuery->where(function ($q) use ($igTrigger) {
+                    $q->where('ig_trigger', $igTrigger);
+                    if ($igTrigger === 'dm_keyword') {
+                        $q->orWhereNull('ig_trigger')->orWhere('ig_trigger', '');
+                    }
+                });
+            } else {
+                $catchAllQuery->where(function ($q) {
+                    $q->whereNull('ig_trigger')->orWhere('ig_trigger', '')->orWhere('ig_trigger', 'dm_keyword');
+                });
+            }
+            $rule = app(CatchAllMatcher::class)->pickKeywordReply(
+                $catchAllQuery->with(['selectedContents', 'flow'])->get(),
+                $convo->device_id ? (int) $convo->device_id : null
+            );
+        }
+
         if (!$rule) return null;
 
         // Rule-level cooldown — its own row says "min N seconds between
@@ -409,7 +450,7 @@ class KeywordReplyDispatcher
             if ($target && (int) ($target->workspace_id ?? 0) === $workspaceId) {
                 $tName = $target->name
                     ?: (trim(($target->first_name ?? '') . ' ' . ($target->last_name ?? '')) ?: 'Contact');
-                $tNum = Contact::canonicalizePhone($target->country_code, $target->mobile);
+                $tNum = Contact::canonicalizePhone($target->country_code, $target->mobile)
                     ?: preg_replace('/\D+/', '', (string) $target->mobile);
                 // InboxDispatcher has no native contact-card builder for
                 // WABA/Twilio — ship a clean readable text card so the

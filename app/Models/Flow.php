@@ -393,6 +393,12 @@ class Flow extends Model
         });
     }
 
+    /** True when Trigger has at least one outgoing edge (not a live dead-end). */
+    public function hasRunnableGraph(): bool
+    {
+        return \App\Services\Inbox\CatchAllMatcher::graphIsRunnable($this->decoded_flow_data);
+    }
+
     /**
      * Return flow_data decoded to an array. Falls back to the file
      * mirror if the DB column is empty (matches the old behaviour).

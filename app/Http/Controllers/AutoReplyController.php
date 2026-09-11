@@ -1733,22 +1733,21 @@ class AutoReplyController extends Controller
         // letting the default route claim media too would re-break the order
         // flow through the back door.
         if (!$reply && $keyword !== '') {
-            $reply = KeywordReply::query()
+            $catchAlls = KeywordReply::query()
                 ->where($scopeCandidates)
                 ->where('status', true)
                 ->where('is_catch_all', true)
-                // A rule bound to THIS device beats a workspace-wide one, same
-                // precedence the media branch uses.
-                ->orderByRaw('device_id IS NULL')
-                ->orderBy('id')
-                ->with(['selectedContents'])
-                ->first();
+                ->whereNotIn('trigger_type', ['welcome', 'away', 'out_of_hours'])
+                ->with(['selectedContents', 'flow'])
+                ->get();
+            $reply = app(\App\Services\Inbox\CatchAllMatcher::class)
+                ->pickKeywordReply($catchAlls, (int) $device->id);
 
             if ($reply) {
                 \Log::info('[KW-LOOKUP] no keyword matched → DEFAULT ROUTE', [
                     'rule_id'   => $reply->id,
                     'flow_id'   => $reply->flow_id,
-                    'device_id' => $device->id,
+                    'device_id' => $reply->device_id,
                     'ws'        => $lookupWsId,
                 ]);
             }

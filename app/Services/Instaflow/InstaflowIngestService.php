@@ -9,6 +9,7 @@ use App\Models\InboxMessage;
 use App\Models\InstagramAccount;
 use App\Models\KeywordReply;
 use App\Models\SystemSetting;
+use App\Services\Inbox\CatchAllMatcher;
 use App\Services\Inbox\KeywordReplyDispatcher;
 use App\Services\Instagram\IgFlowBridge;
 use Illuminate\Support\Carbon;
@@ -301,26 +302,7 @@ class InstaflowIngestService
             ->orderByDesc('updated_at')
             ->get();
 
-        foreach ($flows as $flow) {
-            $raw = trim((string) $flow->trigger_keywords);
-            if ($raw === '') {
-                continue;
-            }
-            foreach (preg_split('/\s*,\s*/', mb_strtolower($raw)) as $kw) {
-                $kw = trim($kw);
-                if ($kw === '') {
-                    continue;
-                }
-                if (in_array($kw, ['any', '*', '.*', '.+'], true)) {
-                    return $flow;
-                } // catch-all
-                if (str_contains($text, $kw)) {
-                    return $flow;
-                }
-            }
-        }
-
-        return null;
+        return app(CatchAllMatcher::class)->pickFlowForInbound($flows, $text);
     }
 
     /**
