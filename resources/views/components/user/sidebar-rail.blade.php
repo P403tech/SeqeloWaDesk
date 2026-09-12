@@ -18,8 +18,9 @@
     $allWorkspaces = $u ? $u->workspaces()->orderByDesc('last_active_at')->get() : collect();
     $canCreateWorkspace = $u ? $u->canCreateWorkspace() : false;
 
-    // Admin-customisable rail colour + auto contrast.
-    $railBg = (string) \App\Models\SystemSetting::get('user_sidebar_color', '') ?: '#EFF9F6';
+    // Admin-customisable rail colour + auto contrast. Legacy WaDesk dark
+    // greens are treated as unset so Seqelo mint actually shows.
+    $railBg = seqelo_sidebar_bg();
     $__hex = ltrim($railBg, '#');
     if (strlen($__hex) === 3) {
         $__hex = $__hex[0].$__hex[0].$__hex[1].$__hex[1].$__hex[2].$__hex[2];
@@ -35,7 +36,13 @@
 
     // Optional admin overrides.
     $textColor = (string) \App\Models\SystemSetting::get('user_sidebar_text_color', '');
+    if (! seqelo_sidebar_has_custom_bg() || seqelo_is_legacy_sidebar_hex($textColor) || strcasecmp($textColor, '#FBFAF6') === 0 || strcasecmp($textColor, '#FFFFFF') === 0) {
+        $textColor = '';
+    }
     $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#1B4B3D';
+    if ($accentColor === '' || seqelo_is_legacy_sidebar_hex($accentColor)) {
+        $accentColor = '#1B4B3D';
+    }
 
     // hex → "r,g,b" helper for building translucent tokens.
     $rgb = function (string $hex): string {
@@ -72,15 +79,16 @@
     // A custom background is a fixed inline colour (overrides theme). Without one,
     // we DON'T set inline background — the CSS below drives it per active theme so
     // it live-switches when the user flips theme (like the admin sidebar).
-    $hasCustomBg = trim((string) \App\Models\SystemSetting::get('user_sidebar_color', '')) !== '';
-    $styleVars = $hasCustomBg ? ('background:' . $railBg . ';') : '';
+    $hasCustomBg = seqelo_sidebar_has_custom_bg();
+    $styleVars = $hasCustomBg ? ('background:' . $railBg . ';') : ('background:' . seqelo_sidebar_mint() . ';');
     foreach ($vars as $k => $v) { $styleVars .= $k . ':' . $v . ';'; }
 @endphp
 
 <style>
     .rail-link { position:relative; display:flex; align-items:center; gap:12px; padding:9px 13px; border-radius:12px; font-size:13.5px; font-weight:500; color:var(--rfg); transition:.15s; }
     .rail-link:hover { background:var(--rhover); color:var(--rfgs); }
-    .rail-link.active { background:var(--racc-tint); color:var(--rfgs); }
+    .rail-link.active { background:var(--racc); color:#fff; }
+    .rail-link.active .rail-ic { color:#fff; }
     .rail-link.active::before { content:""; position:absolute; left:-13px; top:50%; transform:translateY(-50%); width:3px; height:20px; border-radius:0 3px 3px 0; background:var(--racc); }
     .rail-ic { width:18px; height:18px; flex-shrink:0; }
     .rail-cap { font-family:ui-monospace,'JetBrains Mono',monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.18em; color:var(--rcap); padding:0 13px; margin:16px 0 6px; }
@@ -98,12 +106,12 @@
     .rail-panel:hover { background:var(--rhover); }
     .rail-fg  { color:var(--rfgs); }
     .rail-fgm { color:var(--rfgm); }
-    {{-- Theme-responsive background — used only when the admin has NOT set a
-         custom sidebar colour. Live-switches with the theme toggle (data-theme). --}}
+    {{-- Seqelo mint rail in every theme (Interakt-style). A genuine custom
+         colour is applied inline and still wins. --}}
     .user-rail-root { background:#EFF9F6; }
-    :root[data-theme="dark"]   .user-rail-root { background:#0A0F0E; }
-    :root[data-theme="doodle"] .user-rail-root { background:#0B211D; }
-    :root[data-theme="bright"] .user-rail-root { background:#0B1F1C; }
+    :root[data-theme="dark"]   .user-rail-root { background:#EFF9F6; }
+    :root[data-theme="doodle"] .user-rail-root { background:#EFF9F6; }
+    :root[data-theme="bright"] .user-rail-root { background:#EFF9F6; }
 </style>
 
 <div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" style="{{ $styleVars }}">

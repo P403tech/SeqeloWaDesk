@@ -124,6 +124,71 @@ if (! function_exists('workspace_brand_color')) {
     }
 }
 
+if (! function_exists('seqelo_sidebar_mint')) {
+    /** Interakt-style left-rail background. */
+    function seqelo_sidebar_mint(): string
+    {
+        return '#EFF9F6';
+    }
+}
+
+if (! function_exists('seqelo_is_legacy_sidebar_hex')) {
+    /**
+     * Old WaDesk rail colours that were stored as if they were a deliberate
+     * admin pick (the colour input always POSTs a hex). Treat them as unset
+     * so the Seqelo mint default can show.
+     */
+    function seqelo_is_legacy_sidebar_hex(string $hex): bool
+    {
+        $hex = strtoupper(trim($hex));
+        return in_array($hex, [
+            '#0B1F1C', '#0A0F0E', '#0B211D', '#070D0C', '#13312D',
+            '#075E54', '#128C7E', '#25D366', '#111827', '#0F172A',
+            '#0A1628', '#15281F',
+        ], true);
+    }
+}
+
+if (! function_exists('seqelo_sidebar_bg')) {
+    /** Effective user-rail background — mint unless the admin picked a custom colour. */
+    function seqelo_sidebar_bg(): string
+    {
+        $mint = seqelo_sidebar_mint();
+        try {
+            $raw = trim((string) \App\Models\SystemSetting::get('user_sidebar_color', ''));
+        } catch (\Throwable $e) {
+            return $mint;
+        }
+        if ($raw === '' || ! preg_match('/^#[0-9A-Fa-f]{6}$/', $raw)) {
+            return $mint;
+        }
+        if (seqelo_is_legacy_sidebar_hex($raw) || strcasecmp($raw, $mint) === 0) {
+            return $mint;
+        }
+
+        return $raw;
+    }
+}
+
+if (! function_exists('seqelo_sidebar_has_custom_bg')) {
+    function seqelo_sidebar_has_custom_bg(): bool
+    {
+        try {
+            $raw = trim((string) \App\Models\SystemSetting::get('user_sidebar_color', ''));
+        } catch (\Throwable $e) {
+            return false;
+        }
+        if ($raw === '' || ! preg_match('/^#[0-9A-Fa-f]{6}$/', $raw)) {
+            return false;
+        }
+        if (seqelo_is_legacy_sidebar_hex($raw) || strcasecmp($raw, seqelo_sidebar_mint()) === 0) {
+            return false;
+        }
+
+        return true;
+    }
+}
+
 if (! function_exists('theme_metrics')) {
     /**
      * Non-colour appearance controls, managed by the same admin page:

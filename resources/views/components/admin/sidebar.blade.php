@@ -483,7 +483,7 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
 
 @endphp
 
-<div id="admin-sidebar-root" class="bg-paper-0 border-r border-paper-200 flex flex-col sticky top-0 h-screen">
+<div id="admin-sidebar-root" class="bg-wa-mint border-r border-[#d7eee6] flex flex-col sticky top-0 h-screen">
     <div class="admin-brand-header h-16 px-5 flex items-center justify-between border-b border-paper-200 shrink-0">
         @php
             // Resolve the logo for the user's currently-selected theme.

@@ -29,7 +29,7 @@ class AppearanceController extends Controller
         }
 
         $userLayout = \App\Support\UserNav::layout(); // 'topbar' | 'sidebar'
-        $sidebarColor = (string) SystemSetting::get('user_sidebar_color', '');       // '' = default dark
+        $sidebarColor = (string) SystemSetting::get('user_sidebar_color', '');       // '' = Seqelo mint
         $sidebarTextColor = (string) SystemSetting::get('user_sidebar_text_color', ''); // '' = auto-contrast
         $sidebarAccentColor = (string) SystemSetting::get('user_sidebar_accent_color', ''); // '' = default green
 
@@ -79,6 +79,9 @@ class AppearanceController extends Controller
                 $raw = '';
             }
             $val = ($raw !== '' && preg_match('/^#[0-9A-Fa-f]{6}$/', $raw)) ? $raw : '';
+            if ($key === 'user_sidebar_color' && $val !== '' && (seqelo_is_legacy_sidebar_hex($val) || strcasecmp($val, seqelo_sidebar_mint()) === 0)) {
+                $val = '';
+            }
             SystemSetting::set($key, $val, 'string', $desc);
         }
 
@@ -92,6 +95,9 @@ class AppearanceController extends Controller
         }
         foreach (theme_metrics() as $k => $meta) {
             SystemSetting::set('theme.metric.' . $k, (string) (int) $meta[1], 'string', 'Dashboard appearance metric (reset)');
+        }
+        foreach (['user_sidebar_color', 'user_sidebar_text_color', 'user_sidebar_accent_color'] as $key) {
+            SystemSetting::set($key, '', 'string', 'User sidebar colour (reset)');
         }
         return back()->with('status', __('Appearance reset to the shipped defaults.'));
     }
