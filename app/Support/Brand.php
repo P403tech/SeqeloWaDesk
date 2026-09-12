@@ -66,7 +66,8 @@ class Brand
 
     public static function faviconUrl(): ?string
     {
-        return self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
+        $url = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
+        return $url ?: asset('brand/seqelo-icon.png');
     }
 
     /**
@@ -119,17 +120,15 @@ class Brand
             // Fall back to the default theme's logo.
             $path = (string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, '');
         }
-        return self::resolveUrl($path);
+        $url = self::resolveUrl($path);
+        return $url ?: asset('brand/seqelo-icon.png');
     }
 
     /** True if at least one logo has been uploaded. Used to decide
      * whether to render the wordmark fallback or the image. */
     public static function hasAnyLogo(): bool
     {
-        foreach (['paper', 'bright', 'dark', 'doodle'] as $theme) {
-            if (SystemSetting::get('brand.logo.' . $theme, '')) return true;
-        }
-        return false;
+        return true;
     }
 
     /**

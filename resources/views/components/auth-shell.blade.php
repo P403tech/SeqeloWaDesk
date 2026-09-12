@@ -26,7 +26,7 @@
     $heading       = auth_cfg($page, 'heading', '');
     $headingAccent = auth_cfg($page, 'heading_accent', '');
     $subheading    = auth_cfg($page, 'subheading', '');
-    $accent        = auth_cfg($page, 'accent', '#25D366');
+    $accent        = auth_cfg($page, 'accent', '#9AC055');
     $mediaUrl      = auth_cfg($page, 'media_url', '');
     $mediaType     = auth_cfg($page, 'media_type', '');
 @endphp

@@ -14,26 +14,26 @@
     --font-mono: '"JetBrains Mono"', monospace;
 
     --color-paper-0: #FFFFFF;
-    --color-paper-50: #F4F6FA;
-    --color-paper-100: #EEF0F4;
-    --color-paper-200: #E5E7EB;
+    --color-paper-50: #F7F9F2;
+    --color-paper-100: #EEF3E2;
+    --color-paper-200: #E6EFD4;
     --color-paper-300: #D4CCB6;       /* prototype-exact; was D6CDB6 — 2-hex drift */
 
     --color-ink-300: #C3CCC9;          /* added — prototype uses for hairline dots */
     --color-ink-400: #9AA8A4;          /* prototype-exact; was 92A29E */
-    --color-ink-500: #6B7280;
+    --color-ink-500: #5A5A5A;
     --color-ink-600: #3A5A55;
-    --color-ink-700: #1A2E27;
+    --color-ink-700: #323A3D;
     --color-ink-800: #13312D;
-    --color-ink-900: #0B1F1C;
+    --color-ink-900: #111111;
     --color-ink-950: #070D0C;          /* added — deepest black, prototype */
 
-    --color-wa-deep: #1B4B3D;
-    --color-wa-teal: #037D66;
-    --color-wa-green: #00A68B;
-    --color-wa-mint: #EFF9F6;
+    --color-wa-deep: #0B4A42;
+    --color-wa-teal: #0D8A78;
+    --color-wa-green: #9AC055;
+    --color-wa-mint: #F4F8EA;
     --color-wa-chat: #ECE5DD;
-    --color-wa-bubble: #B7FBD2;
+    --color-wa-bubble: #E6EFD4;
 
     --color-accent-coral: #E87A5D;
     --color-accent-amber: #DE8A29;

@@ -374,11 +374,11 @@ html[data-theme="dark"] .divide-paper-100 > * + *     { border-color:#2D5A53 !im
    The --wa-* shades are the hand-picked dark variants — lighter and more
    saturated than the light-theme brand so they stay legible on dark surfaces. */
 html[data-theme="dark"] {
-    --color-wa-deep:   #075E54;
-    --color-wa-teal:   #128C7E;
-    --color-wa-green:  #25D366;
-    --color-wa-mint:   #DCF8C6;
-    --color-wa-bubble: #E7FFDB;
+    --color-wa-deep:   #0B4A42;
+    --color-wa-teal:   #0D8A78;
+    --color-wa-green:  #9AC055;
+    --color-wa-mint:   #F4F8EA;
+    --color-wa-bubble: #E6EFD4;
 
     --wa-brand-text:   #34D87A;
     --wa-brand-bright: #7BFFB1;
@@ -841,11 +841,11 @@ html[data-theme="doodle"]{
      Re-declaring the --color-* tokens pins every Tailwind utility inside doodle
      scope to the shipped palette, so switching the brand colour leaves this
      theme exactly as designed. */
-  --color-wa-deep:   #075E54;
-  --color-wa-teal:   #128C7E;
-  --color-wa-green:  #25D366;
-  --color-wa-mint:   #DCF8C6;
-  --color-wa-bubble: #E7FFDB;
+  --color-wa-deep:   #0B4A42;
+  --color-wa-teal:   #0D8A78;
+  --color-wa-green:  #9AC055;
+  --color-wa-mint:   #F4F8EA;
+  --color-wa-bubble: #E6EFD4;
 
   --d-ink:       #15281F;
   --d-ink-72:    rgba(21,40,31,0.72);
@@ -2919,14 +2919,14 @@ html[data-theme="doodle"] .ts-control > input:not([type]) {
 /* Seqelo mint left rail (admin). Theme packs recast .bg-paper-0 / .bg-wa-mint
    to dark greens; pin the rail so it matches the Interakt-style menu. */
 #admin-sidebar-root {
-  background: #EFF9F6 !important;
-  border-right-color: #d7eee6 !important;
+  background: #F4F8EA !important;
+  border-right-color: #E6EFD4 !important;
 }
 html[data-theme="dark"] #admin-sidebar-root,
 html[data-theme="doodle"] #admin-sidebar-root,
 html[data-theme="bright"] #admin-sidebar-root {
-  background: #EFF9F6 !important;
-  border-right-color: #d7eee6 !important;
+  background: #F4F8EA !important;
+  border-right-color: #E6EFD4 !important;
 }
 
 /* ── ADMIN SIDEBAR COLLAPSE ─────────────────────────────────────────

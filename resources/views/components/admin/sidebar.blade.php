@@ -497,8 +497,8 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
             @if ($brandLogo)
                 {{-- data-brand-logo lets wadesk.js setTheme() swap the src
  to the matching per-theme logo at theme-change time. --}}
-                <img src="{{ $brandLogo }}" alt="{{ $brandName }}" data-brand-logo
-                    class="h-9 w-auto max-w-[160px] object-contain">
+                    <img src="{{ $brandLogo }}" alt="{{ $brandName }}" data-brand-logo
+                    class="h-9 w-9 rounded-[10px] object-cover">
             @else
                 <span
                     class="relative inline-flex items-center justify-center w-9 h-9 rounded-lg bg-wa-deep text-paper-0">

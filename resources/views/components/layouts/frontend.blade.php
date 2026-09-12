@@ -86,11 +86,11 @@
                 300 => fc('theme.ink.300', '#C3CCC9'),
             ],
             'wa' => [
-                'deep' => fc('theme.wa.deep', '#075E54'),
-                'teal' => fc('theme.wa.teal', '#128C7E'),
-                'green' => fc('theme.wa.green', '#25D366'),
-                'mint' => fc('theme.wa.mint', '#DCF8C6'),
-                'bubble' => fc('theme.wa.bubble', '#E7FFDB'),
+                'deep' => fc('theme.wa.deep', '#0B4A42'),
+                'teal' => fc('theme.wa.teal', '#0D8A78'),
+                'green' => fc('theme.wa.green', '#9AC055'),
+                'mint' => fc('theme.wa.mint', '#F4F8EA'),
+                'bubble' => fc('theme.wa.bubble', '#E6EFD4'),
                 'chat' => fc('theme.wa.chat', '#ECE5DD'),
             ],
             'paper' => [

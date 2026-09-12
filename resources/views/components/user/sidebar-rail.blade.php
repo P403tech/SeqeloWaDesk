@@ -39,9 +39,9 @@
     if (! seqelo_sidebar_has_custom_bg() || seqelo_is_legacy_sidebar_hex($textColor) || strcasecmp($textColor, '#FBFAF6') === 0 || strcasecmp($textColor, '#FFFFFF') === 0) {
         $textColor = '';
     }
-    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#1B4B3D';
+    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#0B4A42';
     if ($accentColor === '' || seqelo_is_legacy_sidebar_hex($accentColor)) {
-        $accentColor = '#1B4B3D';
+        $accentColor = '#0B4A42';
     }
 
     // hex → "r,g,b" helper for building translucent tokens.
@@ -108,10 +108,10 @@
     .rail-fgm { color:var(--rfgm); }
     {{-- Seqelo mint rail in every theme (Interakt-style). A genuine custom
          colour is applied inline and still wins. --}}
-    .user-rail-root { background:#EFF9F6; }
-    :root[data-theme="dark"]   .user-rail-root { background:#EFF9F6; }
-    :root[data-theme="doodle"] .user-rail-root { background:#EFF9F6; }
-    :root[data-theme="bright"] .user-rail-root { background:#EFF9F6; }
+    .user-rail-root { background:#F4F8EA; }
+    :root[data-theme="dark"]   .user-rail-root { background:#F4F8EA; }
+    :root[data-theme="doodle"] .user-rail-root { background:#F4F8EA; }
+    :root[data-theme="bright"] .user-rail-root { background:#F4F8EA; }
 </style>
 
 <div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" style="{{ $styleVars }}">
@@ -126,7 +126,7 @@
     {{-- Brand --}}
     <a href="{{ url('/dashboard') }}" class="relative px-5 h-[64px] flex items-center gap-2.5 shrink-0">
         @if ($logoUrl)
-            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-7 w-auto max-w-[150px] object-contain">
+            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-cover">
         @else
             <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-wa-green text-ink-950">
                 <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Z"/></svg>

@@ -80,22 +80,22 @@
                         <div class="px-5 py-4 border-b border-paper-200">
                             <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('User dashboard') }}</div>
                             <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Sidebar colour') }}</h2>
-                            <p class="text-[12px] text-ink-500 mt-1">{{ __('The left rail background (Sidebar layout only). Default is Seqelo mint, matching the Interakt-style theme.') }}</p>
+                            <p class="text-[12px] text-ink-500 mt-1">{{ __('The left rail background (Sidebar layout only). Default is Seqelo lime wash, matching the logo.') }}</p>
                         </div>
                         <div class="p-5 space-y-4">
                             {{-- Background — always applied (blank posts default). --}}
                             <div class="flex items-center gap-3">
-                                <input type="color" name="user_sidebar_color" value="{{ $sidebarColor ?: '#EFF9F6' }}"
+                                <input type="color" name="user_sidebar_color" value="{{ $sidebarColor ?: '#F4F8EA' }}"
                                     class="w-11 h-10 rounded-lg border border-paper-200 bg-paper-0 cursor-pointer p-0.5"
                                     oninput="this.nextElementSibling.value = this.value.toUpperCase()">
-                                <input type="text" value="{{ strtoupper($sidebarColor ?: '#EFF9F6') }}" readonly
+                                <input type="text" value="{{ strtoupper($sidebarColor ?: '#F4F8EA') }}" readonly
                                     class="w-24 px-3 py-2 rounded-lg border border-paper-200 bg-paper-50 text-[12px] font-mono text-ink-700">
                                 <span class="text-[12.5px] font-medium text-ink-800">{{ __('Background') }}</span>
                             </div>
 
                             @foreach ([
-                                ['key' => 'user_sidebar_text_color',   'label' => __('Text colour'),  'value' => $sidebarTextColor,   'default' => '#1A2E27', 'auto' => __('Auto (contrast)')],
-                                ['key' => 'user_sidebar_accent_color', 'label' => __('Accent colour'),'value' => $sidebarAccentColor, 'default' => '#1B4B3D', 'auto' => __('Default forest')],
+                                ['key' => 'user_sidebar_text_color',   'label' => __('Text colour'),  'value' => $sidebarTextColor,   'default' => '#111111', 'auto' => __('Auto (contrast)')],
+                                ['key' => 'user_sidebar_accent_color', 'label' => __('Accent colour'),'value' => $sidebarAccentColor, 'default' => '#0B4A42', 'auto' => __('Default teal')],
                             ] as $c)
                                 @php $on = trim((string) ($c['value'] ?? '')) !== ''; @endphp
                                 <div class="flex items-center gap-3" data-optcolor>

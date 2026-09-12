@@ -8,7 +8,7 @@
 @php
     $pwaEnabled = (bool) \App\Models\SystemSetting::get('pwa_enabled', false);
     if ($pwaEnabled) {
-        $themeColor = (string) \App\Models\SystemSetting::get('pwa_theme_color', '#075E54');
+        $themeColor = (string) \App\Models\SystemSetting::get('pwa_theme_color', '#0B4A42');
         $shortName = (string) \App\Models\SystemSetting::get(
             'pwa_short_name',
             brand_name(),
