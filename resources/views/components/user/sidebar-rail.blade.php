@@ -19,7 +19,7 @@
     $canCreateWorkspace = $u ? $u->canCreateWorkspace() : false;
 
     // Admin-customisable rail colour + auto contrast.
-    $railBg = (string) \App\Models\SystemSetting::get('user_sidebar_color', '') ?: '#06100E';
+    $railBg = (string) \App\Models\SystemSetting::get('user_sidebar_color', '') ?: '#EFF9F6';
     $__hex = ltrim($railBg, '#');
     if (strlen($__hex) === 3) {
         $__hex = $__hex[0].$__hex[0].$__hex[1].$__hex[1].$__hex[2].$__hex[2];
@@ -35,7 +35,7 @@
 
     // Optional admin overrides.
     $textColor = (string) \App\Models\SystemSetting::get('user_sidebar_text_color', '');
-    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#25D366';
+    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#1B4B3D';
 
     // hex → "r,g,b" helper for building translucent tokens.
     $rgb = function (string $hex): string {
@@ -100,7 +100,7 @@
     .rail-fgm { color:var(--rfgm); }
     {{-- Theme-responsive background — used only when the admin has NOT set a
          custom sidebar colour. Live-switches with the theme toggle (data-theme). --}}
-    .user-rail-root { background:#06100E; }
+    .user-rail-root { background:#EFF9F6; }
     :root[data-theme="dark"]   .user-rail-root { background:#0A0F0E; }
     :root[data-theme="doodle"] .user-rail-root { background:#0B211D; }
     :root[data-theme="bright"] .user-rail-root { background:#0B1F1C; }

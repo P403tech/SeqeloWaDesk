@@ -62,22 +62,22 @@ if (! function_exists('theme_palette')) {
     function theme_palette(): array
     {
         return [
-            'wa-deep'      => ['Primary',           '#075E54', 'Brand'],
-            'wa-teal'      => ['Primary (hover)',   '#128C7E', 'Brand'],
-            'wa-green'     => ['Accent / success',  '#25D366', 'Brand'],
-            'wa-mint'      => ['Soft accent fill',  '#DCF8C6', 'Brand'],
-            'wa-bubble'    => ['Chat bubble',       '#E7FFDB', 'Brand'],
-            'paper-0'      => ['Page background',   '#FBFAF6', 'Surfaces'],
-            'paper-50'     => ['Card / muted bg',  '#F5F3EC', 'Surfaces'],
-            'paper-100'    => ['Hover background',  '#EFEBE0', 'Surfaces'],
-            'paper-200'    => ['Borders',          '#E5DFD0', 'Surfaces'],
-            'ink-500'      => ['Muted text',       '#6B807C', 'Text'],
-            'ink-700'      => ['Body text',        '#1F4540', 'Text'],
-            'ink-900'      => ['Headings',         '#0B1F1C', 'Text'],
-            'accent-coral' => ['Accent · coral',   '#E87A5D', 'Accents'],
-            'accent-amber' => ['Accent · amber',   '#E5A04E', 'Accents'],
-            'accent-plum'  => ['Accent · plum',    '#5B3D8A', 'Accents'],
-            'accent-sky'   => ['Accent · sky',     '#3E7AA1', 'Accents'],
+            'wa-deep'      => ['Primary',           '#1B4B3D', 'Brand'],
+            'wa-teal'      => ['Primary (hover)',   '#037D66', 'Brand'],
+            'wa-green'     => ['Accent / success',  '#00A68B', 'Brand'],
+            'wa-mint'      => ['Soft accent fill',  '#EFF9F6', 'Brand'],
+            'wa-bubble'    => ['Chat bubble',       '#B7FBD2', 'Brand'],
+            'paper-0'      => ['Page background',   '#FFFFFF', 'Surfaces'],
+            'paper-50'     => ['Card / muted bg',   '#F4F6FA', 'Surfaces'],
+            'paper-100'    => ['Hover background',  '#EEF0F4', 'Surfaces'],
+            'paper-200'    => ['Borders',           '#E5E7EB', 'Surfaces'],
+            'ink-500'      => ['Muted text',        '#6B7280', 'Text'],
+            'ink-700'      => ['Body text',         '#1A2E27', 'Text'],
+            'ink-900'      => ['Headings',          '#1A2E27', 'Text'],
+            'accent-coral' => ['Accent · coral',    '#E87A5D', 'Accents'],
+            'accent-amber' => ['Accent · amber',    '#DE8A29', 'Accents'],
+            'accent-plum'  => ['Accent · plum',     '#6D5BD0', 'Accents'],
+            'accent-sky'   => ['Accent · sky',      '#3E7AA1', 'Accents'],
         ];
     }
 }
@@ -117,7 +117,7 @@ if (! function_exists('workspace_brand_color')) {
         $raw = is_object($workspace) ? (string) ($workspace->brand_color ?? '') : (string) $workspace;
         $raw = trim($raw);
 
-        if ($raw === '' || strcasecmp($raw, '#075E54') === 0) {
+        if ($raw === '' || strcasecmp($raw, '#075E54') === 0 || strcasecmp($raw, '#1B4B3D') === 0) {
             return $fallback;
         }
         return preg_match('/^#[0-9A-Fa-f]{3,8}$/', $raw) ? $raw : $fallback;

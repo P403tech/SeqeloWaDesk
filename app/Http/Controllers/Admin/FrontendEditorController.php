@@ -31,35 +31,35 @@ class FrontendEditorController extends Controller
      */
     public const THEME_TOKENS = [
         'WhatsApp' => [
-            'theme.wa.deep'   => ['#075E54', 'Deep'],
-            'theme.wa.teal'   => ['#128C7E', 'Teal'],
-            'theme.wa.green'  => ['#25D366', 'Green'],
-            'theme.wa.mint'   => ['#DCF8C6', 'Mint'],
-            'theme.wa.bubble' => ['#E7FFDB', 'Bubble'],
+            'theme.wa.deep'   => ['#1B4B3D', 'Deep'],
+            'theme.wa.teal'   => ['#037D66', 'Teal'],
+            'theme.wa.green'  => ['#00A68B', 'Green'],
+            'theme.wa.mint'   => ['#EFF9F6', 'Mint'],
+            'theme.wa.bubble' => ['#B7FBD2', 'Bubble'],
             'theme.wa.chat'   => ['#ECE5DD', 'Chat'],
         ],
         'Ink (text)' => [
             'theme.ink.950' => ['#070D0C', '950'],
             'theme.ink.900' => ['#0B1F1C', '900'],
             'theme.ink.800' => ['#13312D', '800'],
-            'theme.ink.700' => ['#1F4540', '700'],
+            'theme.ink.700' => ['#1A2E27', '700'],
             'theme.ink.600' => ['#3A5A55', '600'],
-            'theme.ink.500' => ['#6B807C', '500'],
+            'theme.ink.500' => ['#6B7280', '500'],
             'theme.ink.400' => ['#9AA8A4', '400'],
             'theme.ink.300' => ['#C3CCC9', '300'],
         ],
         'Paper (bg)' => [
-            'theme.paper.0'   => ['#FBFAF6', '0'],
-            'theme.paper.50'  => ['#F5F3EC', '50'],
-            'theme.paper.100' => ['#EFEBE0', '100'],
-            'theme.paper.200' => ['#E5DFD0', '200'],
+            'theme.paper.0'   => ['#FFFFFF', '0'],
+            'theme.paper.50'  => ['#F4F6FA', '50'],
+            'theme.paper.100' => ['#EEF0F4', '100'],
+            'theme.paper.200' => ['#E5E7EB', '200'],
             'theme.paper.300' => ['#D4CCB6', '300'],
         ],
         'Accent' => [
             'theme.accent.coral' => ['#E87A5D', 'Coral'],
             'theme.accent.amber' => ['#E5A04E', 'Amber'],
             'theme.accent.sand'  => ['#D9C9A3', 'Sand'],
-            'theme.accent.plum'  => ['#5B3D8A', 'Plum'],
+            'theme.accent.plum'  => ['#6D5BD0', 'Plum'],
             'theme.accent.sky'   => ['#3E7AA1', 'Sky'],
         ],
     ];
@@ -71,6 +71,11 @@ class FrontendEditorController extends Controller
      * just writes these as drafts — still reversible until Publish.
      */
     public const THEME_PRESETS = [
+        'seqelo' => ['label' => 'Seqelo', 'swatch' => '#1B4B3D', 'tokens' => [
+            'theme.wa.deep' => '#1B4B3D', 'theme.wa.teal' => '#037D66', 'theme.wa.green' => '#00A68B',
+            'theme.wa.mint' => '#EFF9F6', 'theme.wa.bubble' => '#B7FBD2',
+            'theme.accent.coral' => '#E87A5D', 'theme.accent.amber' => '#DE8A29',
+        ]],
         'emerald' => ['label' => 'Emerald', 'swatch' => '#075E54', 'tokens' => [
             'theme.wa.deep' => '#075E54', 'theme.wa.teal' => '#128C7E', 'theme.wa.green' => '#25D366',
             'theme.wa.mint' => '#DCF8C6', 'theme.wa.bubble' => '#E7FFDB',

@@ -125,7 +125,7 @@ html[data-theme="dark"] .wa-iti-wrap .iti__search-input {
 }
 
 /* Tom Select searchable selects, used by timezone fields. */
-html .ts-wrapper { width: 100%; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+html .ts-wrapper { width: 100%; font-family: Inter, 'Plus Jakarta Sans', system-ui, sans-serif; }
 html .ts-control,
 html .ts-wrapper.single .ts-control {
   min-height: 42px !important;
@@ -905,7 +905,7 @@ html[data-theme="doodle"] [data-site-header]{
 
 /* ── TYPOGRAPHY ─────────────────────────────────────────── */
 html[data-theme="doodle"] body,
-html[data-theme="doodle"] .font-sans                             { font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important; }
+html[data-theme="doodle"] .font-sans                             { font-family: Inter, 'Plus Jakarta Sans', system-ui, sans-serif !important; }
 html[data-theme="doodle"] .font-serif,
 html[data-theme="doodle"] .serif,
 html[data-theme="doodle"] h1, html[data-theme="doodle"] h2, html[data-theme="doodle"] h3{

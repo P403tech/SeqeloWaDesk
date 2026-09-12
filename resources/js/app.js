@@ -37,7 +37,7 @@ window.toast = function (message, type = 'success') {
         style: {
             background: p.bg,
             color: p.color,
-            fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',
+            fontFamily: 'Inter, Plus Jakarta Sans, system-ui, sans-serif',
             fontSize: '13px',
             fontWeight: '500',
             padding: '12px 18px',

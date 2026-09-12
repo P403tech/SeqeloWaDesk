@@ -169,7 +169,7 @@ export default function init() {
     }
 
     // ----------------------------------------------------------------- charts
-    const baseFont = { fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif' };
+    const baseFont = { fontFamily: 'Inter, Plus Jakarta Sans, system-ui, sans-serif' };
     const grid = { borderColor: themeColor('paper-100'), strokeDashArray: 4 };
     const axisLabel = { colors: themeColor('ink-500'), fontSize: '11px' };
 
