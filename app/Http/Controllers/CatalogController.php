@@ -62,46 +62,13 @@ class CatalogController extends Controller
         // single score + the offending rows so the operator can fix them.
         $health = $this->catalogHealth($wsId);
 
-        // Detect whether the operator has a working send path BEFORE
-        // we render. The Setup tab tailors itself per state:
-        //   • Meta catalog connected     → full sync UI
-        //   • A connected sender          → "you're ready" card + optional Meta connect
-        //   • Nothing                     → "connect a device first" prompt
-        //
-        // A working sender is engine-specific: Unofficial-API workspaces
-        // pair a phone (devices table), while WABA / Twilio workspaces
-        // have no `devices` row at all — their live number lives in
-        // wa_provider_configs. Checking only `devices` wrongly showed
-        // "connect a device first" to workspaces whose WABA number is
-        // already live. Mirror sendPage()'s engine-aware sender lookup.
-        $engine = \App\Services\WorkspaceEngine::for($wsId);
-
-        if ($engine === \App\Services\WorkspaceEngine::ENGINE_BAILEYS) {
-            $devices = \App\Models\Device::query()
-                ->forCurrentWorkspace()
-                ->where('status', 'connected')
-                ->orderByDesc('active')
-                ->get();
-        } else {
-            // Normalise provider configs into the same shape the Setup
-            // view renders (device_name / country_code / phone_number /
-            // status) so the "connected devices" card works unchanged.
-            $devices = \App\Models\WaProviderConfig::query()
-                ->where('workspace_id', $wsId)
-                ->where('provider', $engine)
-                ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
-                ->orderByDesc('connected_at')
-                ->get()
-                ->map(fn ($c) => (object) [
-                    'id'           => $c->id,
-                    'device_name'  => $c->display_label ?: strtoupper((string) $c->provider),
-                    'country_code' => '',
-                    'phone_number' => $c->phone_number,
-                    'status'       => 'connected',
-                ]);
-        }
-
-        $hasBaileysDevice = $devices->isNotEmpty();
+        // Working send path — load EVERY WhatsApp number on this workspace,
+        // not just the primary engine. Catalog setup used WorkspaceEngine::for()
+        // (one engine) so a Baileys-paired phone was invisible when the
+        // platform default was WABA (and vice versa). That rendered
+        // "Connect a device first" and a 500/empty picker instead of letting
+        // the operator select a previously connected number.
+        $devicePayload = $this->catalogDevicePayload($wsId);
 
         return view('user.catalog.index', [
             'tab'              => 'setup',
@@ -113,9 +80,11 @@ class CatalogController extends Controller
             'sets'             => WaProductSet::where('workspace_id', $wsId)->orderByDesc('id')->get(),
             'totalProducts'    => WaProduct::where('workspace_id', $wsId)->count(),
             'recentSends'      => $this->recentSends($wsId, 5),
-            'devices'          => $devices,
-            'hasBaileysDevice' => $hasBaileysDevice,
-            'engine'           => $engine,
+            'devices'          => $devicePayload['devices'],
+            'previousDevices'  => $devicePayload['previous'],
+            'wabaConfigs'      => $devicePayload['wabaConfigs'],
+            'hasBaileysDevice' => $devicePayload['devices']->isNotEmpty(),
+            'engine'           => $devicePayload['engine'],
         ]);
     }
 
@@ -285,20 +254,97 @@ class CatalogController extends Controller
     }
 
     /**
-     * Pull the workspace's recent catalog sends out of inbox_messages
-     * where meta->kind='catalog'. inbox_messages has no workspace_id
-     * column — we filter via conversation.workspace_id with a join.
+     * Live + previously paired WhatsApp numbers for the Setup tab.
+     * Merges Unofficial (devices) and Official (wa_provider_configs) so the
+     * picker is never gated on whichever engine WorkspaceEngine::for() picks.
+     *
+     * @return array{devices:\Illuminate\Support\Collection,previous:\Illuminate\Support\Collection,wabaConfigs:\Illuminate\Support\Collection,engine:string}
      */
+    private function catalogDevicePayload(int $wsId): array
+    {
+        $engine = \App\Services\WorkspaceEngine::for($wsId);
+
+        $baileys = \App\Models\Device::query()
+            ->forCurrentWorkspace()
+            ->where('status', 'connected')
+            ->orderByDesc('active')
+            ->orderByDesc('updated_at')
+            ->get()
+            ->map(fn ($d) => (object) [
+                'id'           => $d->id,
+                'engine'       => \App\Services\WorkspaceEngine::ENGINE_BAILEYS,
+                'device_name'  => $d->device_name ?: ('Device #' . $d->id),
+                'country_code' => $d->country_code,
+                'phone_number' => $d->phone_number,
+                'status'       => $d->status,
+                'waba_config_id' => null,
+            ]);
+
+        $official = \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', $wsId)
+            ->whereIn('provider', [
+                \App\Services\WorkspaceEngine::ENGINE_WABA,
+                \App\Services\WorkspaceEngine::ENGINE_TWILIO,
+            ])
+            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+            ->orderByDesc('is_primary')
+            ->orderByDesc('connected_at')
+            ->get()
+            ->map(fn ($c) => (object) [
+                'id'             => $c->id,
+                'engine'         => $c->provider,
+                'device_name'    => $c->display_label ?: strtoupper((string) $c->provider),
+                'country_code'   => '',
+                'phone_number'   => $c->phone_number,
+                'status'         => 'connected',
+                'waba_config_id' => $c->provider === 'waba' ? $c->id : null,
+            ]);
+
+        $devices = $baileys->concat($official)->values();
+
+        $connectedDeviceIds = $baileys->pluck('id')->all();
+        $previous = \App\Models\Device::query()
+            ->forCurrentWorkspace()
+            ->when($connectedDeviceIds !== [], fn ($q) => $q->whereNotIn('id', $connectedDeviceIds))
+            ->orderByDesc('updated_at')
+            ->limit(20)
+            ->get();
+
+        $wabaConfigs = \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', $wsId)
+            ->where('provider', 'waba')
+            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+            ->orderByDesc('is_primary')
+            ->orderByDesc('connected_at')
+            ->get();
+
+        return [
+            'devices'     => $devices,
+            'previous'    => $previous,
+            'wabaConfigs' => $wabaConfigs,
+            'engine'      => $engine,
+        ];
+    }
+
     private function recentSends(int $wsId, int $limit = 10)
     {
-        return \App\Models\InboxMessage::query()
-            ->join('conversations', 'conversations.id', '=', 'inbox_messages.conversation_id')
-            ->where('conversations.workspace_id', $wsId)
-            ->whereJsonContains('inbox_messages.meta->kind', 'catalog')
-            ->orderByDesc('inbox_messages.id')
-            ->limit($limit)
-            ->select('inbox_messages.*')
-            ->get();
+        // meta.kind is a scalar string ("catalog"), not a JSON array —
+        // whereJsonContains() 500s on MySQL ("Invalid JSON text in argument 1
+        // to function json_contains") and wiped the whole Setup page,
+        // including the connected-device picker.
+        try {
+            return \App\Models\InboxMessage::query()
+                ->join('conversations', 'conversations.id', '=', 'inbox_messages.conversation_id')
+                ->where('conversations.workspace_id', $wsId)
+                ->where('inbox_messages.meta->kind', 'catalog')
+                ->orderByDesc('inbox_messages.id')
+                ->limit($limit)
+                ->select('inbox_messages.*')
+                ->get();
+        } catch (Throwable $e) {
+            \Log::warning('[wa-catalog] recentSends failed', ['ws' => $wsId, 'error' => $e->getMessage()]);
+            return collect();
+        }
     }
 
     /**
@@ -606,18 +652,24 @@ class CatalogController extends Controller
      *   2. GET /{waba_id}/product_catalogs           (already linked on Meta)
      *   3. POST /{business_id}/owned_product_catalogs + link  (create one)
      */
-    public function autodetect(): RedirectResponse
+    public function autodetect(Request $request): RedirectResponse
     {
         $wsId = Auth::user()?->current_workspace_id;
         abort_unless($wsId, 403);
 
-        $cfg = \App\Models\WaProviderConfig::query()
+        $cfgQuery = \App\Models\WaProviderConfig::query()
             ->where('workspace_id', $wsId)
             ->where('provider', 'waba')
-            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
-            ->orderByDesc('is_primary')
-            ->orderByDesc('connected_at')
-            ->first();
+            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED);
+
+        $pickedId = (int) $request->input('waba_config_id', 0);
+        if ($pickedId > 0) {
+            $cfgQuery->where('id', $pickedId);
+        } else {
+            $cfgQuery->orderByDesc('is_primary')->orderByDesc('connected_at');
+        }
+
+        $cfg = $cfgQuery->first();
 
         if (!$cfg) {
             return back()->withErrors([

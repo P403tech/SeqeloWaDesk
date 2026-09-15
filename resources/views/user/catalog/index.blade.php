@@ -80,6 +80,8 @@
                 'products' => $products ?? collect(),
                 'statusBuckets' => $statusBuckets ?? [],
                 'totalProducts' => $totalProducts ?? 0,
+                'previousDevices' => $previousDevices ?? collect(),
+                'wabaConfigs' => $wabaConfigs ?? collect(),
             ])
 
             {{-- ═══════════════════════════════════════════════════════ --}}
