@@ -83,7 +83,10 @@ class CatalogController extends Controller
             'devices'          => $devicePayload['devices'],
             'previousDevices'  => $devicePayload['previous'],
             'wabaConfigs'      => $devicePayload['wabaConfigs'],
-            'hasBaileysDevice' => $devicePayload['devices']->isNotEmpty(),
+            'phones'           => $devicePayload['phones'],
+            'catalogSender'    => $devicePayload['catalogSender'],
+            'catalogAuto'      => $devicePayload['catalogAuto'] ?? [],
+            'hasBaileysDevice' => $devicePayload['devices']->contains(fn ($d) => ($d->status ?? '') === 'connected'),
             'engine'           => $devicePayload['engine'],
         ]);
     }
@@ -222,12 +225,17 @@ class CatalogController extends Controller
         // Multi-engine: all connected senders across every enabled engine,
         // for the unified <x-sender-picker> (composite engine:id keys).
         $senders = \App\Services\WorkspaceEngine::senders($wsId);
+        $catalogSender = '';
+        try {
+            $catalogSender = (string) (\App\Models\Workspace::query()->find($wsId)?->catalog_sender ?? '');
+        } catch (Throwable $e) {}
 
         return view('user.catalog.index', [
             'tab'                => 'send',
             'catalog'            => $catalog,
             'devices'            => $devices,
             'senders'            => $senders,
+            'catalogSender'      => $catalogSender,
             'totalProducts'      => $allProducts->count(),
             'recentSends'        => $this->recentSends($wsId, 10),
             'contacts'           => $contacts,
@@ -258,71 +266,95 @@ class CatalogController extends Controller
      * Merges Unofficial (devices) and Official (wa_provider_configs) so the
      * picker is never gated on whichever engine WorkspaceEngine::for() picks.
      *
-     * @return array{devices:\Illuminate\Support\Collection,previous:\Illuminate\Support\Collection,wabaConfigs:\Illuminate\Support\Collection,engine:string}
+     * @return array{devices:\Illuminate\Support\Collection,previous:\Illuminate\Support\Collection,wabaConfigs:\Illuminate\Support\Collection,phones:\Illuminate\Support\Collection,catalogSender:string,engine:string}
      */
     private function catalogDevicePayload(int $wsId): array
     {
         $engine = \App\Services\WorkspaceEngine::for($wsId);
+        $mainKey = '';
+        try {
+            $mainKey = (string) (\App\Models\Workspace::query()->find($wsId)?->catalog_sender ?? '');
+        } catch (Throwable $e) {
+            $mainKey = '';
+        }
 
-        $baileys = \App\Models\Device::query()
+        $baileysRows = \App\Models\Device::query()
             ->forCurrentWorkspace()
-            ->where('status', 'connected')
             ->orderByDesc('active')
             ->orderByDesc('updated_at')
-            ->get()
-            ->map(fn ($d) => (object) [
-                'id'           => $d->id,
-                'engine'       => \App\Services\WorkspaceEngine::ENGINE_BAILEYS,
-                'device_name'  => $d->device_name ?: ('Device #' . $d->id),
-                'country_code' => $d->country_code,
-                'phone_number' => $d->phone_number,
-                'status'       => $d->status,
-                'waba_config_id' => null,
-            ]);
+            ->get();
 
-        $official = \App\Models\WaProviderConfig::query()
+        $officialRows = \App\Models\WaProviderConfig::query()
             ->where('workspace_id', $wsId)
             ->whereIn('provider', [
                 \App\Services\WorkspaceEngine::ENGINE_WABA,
                 \App\Services\WorkspaceEngine::ENGINE_TWILIO,
             ])
-            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
             ->orderByDesc('is_primary')
             ->orderByDesc('connected_at')
-            ->get()
-            ->map(fn ($c) => (object) [
+            ->orderByDesc('id')
+            ->get();
+
+        $phones = collect();
+
+        foreach ($baileysRows as $d) {
+            $key = 'baileys:' . $d->id;
+            $phones->push((object) [
+                'key'            => $key,
+                'id'             => $d->id,
+                'engine'         => \App\Services\WorkspaceEngine::ENGINE_BAILEYS,
+                'device_name'    => $d->device_name ?: ('Device #' . $d->id),
+                'country_code'   => $d->country_code,
+                'phone_number'   => $d->phone_number,
+                'status'         => $d->status ?: 'disconnected',
+                'live'           => ($d->status === 'connected'),
+                'is_main'        => $mainKey === $key,
+                'waba_config_id' => null,
+            ]);
+        }
+
+        foreach ($officialRows as $c) {
+            $key = $c->provider . ':' . $c->id;
+            $phones->push((object) [
+                'key'            => $key,
                 'id'             => $c->id,
                 'engine'         => $c->provider,
                 'device_name'    => $c->display_label ?: strtoupper((string) $c->provider),
                 'country_code'   => '',
                 'phone_number'   => $c->phone_number,
-                'status'         => 'connected',
+                'status'         => $c->status ?: 'disconnected',
+                'live'           => $c->status === \App\Models\WaProviderConfig::STATUS_CONNECTED,
+                'is_main'        => $mainKey === $key || ($mainKey === '' && (bool) $c->is_primary),
                 'waba_config_id' => $c->provider === 'waba' ? $c->id : null,
             ]);
+        }
 
-        $devices = $baileys->concat($official)->values();
+        if ($mainKey === '' && $phones->contains(fn ($p) => $p->live) && ! $phones->contains(fn ($p) => $p->is_main)) {
+            $firstLive = $phones->first(fn ($p) => $p->live);
+            if ($firstLive) $firstLive->is_main = true;
+        }
 
-        $connectedDeviceIds = $baileys->pluck('id')->all();
-        $previous = \App\Models\Device::query()
-            ->forCurrentWorkspace()
-            ->when($connectedDeviceIds !== [], fn ($q) => $q->whereNotIn('id', $connectedDeviceIds))
-            ->orderByDesc('updated_at')
-            ->limit(20)
-            ->get();
-
-        $wabaConfigs = \App\Models\WaProviderConfig::query()
-            ->where('workspace_id', $wsId)
+        $devices = $phones->filter(fn ($p) => $p->live)->values();
+        $previous = $phones->reject(fn ($p) => $p->live)->values();
+        $wabaConfigs = $officialRows
             ->where('provider', 'waba')
             ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
-            ->orderByDesc('is_primary')
-            ->orderByDesc('connected_at')
-            ->get();
+            ->values();
+
+        $catalogAuto = [];
+        try {
+            $catalogAuto = \App\Models\Workspace::query()->find($wsId)?->catalog_auto ?? [];
+        } catch (Throwable $e) {}
+        if (!is_array($catalogAuto)) $catalogAuto = [];
 
         return [
-            'devices'     => $devices,
-            'previous'    => $previous,
-            'wabaConfigs' => $wabaConfigs,
-            'engine'      => $engine,
+            'devices'        => $devices,
+            'previous'       => $previous,
+            'wabaConfigs'    => $wabaConfigs,
+            'phones'         => $phones->values(),
+            'catalogSender'  => $mainKey,
+            'catalogAuto'    => $catalogAuto,
+            'engine'         => $engine,
         ];
     }
 
@@ -436,6 +468,17 @@ class CatalogController extends Controller
         if (!empty($data['device_id'])) {
             $device = \App\Models\Device::query()->forCurrentWorkspace()
                 ->where('id', $data['device_id'])->where('status', 'connected')->first();
+        }
+        if (!$device) {
+            $mainKey = '';
+            try {
+                $mainKey = (string) (\App\Models\Workspace::query()->find($wsId)?->catalog_sender ?? '');
+            } catch (Throwable $e) {}
+            if (str_starts_with($mainKey, 'baileys:')) {
+                $mainId = (int) substr($mainKey, 8);
+                $device = \App\Models\Device::query()->forCurrentWorkspace()
+                    ->where('id', $mainId)->where('status', 'connected')->first();
+            }
         }
         if (!$device) {
             $device = \App\Models\Device::query()->forCurrentWorkspace()
@@ -639,6 +682,89 @@ class CatalogController extends Controller
     }
 
     /**
+     * Pick one connected phone as the main catalog device.
+     *
+     * Official (WABA): that number becomes the primary sender, then we
+     * fetch or create a Meta Commerce catalog on its WhatsApp Business
+     * Account and attach it here.
+     *
+     * Unofficial API: that phone becomes the default catalog sender.
+     * Product cards go out from it; Meta does not host a catalog on
+     * unofficial numbers.
+     */
+    public function chooseMain(Request $request): RedirectResponse
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        abort_unless($wsId, 403);
+
+        $data = $request->validate([
+            'sender' => ['required', 'string', 'max:64', 'regex:/^(baileys|waba|twilio):\d+$/'],
+        ]);
+        $key = $data['sender'];
+        [$engine, $rawId] = explode(':', $key, 2);
+        $id = (int) $rawId;
+
+        $ws = \App\Models\Workspace::query()->find($wsId);
+        abort_unless($ws, 403);
+
+        if ($engine === \App\Services\WorkspaceEngine::ENGINE_BAILEYS) {
+            $device = \App\Models\Device::query()->forCurrentWorkspace()->where('id', $id)->first();
+            if (!$device) {
+                return back()->withErrors(['sender' => __('That phone is not on this account.')]);
+            }
+            try {
+                $ws->forceFill(['catalog_sender' => $key])->save();
+            } catch (Throwable $e) {
+                \Log::warning('[wa-catalog] could not save catalog_sender', ['error' => $e->getMessage()]);
+            }
+            $device->forceFill(['active' => true])->save();
+
+            if ($device->status !== 'connected') {
+                return back()->withErrors([
+                    'sender' => __('This phone is saved as your catalog number, but it is offline. Open Devices and reconnect it, then try again.'),
+                ]);
+            }
+
+            return redirect('/catalog')->with('status',
+                __('This phone is now the main catalog device. Unofficial WhatsApp sends product cards (carousel) from this number. A Meta Commerce catalog is not created on unofficial numbers — add products in Seqelo and send them from the Send tab.')
+            );
+        }
+
+        $cfg = \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', $wsId)
+            ->where('provider', $engine)
+            ->where('id', $id)
+            ->first();
+        if (!$cfg) {
+            return back()->withErrors(['sender' => __('That WhatsApp number is not on this account.')]);
+        }
+
+        try {
+            $ws->forceFill(['catalog_sender' => $key])->save();
+        } catch (Throwable $e) {
+            \Log::warning('[wa-catalog] could not save catalog_sender', ['error' => $e->getMessage()]);
+        }
+
+        if (method_exists($cfg, 'setAsPrimary')) {
+            $cfg->setAsPrimary();
+        }
+
+        if ($engine !== \App\Services\WorkspaceEngine::ENGINE_WABA) {
+            return redirect('/catalog')->with('status',
+                __('This Twilio number is now the main catalog sender. Catalog messages will send from this number.')
+            );
+        }
+
+        if ($cfg->status !== \App\Models\WaProviderConfig::STATUS_CONNECTED) {
+            return back()->withErrors([
+                'sender' => __('This Official WhatsApp number is offline. Reconnect it on Devices, then choose it again to create the catalog.'),
+            ]);
+        }
+
+        return $this->linkCatalogFromWaba($wsId, $cfg);
+    }
+
+    /**
      * One-click link — no keys to paste. When the workspace already has
      * a connected WABA number, we hold its access token + waba_id in
      * wa_provider_configs. The WABA connect flow even links (or creates)
@@ -677,6 +803,15 @@ class CatalogController extends Controller
             ]);
         }
 
+        return $this->linkCatalogFromWaba($wsId, $cfg);
+    }
+
+    /**
+     * Fetch or create the Meta Commerce catalog for a connected WABA number
+     * and bind it to this workspace.
+     */
+    private function linkCatalogFromWaba(int $wsId, \App\Models\WaProviderConfig $cfg): RedirectResponse
+    {
         $creds = $cfg->creds();
         $meta  = is_array($cfg->meta_json) ? $cfg->meta_json : [];
 
@@ -771,7 +906,7 @@ class CatalogController extends Controller
             ]);
         }
 
-        return redirect('/catalog')->with('status', __('Catalog linked from your WhatsApp account.'));
+        return redirect('/catalog')->with('status', __('Catalog created on this WhatsApp number. Products you sync will show on this phone in WhatsApp.'));
     }
 
     public function disconnect(): RedirectResponse
@@ -1138,7 +1273,6 @@ class CatalogController extends Controller
     {
         $wsId = Auth::user()?->current_workspace_id;
         abort_unless($wsId, 403);
-        $catalog = WaCatalog::where('workspace_id', $wsId)->firstOrFail();
 
         $data = $request->validate([
             'order_ack_enabled'        => ['nullable', 'boolean'],
@@ -1148,20 +1282,40 @@ class CatalogController extends Controller
             'concierge_max'            => ['nullable', 'integer', 'min:1', 'max:30'],
             'concierge_reply_on_empty' => ['nullable', 'boolean'],
             'concierge_empty_text'     => ['nullable', 'string', 'max:1024'],
+            'share_on_keyword'         => ['nullable', 'boolean'],
+            'share_on_hello'           => ['nullable', 'boolean'],
         ]);
 
-        $meta = is_array($catalog->meta_json) ? $catalog->meta_json : [];
-        $meta['order_ack_enabled']        = (bool) ($data['order_ack_enabled'] ?? false);
-        $meta['order_ack_pay_url']        = $data['order_ack_pay_url'] ?? null;
-        $meta['concierge_enabled']        = (bool) ($data['concierge_enabled'] ?? false);
-        $meta['concierge_header']         = $data['concierge_header'] ?? null;
-        $meta['concierge_max']            = (int) ($data['concierge_max'] ?? 10);
-        $meta['concierge_reply_on_empty'] = (bool) ($data['concierge_reply_on_empty'] ?? false);
-        $meta['concierge_empty_text']     = $data['concierge_empty_text'] ?? null;
+        $patch = [
+            'order_ack_enabled'        => (bool) ($data['order_ack_enabled'] ?? false),
+            'order_ack_pay_url'        => $data['order_ack_pay_url'] ?? null,
+            'concierge_enabled'        => (bool) ($data['concierge_enabled'] ?? false),
+            'concierge_header'         => $data['concierge_header'] ?? null,
+            'concierge_max'            => (int) ($data['concierge_max'] ?? 10),
+            'concierge_reply_on_empty' => (bool) ($data['concierge_reply_on_empty'] ?? false),
+            'concierge_empty_text'     => $data['concierge_empty_text'] ?? null,
+            'share_on_keyword'         => (bool) ($data['share_on_keyword'] ?? false),
+            'share_on_hello'           => (bool) ($data['share_on_hello'] ?? false),
+        ];
 
-        $catalog->forceFill(['meta_json' => $meta])->save();
+        $catalog = WaCatalog::where('workspace_id', $wsId)->first();
+        if ($catalog) {
+            $meta = is_array($catalog->meta_json) ? $catalog->meta_json : [];
+            $catalog->forceFill(['meta_json' => array_merge($meta, $patch)])->save();
+        }
 
-        return back()->with('status', 'Automation settings saved.');
+        try {
+            $ws = \App\Models\Workspace::query()->find($wsId);
+            if ($ws) {
+                $ws->forceFill(['catalog_auto' => array_merge(is_array($ws->catalog_auto) ? $ws->catalog_auto : [], $patch)])->save();
+            }
+        } catch (Throwable $e) {
+            if (!$catalog) {
+                return back()->withErrors(['automation' => __('Could not save auto-share settings. Try again after the latest update is applied.')]);
+            }
+        }
+
+        return back()->with('status', __('Automation settings saved. Catalog will share from your main phone when a customer matches the rules.'));
     }
 
     // ─── Product sets / collections ──────────────────────────────────

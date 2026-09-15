@@ -159,7 +159,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <label class="block">
                         <span class="text-[11.5px] font-semibold text-ink-700">{{ __('Send from') }}</span>
-                        <x-sender-picker :senders="$senders" name="sender" data-sender
+                        <x-sender-picker :senders="$senders" name="sender" :selected="$catalogSender ?? null" data-sender
                             class="mt-1 w-full px-3 py-2 border border-paper-200 rounded-lg text-[13px] focus:outline-none focus:border-wa-deep" />
                     </label>
                     @if ($shops->isNotEmpty())

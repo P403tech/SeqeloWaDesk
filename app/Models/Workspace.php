@@ -17,7 +17,7 @@ class Workspace extends Model
         // Multi-engine (Phase 0): the subset of platform-allowed engines this
         // workspace runs (NULL = all connected) + the default engine for sends
         // that don't pin a sender. Resolved via WorkspaceEngine.
-        'enabled_engines', 'default_engine',
+        'enabled_engines', 'default_engine', 'catalog_sender', 'catalog_auto',
         // Meta Business Agent coexistence — stand our auto-AI down when Meta's agent fronts.
         'meta_agent_enabled', 'ai_responder_mode',
         'brand_color', 'industry', 'size_range', 'status', 'last_active_at',
@@ -77,6 +77,7 @@ class Workspace extends Model
         'business_hours'       => 'array',
         'plan_overrides'       => 'array',
         'enabled_engines'      => 'array',
+        'catalog_auto'         => 'array',
         'appointment_settings'    => 'encrypted:array',
         'notification_prefs'      => 'array',
         // Sprint 7 — list of ISO codes the auto-reply translator fans

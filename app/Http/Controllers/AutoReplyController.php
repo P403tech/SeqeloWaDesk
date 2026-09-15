@@ -631,7 +631,7 @@ class AutoReplyController extends Controller
             'reply_type'       => ['required', Rule::in(KeywordReply::REPLY_TYPES)],
             'flow_id'          => 'required_if:reply_type,flow|nullable|integer',
             'target_contact_id'=> 'required_if:reply_type,share_contact|nullable|integer',
-            'target_catalog_id'=> 'required_if:reply_type,send_catalog|nullable|integer',
+            'target_catalog_id'=> 'nullable|integer',
 
             'cooldown'         => 'nullable|integer|min:0|max:86400',
             'timeout'          => 'nullable|integer|min:0|max:86400',
@@ -1904,25 +1904,32 @@ class AutoReplyController extends Controller
         // send a Product List (MPM) or single-product (SPM) message via
         // the existing catalog dispatch path. Scoped to the keyword-reply's
         // own workspace_id so a leaked target_catalog_id can't escape.
-        if ($reply->reply_type === 'send_catalog' && $reply->target_catalog_id) {
-            $cat = \App\Models\WaCatalog::query()
-                ->where('id', $reply->target_catalog_id)
-                ->where('workspace_id', $reply->workspace_id)
-                ->first();
-            if ($cat) {
-                return response()->json([[
-                    'response'   => '200',
-                    'reply'      => 'catalog_sent',
-                    'reply_type' => 'send_catalog',
-                    'catalog'    => [
-                        'catalog_id' => $cat->catalog_id,
-                        'provider'   => $cat->provider,
-                        'mode'       => 'mpm',
-                    ],
-                    'cooldown'   => $reply->cooldown,
-                    'timeout'    => $reply->timeout,
-                ]]);
+        if ($reply->reply_type === 'send_catalog') {
+            $cat = null;
+            if ($reply->target_catalog_id) {
+                $cat = \App\Models\WaCatalog::query()
+                    ->where('id', $reply->target_catalog_id)
+                    ->where('workspace_id', $reply->workspace_id)
+                    ->first();
             }
+            $shop = \App\Models\WaStorefront::query()
+                ->where('workspace_id', $reply->workspace_id)
+                ->orderByDesc('enabled')
+                ->orderByDesc('id')
+                ->first();
+            return response()->json([[
+                'response'   => '200',
+                'reply'      => 'catalog_sent',
+                'reply_type' => 'send_catalog',
+                'catalog'    => [
+                    'catalog_id'     => $cat?->catalog_id,
+                    'provider'       => $cat?->provider,
+                    'mode'           => 'mpm',
+                    'storefront_url' => $shop?->public_url,
+                ],
+                'cooldown'   => $reply->cooldown,
+                'timeout'    => $reply->timeout,
+            ]]);
         }
 
         // #23 — request_location: tell the bot to send the WhatsApp

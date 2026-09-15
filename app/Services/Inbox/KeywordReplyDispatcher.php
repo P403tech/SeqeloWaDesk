@@ -461,6 +461,12 @@ class KeywordReplyDispatcher
         } elseif ($replyType === 'send_catalog') {
             $im->body = $replyText !== '' ? $replyText : 'Thanks! Our product catalog is on its way to you shortly.';
             $shipped  = true;
+            try {
+                app(\App\Services\WhatsAppCatalog\CatalogConciergeService::class)
+                    ->shareFullCatalog($workspaceId, $needleDigits);
+            } catch (\Throwable $e) {
+                Log::warning('[AR-DISPATCH] unofficial catalog share failed: ' . $e->getMessage());
+            }
         } elseif ($replyType === 'request_location') {
             $im->body = $replyText !== '' ? $replyText : 'Could you please share your location so we can help you better?';
             $shipped  = true;

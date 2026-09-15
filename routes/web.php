@@ -1078,6 +1078,7 @@ Route::middleware('auth')->group(function () {
             Route::get('/activity',         [$cc, 'activityPage'])->name('activity');
             Route::post('/connect',         [$cc, 'connect'])->name('connect');
             Route::post('/autodetect',      [$cc, 'autodetect'])->name('autodetect');
+            Route::post('/choose-main',     [$cc, 'chooseMain'])->name('choose-main');
             Route::post('/disconnect',      [$cc, 'disconnect'])->name('disconnect');
             Route::post('/sync-chunk',      [$cc, 'syncChunk'])->name('sync-chunk');
             Route::post('/import-from-meta', [$cc, 'importFromMeta'])->name('import-from-meta');

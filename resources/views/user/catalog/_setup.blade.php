@@ -1,12 +1,15 @@
 @php
-    // Three possible states the Setup tab caters for:
-    // meta = Meta Commerce catalog connected → full sync UI
-    // baileys = no Meta but at least one WhatsApp sender is live → ready
-    // none = no live sender → prompt to pick a previous device or connect
     $previousDevices = $previousDevices ?? collect();
     $wabaConfigs = $wabaConfigs ?? collect();
-    $state = $catalog ? 'meta' : ($hasBaileysDevice ? 'baileys' : 'none');
+    $phones = $phones ?? collect();
+    $liveCount = $phones->where('live', true)->count();
+    $state = $catalog ? 'meta' : ($liveCount > 0 ? 'baileys' : 'none');
 @endphp
+
+@include('user.catalog._phone-picker', [
+    'phones' => $phones,
+    'catalogSender' => $catalogSender ?? '',
+])
 
 @if ($state === 'none')
     {{-- ───────────────────── NONE ─────────────────────── --}}
@@ -31,35 +34,6 @@
             </button>
         </div>
     </div>
-
-    @if ($previousDevices->isNotEmpty())
-        <div class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
-            <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Previously connected') }}</div>
-            <div class="font-serif text-[18px] leading-tight mt-1">{{ __('Use a number you already paired') }}</div>
-            <p class="text-[12.5px] text-ink-600 mt-1.5 mb-4">
-                {{ __('These devices were connected on this account before. Reconnect one to send catalogs — you do not need to add a new number.') }}</p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                @foreach ($previousDevices as $d)
-                    @php $phone = trim(($d->country_code ?? '') . ' ' . ($d->phone_number ?? '')); @endphp
-                    <div class="border border-paper-200 rounded-xl p-3 flex items-center gap-3">
-                        <span class="w-9 h-9 rounded-full bg-paper-50 grid place-items-center shrink-0">
-                            <svg viewBox="0 0 24 24" class="w-4 h-4 text-ink-500" fill="none" stroke="currentColor"
-                                stroke-width="1.7">
-                                <rect x="7" y="2" width="10" height="20" rx="2" />
-                                <path d="M11 18h2" />
-                            </svg>
-                        </span>
-                        <div class="min-w-0 flex-1">
-                            <div class="font-semibold text-[13px] truncate">{{ $d->device_name ?: 'Device #' . $d->id }}</div>
-                            <div class="font-mono text-[11px] text-ink-500 truncate">{{ $phone ?: __('No number') }}</div>
-                        </div>
-                        <a href="{{ route('user.devices.detail', $d->id) }}"
-                            class="shrink-0 px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11px] font-semibold hover:bg-wa-teal">{{ __('Select') }}</a>
-                    </div>
-                @endforeach
-            </div>
-        </div>
-    @endif
 @elseif ($state === 'baileys')
     {{-- ───────────────────── READY ─────────────── --}}
     @php
@@ -94,41 +68,6 @@
         </a>
     </div>
 
-    {{-- Connected devices summary --}}
-    <div class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
-        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-3">{{ __('Connected devices') }}
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            @foreach ($devices as $d)
-                @php
-                    $phone = trim(($d->country_code ?? '') . ' ' . ($d->phone_number ?? ''));
-                    $engineLabel = match ($d->engine ?? '') {
-                        'waba' => 'WABA',
-                        'twilio' => 'Twilio',
-                        default => __('Unofficial API'),
-                    };
-                @endphp
-                <div class="border border-paper-200 rounded-xl p-3 flex items-center gap-3">
-                    <span class="w-9 h-9 rounded-full bg-wa-bubble/70 grid place-items-center shrink-0">
-                        <svg viewBox="0 0 24 24" class="w-4 h-4 text-wa-deep" fill="none" stroke="currentColor"
-                            stroke-width="1.7">
-                            <rect x="7" y="2" width="10" height="20" rx="2" />
-                            <path d="M11 18h2" />
-                        </svg>
-                    </span>
-                    <div class="min-w-0 flex-1">
-                        <div class="font-semibold text-[13px] truncate">{{ $d->device_name ?: 'Device #' . $d->id }}
-                        </div>
-                        <div class="font-mono text-[11px] text-ink-500 truncate">{{ $phone ?: 'No number' }} · {{ $engineLabel }}</div>
-                    </div>
-                    <span
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-wa-mint text-wa-deep text-[10px] font-mono shrink-0"><span
-                            class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ $d->status }}</span>
-                </div>
-            @endforeach
-        </div>
-    </div>
-
     {{-- Quick stats --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
         <div class="bg-paper-0 border border-paper-200 rounded-xl p-4">
@@ -151,54 +90,6 @@
         </div>
     </div>
 
-    {{-- One-click link — a connected WABA number already carries the Meta
-     token + catalog id, so the operator never needs to paste keys. --}}
-    @if ($wabaConfigs->isNotEmpty())
-        <div class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
-            <div class="flex items-start gap-4 flex-wrap">
-                <div class="w-11 h-11 rounded-xl bg-wa-mint grid place-items-center shrink-0">
-                    <svg viewBox="0 0 24 24" class="w-6 h-6 text-wa-deep" fill="none" stroke="currentColor"
-                        stroke-width="1.7">
-                        <path d="M4 7h16M4 12h16M4 17h10" />
-                        <path d="M20 15l2 2-2 2" />
-                    </svg>
-                </div>
-                <div class="flex-1 min-w-[200px]">
-                    <div class="font-serif text-[18px] leading-tight">{{ __('Link your Meta Commerce Catalog') }}</div>
-                    <div class="text-[11.5px] text-ink-500 mt-1">
-                        {{ __('Pick the WhatsApp number you already connected. We pull the catalog from Meta — no Catalog ID, WABA ID or access token to paste.') }}
-                    </div>
-                    @error('autodetect')
-                        <div class="mt-2 text-[11.5px] text-accent-coral">{{ $message }}</div>
-                    @enderror
-                </div>
-                <form method="POST" action="{{ route('user.catalog.autodetect') }}" class="w-full sm:w-auto shrink-0 space-y-2">
-                    @csrf
-                    <label class="block">
-                        <span class="text-[11px] font-semibold text-ink-700">{{ __('Connected number') }}</span>
-                        <select name="waba_config_id" required
-                            class="mt-1 w-full min-w-[220px] px-3 py-2 border border-paper-200 rounded-lg text-[13px] bg-white focus:outline-none focus:border-wa-deep">
-                            @foreach ($wabaConfigs as $cfg)
-                                @php
-                                    $cfgPhone = $cfg->phone_number ?: '';
-                                    $cfgLabel = $cfg->display_label ?: strtoupper((string) $cfg->provider);
-                                @endphp
-                                <option value="{{ $cfg->id }}">{{ $cfgLabel }}{{ $cfgPhone ? ' · ' . $cfgPhone : '' }}</option>
-                            @endforeach
-                        </select>
-                    </label>
-                    <button type="submit"
-                        class="w-full px-5 py-2.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12.5px] font-semibold inline-flex items-center justify-center gap-2">
-                        {{ __('Fetch from my WhatsApp account') }}
-                        <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.7">
-                            <path d="M3 8h10M9 4l4 4-4 4" />
-                        </svg>
-                    </button>
-                </form>
-            </div>
-        </div>
-    @endif
-
     {{-- Optional: connect Meta Commerce manually (fallback) --}}
     <details class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card" @error('autodetect') open @enderror>
         <summary class="cursor-pointer px-5 py-4 flex items-center justify-between gap-3 list-none">
@@ -217,6 +108,9 @@
             @include('user.catalog._connect-form', ['compact' => true])
         </div>
     </details>
+
+    @php $auto = $catalogAuto ?? []; @endphp
+    @include('user.catalog._auto-share', ['auto' => $auto, 'unofficial' => true])
 @else
     {{-- ───────────────────── META CONNECTED ────────────── --}}
     @php
@@ -447,6 +341,29 @@
         class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
         @csrf
         <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-3">{{ __('Automation') }}</div>
+
+        <div class="border border-paper-200 rounded-xl p-4 mb-3">
+            <label class="flex items-start gap-3 text-[12.5px]">
+                <input type="hidden" name="share_on_keyword" value="0">
+                <input type="checkbox" name="share_on_keyword" value="1" @checked($auto['share_on_keyword'] ?? false)
+                    class="mt-0.5 rounded border-paper-200 text-wa-deep">
+                <span>
+                    <span class="font-semibold block">{{ __('Send catalog when they ask') }}</span>
+                    <span class="text-[10.5px] text-ink-500">{{ __('Words like catalog, menu, price list, products, shop.') }}</span>
+                </span>
+            </label>
+        </div>
+        <div class="border border-paper-200 rounded-xl p-4 mb-3">
+            <label class="flex items-start gap-3 text-[12.5px]">
+                <input type="hidden" name="share_on_hello" value="0">
+                <input type="checkbox" name="share_on_hello" value="1" @checked($auto['share_on_hello'] ?? false)
+                    class="mt-0.5 rounded border-paper-200 text-wa-deep">
+                <span>
+                    <span class="font-semibold block">{{ __('Send catalog on first hello') }}</span>
+                    <span class="text-[10.5px] text-ink-500">{{ __('Once per customer per day.') }}</span>
+                </span>
+            </label>
+        </div>
 
         {{-- Order acknowledgement (C1) --}}
         <div class="border border-paper-200 rounded-xl p-4">

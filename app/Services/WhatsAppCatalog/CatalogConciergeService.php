@@ -21,20 +21,15 @@ use Throwable;
  * returns the same shape either way).
  *
  * Hard-gated for safety:
- *   • OFF by default — only runs when WaCatalog.meta_json.concierge_enabled
- *     is explicitly true. A live inbox is never auto-answered by surprise.
- *   • Only fires when the message actually looks like a product query.
+ *   • OFF by default — only runs when concierge / share-on-keyword /
+ *     share-on-hello is explicitly true (WaCatalog.meta_json or
+ *     workspaces.catalog_auto for Unofficial API workspaces).
  *   • 30s per-sender cooldown so a chatty customer can't trigger a flood.
  *   • Stays silent on no match unless the merchant opts into a reply.
  *   • Every failure is swallowed — the concierge must never break inbound.
  *
- * Config on WaCatalog.meta_json:
- *   concierge_enabled        bool   (default false)
- *   concierge_max            int    (default 10, capped at 30 = MPM limit)
- *   concierge_header         string (default "Here's what I found")
- *   concierge_footer         string (optional)
- *   concierge_reply_on_empty bool   (default false)
- *   concierge_empty_text     string (sent when enabled + no match)
+ * Unofficial API: there is no Meta Commerce catalog. We send a native
+ * product carousel (or the shop link) from the workspace's main device.
  */
 class CatalogConciergeService
 {
@@ -55,20 +50,31 @@ class CatalogConciergeService
         if ($phone === '' || mb_strlen($text) < 2) return false;
 
         try {
-            $catalog = WaCatalog::where('workspace_id', $workspaceId)->first();
-            if (!$catalog || !$catalog->catalog_id) return false;
+            $meta = $this->settings($workspaceId);
+            $shareKeyword = ($meta['share_on_keyword'] ?? false) === true;
+            $shareHello   = ($meta['share_on_hello'] ?? false) === true;
+            $concierge    = ($meta['concierge_enabled'] ?? false) === true;
+            if (!$shareKeyword && !$shareHello && !$concierge) return false;
 
-            $meta = is_array($catalog->meta_json) ? $catalog->meta_json : [];
-            if (($meta['concierge_enabled'] ?? false) !== true) return false;
-
-            $intent = $this->extractIntent($text);
-            // Not a product query → let the message fall through to normal handling.
-            if (empty($intent['keywords']) && $intent['price_min'] === null && $intent['price_max'] === null) {
+            if (!Cache::add("catalog_concierge:{$workspaceId}:{$phone}", 1, 30)) {
                 return false;
             }
 
-            // Anti-flood: one auto-answer per sender per 30s.
-            if (!Cache::add("catalog_concierge:{$workspaceId}:{$phone}", 1, 30)) {
+            if ($shareKeyword && $this->looksLikeCatalogRequest($text)) {
+                return $this->shareFullCatalog($workspaceId, $phone, $meta);
+            }
+
+            if ($shareHello && $this->looksLikeGreeting($text)) {
+                if (!Cache::add("catalog_hello:{$workspaceId}:{$phone}", 1, 86400)) {
+                    return false;
+                }
+                return $this->shareFullCatalog($workspaceId, $phone, $meta);
+            }
+
+            if (!$concierge) return false;
+
+            $intent = $this->extractIntent($text);
+            if (empty($intent['keywords']) && $intent['price_min'] === null && $intent['price_max'] === null) {
                 return false;
             }
 
@@ -84,27 +90,141 @@ class CatalogConciergeService
                 return false;
             }
 
-            $retailerIds = $products
-                ->map(fn ($p) => $p->meta_retailer_id ?: ($p->sku ?: 'wsn-' . $p->id))
-                ->values()->all();
-
             $header = (string) ($meta['concierge_header'] ?? "Here's what I found");
             $body   = $this->bodyLine($products->count(), $text);
-            $footer = !empty($meta['concierge_footer']) ? (string) $meta['concierge_footer'] : null;
 
-            WhatsAppCatalogFactory::forWorkspace($workspaceId)->sendMPM(
-                $phone,
-                $header,
-                $body,
-                [['title' => 'Top matches', 'product_retailer_ids' => $retailerIds]],
-                $footer,
-            );
-
-            return true;
+            return $this->deliverProducts($workspaceId, $phone, $products, [
+                'header' => $header,
+                'body'   => $body,
+                'footer' => !empty($meta['concierge_footer']) ? (string) $meta['concierge_footer'] : '',
+            ]);
         } catch (Throwable $e) {
             Log::warning('[CATALOG-CONCIERGE] handleInbound failed (ws ' . $workspaceId . '): ' . $e->getMessage());
             return false;
         }
+    }
+
+    /** Send the workspace catalog (carousel or shop link) to a buyer. */
+    public function shareFullCatalog(int $workspaceId, string $phone, ?array $meta = null): bool
+    {
+        $phone = preg_replace('/\D+/', '', $phone);
+        if ($phone === '') return false;
+        $meta = $meta ?? $this->settings($workspaceId);
+        $max = max(1, min(30, (int) ($meta['concierge_max'] ?? 10)));
+        $products = WaProduct::where('workspace_id', $workspaceId)
+            ->where('status', 'active')
+            ->where('in_stock', true)
+            ->orderByDesc('updated_at')
+            ->limit($max)
+            ->get();
+
+        $header = (string) ($meta['share_header'] ?? $meta['concierge_header'] ?? 'Our catalog');
+        $body   = (string) ($meta['share_body'] ?? 'Tap a product to learn more');
+
+        return $this->deliverProducts($workspaceId, $phone, $products, [
+            'header' => $header,
+            'body'   => $body,
+            'footer' => '',
+        ]);
+    }
+
+    private function settings(int $workspaceId): array
+    {
+        $fromWs = [];
+        try {
+            $fromWs = \App\Models\Workspace::query()->find($workspaceId)?->catalog_auto ?? [];
+        } catch (Throwable $e) {}
+        $fromWs = is_array($fromWs) ? $fromWs : [];
+
+        $catalog = WaCatalog::where('workspace_id', $workspaceId)->first();
+        $fromCat = is_array($catalog?->meta_json) ? $catalog->meta_json : [];
+
+        return array_merge($fromWs, $fromCat);
+    }
+
+    private function looksLikeCatalogRequest(string $text): bool
+    {
+        $low = Str::lower($text);
+        return (bool) preg_match('/\b(catalog|catalogue|menu|price\s*list|pricelist|products?|shop|store)\b/u', $low);
+    }
+
+    private function looksLikeGreeting(string $text): bool
+    {
+        $low = Str::lower(trim($text));
+        return (bool) preg_match('/^(hi|hello|hey|salam|assalamu?|hola|ok|good\s+(morning|afternoon|evening))\b/u', $low);
+    }
+
+    private function deliverProducts(int $workspaceId, string $phone, $products, array $opts): bool
+    {
+        $catalog = WaCatalog::where('workspace_id', $workspaceId)->first();
+        if ($catalog && $catalog->catalog_id && $products->isNotEmpty()) {
+            $retailerIds = $products
+                ->map(fn ($p) => $p->meta_retailer_id ?: ($p->sku ?: 'wsn-' . $p->id))
+                ->values()->all();
+            WhatsAppCatalogFactory::forWorkspace($workspaceId)->sendMPM(
+                $phone,
+                (string) ($opts['header'] ?? 'Our catalog'),
+                (string) ($opts['body'] ?? ''),
+                [['title' => 'Products', 'product_retailer_ids' => $retailerIds]],
+                $opts['footer'] ?? null,
+            );
+            return true;
+        }
+
+        $device = $this->mainBaileysDevice($workspaceId);
+        if (!$device) {
+            $this->sendText($workspaceId, $phone, (string) ($opts['body'] ?: 'Browse our products.'));
+            return true;
+        }
+
+        $svc = BaileysCatalogService::make();
+        $shop = \App\Models\WaStorefront::query()
+            ->where('workspace_id', $workspaceId)
+            ->orderByDesc('enabled')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($products->isEmpty()) {
+            if ($shop) {
+                $svc->sendStorefrontLink($device, $phone, $shop->public_url, $opts['body'] ?: 'Browse our shop:');
+                return true;
+            }
+            $this->sendText($workspaceId, $phone, 'We will send our catalog shortly.');
+            return true;
+        }
+
+        try {
+            $svc->sendCarousel($device, $phone, $products, $opts);
+        } catch (Throwable $e) {
+            if ($shop) {
+                $svc->sendStorefrontLink($device, $phone, $shop->public_url, $opts['body'] ?: 'Browse our shop:');
+            } else {
+                throw $e;
+            }
+        }
+        return true;
+    }
+
+    private function mainBaileysDevice(int $workspaceId): ?\App\Models\Device
+    {
+        $key = '';
+        try {
+            $key = (string) (\App\Models\Workspace::query()->find($workspaceId)?->catalog_sender ?? '');
+        } catch (Throwable $e) {}
+        if (str_starts_with($key, 'baileys:')) {
+            $id = (int) substr($key, 8);
+            $d = \App\Models\Device::query()
+                ->forWorkspace($workspaceId)
+                ->where('id', $id)
+                ->where('status', 'connected')
+                ->first();
+            if ($d) return $d;
+        }
+        return \App\Models\Device::query()
+            ->forWorkspace($workspaceId)
+            ->where('status', 'connected')
+            ->orderByDesc('active')
+            ->first();
     }
 
     /**

@@ -82,6 +82,9 @@
                 'totalProducts' => $totalProducts ?? 0,
                 'previousDevices' => $previousDevices ?? collect(),
                 'wabaConfigs' => $wabaConfigs ?? collect(),
+                'phones' => $phones ?? collect(),
+                'catalogSender' => $catalogSender ?? '',
+                'catalogAuto' => $catalogAuto ?? [],
             ])
 
             {{-- ═══════════════════════════════════════════════════════ --}}

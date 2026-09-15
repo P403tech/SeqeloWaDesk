@@ -1944,16 +1944,15 @@ export class BaileysClientManager {
           } catch (e) {
             console.warn(`[${this.phoneNumber}] share_contact send failed: ${e?.message}`);
           }
-        } else if (reply_type === 'send_catalog' && catalog?.catalog_id) {
-          // #20 — Catalog deep-link bubble. v1 uses wa.me/c/{id} as a
-          // plain-text link; v2 should build a true Baileys Product
-          // List message (`productListMessage`) by fetching the
-          // selected products from Laravel. TODO when MPM is needed.
+        } else if (reply_type === 'send_catalog') {
           try {
             const jid = `${userNumber}@s.whatsapp.net`;
-            await this.sock.sendMessage(jid, {
-              text: `Here's our catalog: https://wa.me/c/${catalog.catalog_id}`,
-            });
+            const storeUrl = catalog?.storefront_url;
+            const catId = catalog?.catalog_id;
+            const text = storeUrl
+              ? `Here's our catalog: ${storeUrl}`
+              : (catId ? `Here's our catalog: https://wa.me/c/${catId}` : "Here's our catalog.");
+            await this.sock.sendMessage(jid, { text });
             this.setCooldown(sessionKey, cooldown ?? 0);
           } catch (e) {
             console.warn(`[${this.phoneNumber}] send_catalog failed: ${e?.message}`);
