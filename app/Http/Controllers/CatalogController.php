@@ -278,11 +278,16 @@ class CatalogController extends Controller
             $mainKey = '';
         }
 
-        $baileysRows = \App\Models\Device::query()
-            ->forCurrentWorkspace()
-            ->orderByDesc('active')
-            ->orderByDesc('updated_at')
-            ->get();
+        $baileysRows = collect();
+        try {
+            $baileysRows = \App\Models\Device::query()
+                ->forCurrentWorkspace()
+                ->orderByDesc('active')
+                ->orderByDesc('updated_at')
+                ->get();
+        } catch (Throwable $e) {
+            report($e);
+        }
 
         $officialRows = \App\Models\WaProviderConfig::query()
             ->where('workspace_id', $wsId)

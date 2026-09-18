@@ -53,9 +53,16 @@
     // • storefront has a bound device that's still 'connected', OR
 // • current user owns any connected device row.
 $cfgConnected = isset($cfg) && $cfg && $cfg->isConnected();
-$sfDevice = isset($sf) && $sf && $sf->device_id ? \App\Models\Device::find($sf->device_id) : null;
+$sfDevice = null;
+$anyDeviceLive = false;
+try {
+    $sfDevice = isset($sf) && $sf && $sf->device_id ? \App\Models\Device::find($sf->device_id) : null;
+    $anyDeviceLive = \App\Models\Device::query()->forCurrentWorkspace()->where('status', 'connected')->exists();
+} catch (\Throwable $e) {
+    $sfDevice = null;
+    $anyDeviceLive = false;
+}
 $sfDeviceLive = $sfDevice && $sfDevice->status === 'connected';
-$anyDeviceLive = \App\Models\Device::query()->forCurrentWorkspace()->where('status', 'connected')->exists();
 $waLive = $cfgConnected || $sfDeviceLive || $anyDeviceLive;
 
 if ($cfgConnected) {
@@ -89,7 +96,7 @@ if ($cfgConnected) {
             @endif
         </div>
         <div class="font-serif text-[18px] leading-tight mt-3">
-            {{ $sf->shop_name ?: optional(auth()->user()->currentWorkspaceRel)->name ?? 'Your store' }}</div>
+            {{ $sf?->shop_name ?: (optional(auth()->user()->currentWorkspaceRel)->name ?? __('Your store')) }}</div>
         <div class="font-mono text-[10.5px] text-ink-500 mt-0.5 truncate">{{ $cfgLabel }}</div>
     </div>
 
@@ -101,7 +108,7 @@ if ($cfgConnected) {
             <select onchange="if (this.value) window.location.href = this.value"
                 class="w-full px-2.5 py-1.5 border border-paper-200 rounded-lg bg-paper-50 text-[12.5px] focus:outline-none focus:border-wa-deep">
                 @foreach ($allShops as $row)
-                    <option value="{{ url('/store?shop=' . $row->id) }}" @selected($row->id === $sf->id)>
+                    <option value="{{ url('/store?shop=' . $row->id) }}" @selected($sf && $row->id === $sf->id)>
                         {{ $row->shop_name ?: 'Shop #' . $row->id }}</option>
                 @endforeach
             </select>
