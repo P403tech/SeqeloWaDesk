@@ -31,11 +31,11 @@ class FrontendEditorController extends Controller
      */
     public const THEME_TOKENS = [
         'WhatsApp' => [
-            'theme.wa.deep'   => ['#0B4A42', 'Deep'],
-            'theme.wa.teal'   => ['#0D8A78', 'Teal'],
-            'theme.wa.green'  => ['#9AC055', 'Green'],
-            'theme.wa.mint'   => ['#F4F8EA', 'Mint'],
-            'theme.wa.bubble' => ['#E6EFD4', 'Bubble'],
+            'theme.wa.deep'   => ['#1B4B3D', 'Deep'],
+            'theme.wa.teal'   => ['#037D66', 'Teal'],
+            'theme.wa.green'  => ['#00A68B', 'Green'],
+            'theme.wa.mint'   => ['#EFF9F6', 'Mint'],
+            'theme.wa.bubble' => ['#E3F3EE', 'Bubble'],
             'theme.wa.chat'   => ['#ECE5DD', 'Chat'],
         ],
         'Ink (text)' => [
@@ -71,9 +71,9 @@ class FrontendEditorController extends Controller
      * just writes these as drafts — still reversible until Publish.
      */
     public const THEME_PRESETS = [
-        'seqelo' => ['label' => 'Seqelo', 'swatch' => '#0B4A42', 'tokens' => [
-            'theme.wa.deep' => '#0B4A42', 'theme.wa.teal' => '#0D8A78', 'theme.wa.green' => '#9AC055',
-            'theme.wa.mint' => '#F4F8EA', 'theme.wa.bubble' => '#E6EFD4',
+        'seqelo' => ['label' => 'Seqelo', 'swatch' => '#1B4B3D', 'tokens' => [
+            'theme.wa.deep' => '#1B4B3D', 'theme.wa.teal' => '#037D66', 'theme.wa.green' => '#00A68B',
+            'theme.wa.mint' => '#EFF9F6', 'theme.wa.bubble' => '#E3F3EE',
             'theme.accent.coral' => '#E87A5D', 'theme.accent.amber' => '#DE8A29',
         ]],
         'emerald' => ['label' => 'Emerald', 'swatch' => '#075E54', 'tokens' => [

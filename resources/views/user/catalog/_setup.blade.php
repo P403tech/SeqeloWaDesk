@@ -3,7 +3,8 @@
     $wabaConfigs = $wabaConfigs ?? collect();
     $phones = $phones ?? collect();
     $liveCount = $phones->where('live', true)->count();
-    $state = $catalog ? 'meta' : ($liveCount > 0 ? 'baileys' : 'none');
+    $hasPhone = $phones->isNotEmpty();
+    $state = $catalog ? 'meta' : ($hasPhone ? 'baileys' : 'none');
 @endphp
 
 @include('user.catalog._phone-picker', [
@@ -54,7 +55,7 @@
                     For interactive product messages, link a Meta Commerce Catalog below.
                 @else
                     Catalog sends work right now via native WhatsApp carousels through the Unofficial API — no Meta setup,
-                    no waiting for approval.
+                    no waiting for approval. Pick the main catalog phone above so this catalog appears in Flows → WhatsApp Shop.
                 @endif
                 Head to the <b>Send tab</b> to push products to any customer's number.
             </p>

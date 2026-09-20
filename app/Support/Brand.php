@@ -67,7 +67,7 @@ class Brand
     public static function faviconUrl(): ?string
     {
         $url = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
-        return $url ?: asset('brand/seqelo-icon.png');
+        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
     }
 
     /**
@@ -121,7 +121,7 @@ class Brand
             $path = (string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, '');
         }
         $url = self::resolveUrl($path);
-        return $url ?: asset('brand/seqelo-icon.png');
+        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
     }
 
     /** True if at least one logo has been uploaded. Used to decide

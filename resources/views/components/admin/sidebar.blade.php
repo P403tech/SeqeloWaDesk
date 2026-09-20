@@ -498,7 +498,7 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
                 {{-- data-brand-logo lets wadesk.js setTheme() swap the src
  to the matching per-theme logo at theme-change time. --}}
                     <img src="{{ $brandLogo }}" alt="{{ $brandName }}" data-brand-logo
-                    class="h-9 w-9 rounded-[10px] object-cover">
+                    class="h-9 w-9 rounded-[10px] object-contain">
             @else
                 <span
                     class="relative inline-flex items-center justify-center w-9 h-9 rounded-lg bg-wa-deep text-paper-0">
@@ -507,12 +507,12 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
                             d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z" />
                     </svg>
                 </span>
-                <span class="leading-none">
-                    <span class="block font-serif font-normal text-[20px] tracking-[-0.01em]">{{ $brandName }}</span>
-                    <span
-                        class="block text-[9.5px] font-mono uppercase tracking-[0.18em] text-ink-500 mt-1">{{ __('Admin console') }}</span>
-                </span>
             @endif
+                <span class="leading-none min-w-0">
+                    <span class="block font-semibold text-[16px] tracking-tight truncate">{{ $brandName }}</span>
+                    <span
+                        class="block text-[9.5px] font-medium uppercase tracking-[0.12em] text-ink-500 mt-0.5">{{ __('Admin') }}</span>
+                </span>
         </a>
         <button type="button" id="admin-sidebar-toggle" aria-label="{{ __('Collapse sidebar') }}"
             title="{{ __('Collapse sidebar') }}"

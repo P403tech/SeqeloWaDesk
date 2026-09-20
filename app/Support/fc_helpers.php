@@ -62,18 +62,18 @@ if (! function_exists('theme_palette')) {
     function theme_palette(): array
     {
         return [
-            'wa-deep'      => ['Primary',           '#0B4A42', 'Brand'],
-            'wa-teal'      => ['Primary (hover)',   '#0D8A78', 'Brand'],
-            'wa-green'     => ['Accent / success',  '#9AC055', 'Brand'],
-            'wa-mint'      => ['Soft accent fill',  '#F4F8EA', 'Brand'],
-            'wa-bubble'    => ['Chat bubble',       '#E6EFD4', 'Brand'],
+            'wa-deep'      => ['Primary',           '#1B4B3D', 'Brand'],
+            'wa-teal'      => ['Primary (hover)',   '#037D66', 'Brand'],
+            'wa-green'     => ['Accent / success',  '#00A68B', 'Brand'],
+            'wa-mint'      => ['Soft accent fill',  '#EFF9F6', 'Brand'],
+            'wa-bubble'    => ['Chat bubble',       '#E3F3EE', 'Brand'],
             'paper-0'      => ['Page background',   '#FFFFFF', 'Surfaces'],
-            'paper-50'     => ['Card / muted bg',   '#F7F9F2', 'Surfaces'],
-            'paper-100'    => ['Hover background',  '#EEF3E2', 'Surfaces'],
-            'paper-200'    => ['Borders',           '#E6EFD4', 'Surfaces'],
-            'ink-500'      => ['Muted text',        '#5A5A5A', 'Text'],
-            'ink-700'      => ['Body text',         '#323A3D', 'Text'],
-            'ink-900'      => ['Headings',          '#111111', 'Text'],
+            'paper-50'     => ['Card / muted bg',   '#F4F6FA', 'Surfaces'],
+            'paper-100'    => ['Hover background',  '#EEF0F4', 'Surfaces'],
+            'paper-200'    => ['Borders',           '#E5E7EB', 'Surfaces'],
+            'ink-500'      => ['Muted text',        '#6B7280', 'Text'],
+            'ink-700'      => ['Body text',         '#1A2E27', 'Text'],
+            'ink-900'      => ['Headings',          '#1A2E27', 'Text'],
             'accent-coral' => ['Accent · coral',    '#E87A5D', 'Accents'],
             'accent-amber' => ['Accent · amber',    '#DE8A29', 'Accents'],
             'accent-plum'  => ['Accent · plum',     '#6D5BD0', 'Accents'],
@@ -92,7 +92,10 @@ if (! function_exists('theme_color')) {
         } catch (\Throwable $e) {
             return $default;
         }
-        return is_string($val) && $val !== '' ? $val : $default;
+        if (! is_string($val) || $val === '' || seqelo_is_superseded_theme_hex($val)) {
+            return $default;
+        }
+        return $val;
     }
 }
 
@@ -124,11 +127,27 @@ if (! function_exists('workspace_brand_color')) {
     }
 }
 
+if (! function_exists('seqelo_is_superseded_theme_hex')) {
+    /**
+     * Previous Seqelo lime / WhatsApp-green tokens. If they are still stored
+     * as appearance overrides, ignore them so the Interakt defaults show.
+     */
+    function seqelo_is_superseded_theme_hex(string $hex): bool
+    {
+        $hex = strtoupper(trim($hex));
+
+        return in_array($hex, [
+            '#0B4A42', '#0D8A78', '#9AC055', '#F4F8EA', '#E6EFD4',
+            '#F7F9F2', '#EEF3E2', '#075E54', '#128C7E', '#25D366',
+        ], true);
+    }
+}
+
 if (! function_exists('seqelo_sidebar_mint')) {
     /** Interakt-style left-rail background. */
     function seqelo_sidebar_mint(): string
     {
-        return '#F4F8EA';
+        return '#EFF9F6';
     }
 }
 
@@ -144,8 +163,8 @@ if (! function_exists('seqelo_is_legacy_sidebar_hex')) {
         return in_array($hex, [
             '#0B1F1C', '#0A0F0E', '#0B211D', '#070D0C', '#13312D',
             '#075E54', '#128C7E', '#25D366', '#111827', '#0F172A',
-            '#0A1628', '#15281F', '#1B4B3D', '#EFF9F6', '#037D66',
-            '#00A68B', '#B7FBD2',
+            '#0A1628', '#15281F', '#0B4A42', '#0D8A78', '#F4F8EA',
+            '#9AC055', '#E6EFD4',
         ], true);
     }
 }
@@ -255,6 +274,7 @@ if (! function_exists('theme_css')) {
                 $val = \App\Models\SystemSetting::get('theme.color.' . $suffix, null);
                 if (is_string($val) && $val !== ''
                     && strtolower($val) !== strtolower($default)
+                    && ! seqelo_is_superseded_theme_hex($val)
                     && preg_match('/^#[0-9A-Fa-f]{3,8}$/', $val)) {
                     $rows[] = '--color-' . $suffix . ':' . $val;
                     $set[$suffix] = true;

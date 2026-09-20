@@ -39,9 +39,9 @@
     if (! seqelo_sidebar_has_custom_bg() || seqelo_is_legacy_sidebar_hex($textColor) || strcasecmp($textColor, '#FBFAF6') === 0 || strcasecmp($textColor, '#FFFFFF') === 0) {
         $textColor = '';
     }
-    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#0B4A42';
+    $accentColor = (string) \App\Models\SystemSetting::get('user_sidebar_accent_color', '') ?: '#1B4B3D';
     if ($accentColor === '' || seqelo_is_legacy_sidebar_hex($accentColor)) {
-        $accentColor = '#0B4A42';
+        $accentColor = '#1B4B3D';
     }
 
     // hex → "r,g,b" helper for building translucent tokens.
@@ -85,11 +85,10 @@
 @endphp
 
 <style>
-    .rail-link { position:relative; display:flex; align-items:center; gap:12px; padding:9px 13px; border-radius:12px; font-size:13.5px; font-weight:500; color:var(--rfg); transition:.15s; }
+    .rail-link { position:relative; display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:6px; font-size:13.5px; font-weight:500; color:var(--rfg); transition:.15s; }
     .rail-link:hover { background:var(--rhover); color:var(--rfgs); }
     .rail-link.active { background:var(--racc); color:#fff; }
     .rail-link.active .rail-ic { color:#fff; }
-    .rail-link.active::before { content:""; position:absolute; left:-13px; top:50%; transform:translateY(-50%); width:3px; height:20px; border-radius:0 3px 3px 0; background:var(--racc); }
     .rail-ic { width:18px; height:18px; flex-shrink:0; }
     .rail-cap { font-family:ui-monospace,'JetBrains Mono',monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.18em; color:var(--rcap); padding:0 13px; margin:16px 0 6px; }
     {{-- Collapsible section header (open/close) --}}
@@ -108,10 +107,10 @@
     .rail-fgm { color:var(--rfgm); }
     {{-- Seqelo mint rail in every theme (Interakt-style). A genuine custom
          colour is applied inline and still wins. --}}
-    .user-rail-root { background:#F4F8EA; }
-    :root[data-theme="dark"]   .user-rail-root { background:#F4F8EA; }
-    :root[data-theme="doodle"] .user-rail-root { background:#F4F8EA; }
-    :root[data-theme="bright"] .user-rail-root { background:#F4F8EA; }
+    .user-rail-root { background:#EFF9F6; }
+    :root[data-theme="dark"]   .user-rail-root { background:#EFF9F6; }
+    :root[data-theme="doodle"] .user-rail-root { background:#EFF9F6; }
+    :root[data-theme="bright"] .user-rail-root { background:#EFF9F6; }
 </style>
 
 <div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" style="{{ $styleVars }}">
@@ -126,16 +125,15 @@
     {{-- Brand --}}
     <a href="{{ url('/dashboard') }}" class="relative px-5 h-[64px] flex items-center gap-2.5 shrink-0">
         @if ($logoUrl)
-            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-cover">
+            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-contain">
         @else
-            <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-wa-green text-ink-950">
+            <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-wa-deep text-paper-0">
                 <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Z"/></svg>
             </span>
-            <div class="leading-none">
-                <div class="text-[19px] font-semibold rail-fg">{{ brand_name() }}</div>
-                <div class="text-[8px] font-mono uppercase tracking-[0.2em] rail-fgm mt-1">{{ __('console') }}</div>
-            </div>
         @endif
+        <div class="leading-none min-w-0">
+            <div class="text-[16px] font-semibold rail-fg truncate">{{ brand_name() }}</div>
+        </div>
     </a>
 
     {{-- Workspace switcher --}}

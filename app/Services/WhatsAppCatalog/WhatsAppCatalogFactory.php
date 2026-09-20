@@ -23,7 +23,7 @@ class WhatsAppCatalogFactory
 {
     public static function forWorkspace(int $workspaceId): WhatsAppCatalogProvider
     {
-        $catalog = WaCatalog::where('workspace_id', $workspaceId)->first();
+        $catalog = WaCatalog::metaForWorkspace($workspaceId);
         if (!$catalog) {
             throw new WhatsAppCatalogException(
                 'Workspace has no catalog bound. Connect a Meta Commerce Catalog at /store/catalog.'
@@ -36,7 +36,10 @@ class WhatsAppCatalogFactory
     {
         return match ($catalog->provider) {
             WaCatalog::PROVIDER_DIALOG_360 => new Dialog360CatalogProvider($catalog),
-            default                        => new MetaCloudCatalogProvider($catalog),
+            WaCatalog::PROVIDER_META_CLOUD => new MetaCloudCatalogProvider($catalog),
+            default => throw new WhatsAppCatalogException(
+                'This catalog is bound to an unofficial WhatsApp number. Product cards send from Seqelo; Meta Commerce sync is not used.'
+            ),
         };
     }
 }

@@ -227,8 +227,8 @@
                                         <img src="{{ asset('storage/' . $settings['brand_favicon']) }}"
                                             alt="{{ __('Favicon') }}" class="max-h-16 max-w-16 object-contain">
                                     @else
-                                        <span
-                                            class="text-[10px] font-mono text-ink-500 uppercase tracking-[0.14em]">{{ __('ico / png') }}</span>
+                                        <img src="{{ asset('brand/seqelo-wordmark-mark.svg') }}"
+                                            alt="{{ __('Default icon') }}" class="max-h-16 max-w-16 object-contain">
                                     @endif
                                 </div>
                                 <div>
@@ -271,8 +271,9 @@
                                                         alt="Logo · {{ $t['id'] }}"
                                                         class="max-h-14 max-w-[140px] object-contain">
                                                 @else
-                                                    <span
-                                                        class="text-[10px] font-mono {{ $t['id'] === 'dark' ? 'text-paper-200' : 'text-ink-500' }} uppercase tracking-[0.14em]">{{ __('no logo') }}</span>
+                                                    <img src="{{ asset('brand/seqelo-logo.svg') }}"
+                                                        alt="{{ __('Default logo') }}"
+                                                        class="max-h-14 max-w-[140px] object-contain {{ $t['id'] === 'dark' ? 'brightness-0 invert' : '' }}">
                                                 @endif
                                             </div>
                                             <input type="file" name="logos[{{ $t['id'] }}]"

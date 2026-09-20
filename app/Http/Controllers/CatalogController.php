@@ -42,7 +42,7 @@ class CatalogController extends Controller
         $wsId = Auth::user()?->current_workspace_id;
         if (!$wsId) return redirect('/dashboard');
 
-        $catalog = WaCatalog::where('workspace_id', $wsId)->first();
+        $catalog = WaCatalog::metaForWorkspace($wsId);
         $shops   = WaStorefront::where('workspace_id', $wsId)->orderByDesc('id')->get();
 
         $statusBuckets = WaProduct::where('workspace_id', $wsId)
@@ -721,17 +721,18 @@ class CatalogController extends Controller
                 $ws->forceFill(['catalog_sender' => $key])->save();
             } catch (Throwable $e) {
                 \Log::warning('[wa-catalog] could not save catalog_sender', ['error' => $e->getMessage()]);
-            }
-            $device->forceFill(['active' => true])->save();
-
-            if ($device->status !== 'connected') {
                 return back()->withErrors([
-                    'sender' => __('This phone is saved as your catalog number, but it is offline. Open Devices and reconnect it, then try again.'),
+                    'sender' => __('Could not save this phone as the catalog number. Run database migrations, then try again.'),
                 ]);
             }
+            $device->forceFill(['active' => true])->save();
+            WaCatalog::bindLocalToDevice($wsId, $device);
 
+            $live = $device->status === 'connected';
             return redirect('/catalog')->with('status',
-                __('This phone is now the main catalog device. Unofficial WhatsApp sends product cards (carousel) from this number. A Meta Commerce catalog is not created on unofficial numbers — add products in Seqelo and send them from the Send tab.')
+                $live
+                    ? __('This phone is now the main catalog device. Unofficial WhatsApp sends product cards from this number. Open Flows → WhatsApp Shop to pick products from this catalog.')
+                    : __('This phone is now the main catalog device and will show in Flows. It is currently offline — reconnect it on Channels so catalog messages can send.')
             );
         }
 
@@ -748,6 +749,9 @@ class CatalogController extends Controller
             $ws->forceFill(['catalog_sender' => $key])->save();
         } catch (Throwable $e) {
             \Log::warning('[wa-catalog] could not save catalog_sender', ['error' => $e->getMessage()]);
+            return back()->withErrors([
+                'sender' => __('Could not save this phone as the catalog number. Run database migrations, then try again.'),
+            ]);
         }
 
         if (method_exists($cfg, 'setAsPrimary')) {
@@ -755,8 +759,9 @@ class CatalogController extends Controller
         }
 
         if ($engine !== \App\Services\WorkspaceEngine::ENGINE_WABA) {
+            WaCatalog::bindLocalToProviderConfig($wsId, $cfg);
             return redirect('/catalog')->with('status',
-                __('This Twilio number is now the main catalog sender. Catalog messages will send from this number.')
+                __('This Twilio number is now the main catalog sender. Catalog messages will send from this number, and the catalog is available in Flows.')
             );
         }
 

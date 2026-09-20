@@ -69,22 +69,35 @@ class FlowsCommerceController extends Controller
                     'status'   => 'active',
                 ])
                 ->values(),
-            'whatsapp_shop' => WaCatalog::query()
-                ->where('workspace_id', $wsId)
-                ->get(['id', 'catalog_name', 'catalog_id', 'is_cart_enabled'])
-                ->map(fn ($c) => [
-                    'id'             => $c->id,
-                    'name'           => $c->catalog_name ?: ('Catalog ' . $c->catalog_id),
-                    'catalog_id'     => $c->catalog_id,
-                    'is_cart_enabled'=> (bool) $c->is_cart_enabled,
-                    'currency'       => null, // catalogs are mixed-currency
-                    'status'         => 'active',
-                ])
-                ->values(),
+            'whatsapp_shop' => $this->whatsappShopStores($wsId),
             default => collect(),
         };
 
         return response()->json(['ok' => true, 'provider' => $provider, 'stores' => $rows]);
+    }
+
+    /**
+     * WhatsApp Shop stores for the builder. Official Meta catalogs plus
+     * the unofficial local catalog bound to a phone. If the operator
+     * already picked a catalog number but no wa_catalogs row exists,
+     * create that row here so the dropdown is not empty.
+     */
+    private function whatsappShopStores(int $wsId)
+    {
+        $rows = WaCatalog::query()->where('workspace_id', $wsId)->get();
+        if ($rows->isEmpty()) {
+            $bound = WaCatalog::ensureLocalFromSender($wsId);
+            $rows = $bound ? collect([$bound]) : collect();
+        }
+
+        return $rows->map(fn ($c) => [
+            'id'              => $c->id,
+            'name'            => $c->catalog_name ?: ('Catalog ' . $c->catalog_id),
+            'catalog_id'      => $c->catalog_id,
+            'is_cart_enabled' => (bool) $c->is_cart_enabled,
+            'currency'        => null,
+            'status'          => 'active',
+        ])->values();
     }
 
     /**

@@ -71,8 +71,8 @@ class CatalogSyncService
         if (self::$suppressed) return;
 
         try {
-            $catalog = WaCatalog::where('workspace_id', $product->workspace_id)->first();
-            if (!$catalog || !$catalog->catalog_id) return;          // nothing linked → nothing to do
+            $catalog = WaCatalog::metaForWorkspace((int) $product->workspace_id);
+            if (!$catalog || !$catalog->catalog_id) return;
             if (($product->status ?? 'active') !== 'active') return;  // drafts/archived don't belong on Meta
 
             $shop    = WaStorefront::where('workspace_id', $product->workspace_id)->orderByDesc('id')->first();
@@ -110,7 +110,7 @@ class CatalogSyncService
      */
     public function flushWorkspace(int $workspaceId, int $limit = 1000): array
     {
-        $catalog = WaCatalog::where('workspace_id', $workspaceId)->first();
+        $catalog = WaCatalog::metaForWorkspace($workspaceId);
         if (!$catalog || !$catalog->catalog_id) return ['skipped' => true, 'pushed' => 0];
 
         $chunk = WaProduct::where('workspace_id', $workspaceId)

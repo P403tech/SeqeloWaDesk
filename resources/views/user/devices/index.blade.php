@@ -248,32 +248,32 @@
                     $isTwilio = $hasTwilio;
                 @endphp
 
-                <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div class="min-w-0">
-                        <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500 mb-2">
+                        <div class="text-[12px] text-ink-500 mb-1">
                             {{ __('Workspace') }} · {{ auth()->user()?->currentWorkspace?->name ?: brand_name() }}
                         </div>
-                        <h1 class="font-serif font-normal tracking-tight text-[32px] sm:text-[38px] lg:text-[44px] leading-none">
-                            {{ __('Omni') }} <span class="italic text-wa-deep">{{ __('channels') }}</span>
+                        <h1 class="font-sans font-semibold tracking-tight text-[22px] sm:text-[26px] leading-tight text-ink-900">
+                            {{ __('Omni channels') }}
                         </h1>
-                        <p class="text-[13px] text-ink-600 mt-2 max-w-xl">
+                        <p class="text-[13px] text-ink-500 mt-1.5 max-w-2xl">
                             {{ __('Connect WhatsApp, Instagram, Telegram and more — every conversation routes into one inbox and runs through the same flows, campaigns and automations.') }}
                         </p>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap shrink-0">
                         <span
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-wa-mint text-wa-deep border border-wa-green/40 font-mono">
-                            <span class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#b7fbd2] text-[#037d66]">
+                            <span class="w-1.5 h-1.5 rounded-full bg-[#00a68b]"></span>
                             <span data-totals="connected">{{ $totals['connected'] }}</span> {{ __('live') }}
                         </span>
                         @if (($totals['failed_24h'] ?? 0) > 0)
-                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-accent-amber/15 text-[#7B5A14] border border-accent-amber/40 font-mono">
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#fff4d6] text-[#9a6b12]">
                                 <span class="w-1.5 h-1.5 rounded-full bg-accent-amber"></span>
                                 <span data-totals="failed_24h">{{ $totals['failed_24h'] }}</span> {{ __('attention') }}
                             </span>
                         @endif
                         <button id="devices-check-btn" type="button"
-                            class="px-4 py-2 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium flex items-center gap-2">
+                            class="px-3.5 py-2 border border-paper-200 rounded-lg bg-paper-0 hover:bg-paper-50 text-[13px] font-semibold flex items-center gap-2">
                             <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                                 stroke-width="1.6">
                                 <path d="M3 8a5 5 0 0 1 8.5-3.5L13 6M13 8a5 5 0 0 1-8.5 3.5L3 10" />
@@ -286,7 +286,7 @@
  flow). Single-engine with no extra channel: the original per-engine buttons. --}}
                         @if ($showChooser)
                             <button type="button" data-open-add-chooser
-                                class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
+                                class="px-3.5 py-2 rounded-lg bg-wa-deep text-paper-0 text-[13px] font-semibold hover:bg-wa-teal flex items-center gap-2">
                                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M8 3v10M3 8h10" />
@@ -297,7 +297,7 @@
                             @if ($hasWaba)
                                 <button data-waba-connect="{{ $embeddedSignupReady ? 'embedded' : 'manual' }}"
                                     type="button"
-                                    class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
+                                    class="px-3.5 py-2 rounded-lg bg-wa-deep text-paper-0 text-[13px] font-semibold hover:bg-wa-teal flex items-center gap-2">
                                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                                         stroke-width="2">
                                         <path d="M8 3v10M3 8h10" />
@@ -307,7 +307,7 @@
                             @endif
                             @if ($hasBaileys)
                                 <button id="devices-add-btn" type="button"
-                                    class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
+                                    class="px-3.5 py-2 rounded-lg bg-wa-deep text-paper-0 text-[13px] font-semibold hover:bg-wa-teal flex items-center gap-2">
                                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                                         stroke-width="2">
                                         <path d="M8 3v10M3 8h10" />
@@ -337,21 +337,21 @@
                     $healthPct = $acctTotal > 0 ? round(($acctConnected / max($acctTotal, 1)) * 100) : 100;
                 @endphp
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Channels live') }}</span></div>
-                        <div class="mt-2 flex items-baseline gap-2"><span class="font-serif text-[30px] leading-none">{{ $liveTypes }}</span><span class="text-[11px] text-ink-500"><span data-totals="connected">{{ $totals['connected'] }}</span> {{ __('accounts live') }}</span></div>
+                    <div class="bg-paper-0 border border-paper-200 rounded-[10px] p-4 shadow-card">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">{{ __('Channels live') }}</span></div>
+                        <div class="mt-2 flex items-baseline gap-2"><span class="font-sans font-semibold text-[26px] leading-none text-ink-900">{{ $liveTypes }}</span><span class="text-[12px] text-ink-500"><span data-totals="connected">{{ $totals['connected'] }}</span> {{ __('accounts live') }}</span></div>
                     </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Accounts') }}</span></div>
-                        <div class="mt-2 flex items-baseline gap-2"><span class="font-serif text-[30px] leading-none" data-totals="total">{{ $totals['total'] }}</span><span class="text-[11px] text-ink-500">{{ __('numbers') }}{{ $igCount ? ' · +' . $igCount . ' IG' : '' }}{{ $fbCount ? ' · +' . $fbCount . ' FB' : '' }}</span></div>
+                    <div class="bg-paper-0 border border-paper-200 rounded-[10px] p-4 shadow-card">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">{{ __('Accounts') }}</span></div>
+                        <div class="mt-2 flex items-baseline gap-2"><span class="font-sans font-semibold text-[26px] leading-none text-ink-900" data-totals="total">{{ $totals['total'] }}</span><span class="text-[12px] text-ink-500">{{ __('numbers') }}{{ $igCount ? ' · +' . $igCount . ' IG' : '' }}{{ $fbCount ? ' · +' . $fbCount . ' FB' : '' }}</span></div>
                     </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Routed · 24h') }}</span></div>
-                        <div class="mt-2 flex items-baseline gap-2"><span class="font-serif text-[30px] leading-none" data-totals="sent_24h">{{ number_format($totals['sent_24h']) }}</span><span class="text-[11px] text-ink-500">{{ __('messages') }}</span></div>
+                    <div class="bg-paper-0 border border-paper-200 rounded-[10px] p-4 shadow-card">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">{{ __('Routed · 24h') }}</span></div>
+                        <div class="mt-2 flex items-baseline gap-2"><span class="font-sans font-semibold text-[26px] leading-none text-ink-900" data-totals="sent_24h">{{ number_format($totals['sent_24h']) }}</span><span class="text-[12px] text-ink-500">{{ __('messages') }}</span></div>
                     </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Health') }}</span><span class="text-[10px] text-wa-deep font-mono">{{ $healthPct }}%</span></div>
-                        <div class="mt-2 flex items-baseline gap-2"><span class="font-serif text-[30px] leading-none {{ $healthPct >= 90 ? '' : 'text-accent-amber' }}">{{ $healthPct >= 90 ? __('healthy') : __('attention') }}</span><span class="text-[11px] text-ink-500 hidden"><span data-totals="failed_24h">{{ $totals['failed_24h'] }}</span></span></div>
+                    <div class="bg-paper-0 border border-paper-200 rounded-[10px] p-4 shadow-card">
+                        <div class="flex items-center justify-between"><span class="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">{{ __('Health') }}</span><span class="text-[11px] text-wa-teal font-semibold">{{ $healthPct }}%</span></div>
+                        <div class="mt-2 flex items-baseline gap-2"><span class="font-sans font-semibold text-[26px] leading-none {{ $healthPct >= 90 ? 'text-ink-900' : 'text-accent-amber' }}">{{ $healthPct >= 90 ? __('healthy') : __('attention') }}</span><span class="text-[11px] text-ink-500 hidden"><span data-totals="failed_24h">{{ $totals['failed_24h'] }}</span></span></div>
                     </div>
                 </div>
 
@@ -408,34 +408,34 @@
                         {{-- Top bar: quick status tabs on the left, search on the right --}}
                         <div
                             class="px-4 py-3 border-b border-paper-200 flex items-center justify-between gap-4 flex-wrap">
-                            <div class="flex items-center gap-1 bg-paper-50 rounded-full p-1">
+                            <div class="flex items-center gap-1">
                                 <button data-devices-filter="status" data-devices-value="all" type="button"
-                                    class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'all' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">
-                                    All <span class="ml-1 font-mono text-[10px] opacity-80"
+                                    class="status-tab px-3 py-1.5 rounded-lg text-[13px] font-semibold {{ $currentStatus === 'all' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
+                                    All <span class="ml-1 text-[11px] opacity-80"
                                         data-status-count="all">{{ $counts['all'] ?? 0 }}</span>
                                 </button>
                                 <button data-devices-filter="status" data-devices-value="connected" type="button"
-                                    class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'connected' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">
-                                    Connected <span class="ml-1 font-mono text-[10px] opacity-80"
+                                    class="status-tab px-3 py-1.5 rounded-lg text-[13px] font-semibold {{ $currentStatus === 'connected' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
+                                    Connected <span class="ml-1 text-[11px] opacity-80"
                                         data-status-count="connected">{{ $counts['connected'] ?? 0 }}</span>
                                 </button>
                                 <button data-devices-filter="status" data-devices-value="disconnected" type="button"
-                                    class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'disconnected' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">
-                                    Disconnected <span class="ml-1 font-mono text-[10px] opacity-80"
+                                    class="status-tab px-3 py-1.5 rounded-lg text-[13px] font-semibold {{ $currentStatus === 'disconnected' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
+                                    Disconnected <span class="ml-1 text-[11px] opacity-80"
                                         data-status-count="disconnected">{{ $counts['disconnected'] ?? 0 }}</span>
                                 </button>
                                 @if (($counts['needs_pair'] ?? 0) > 0)
                                     <button data-devices-filter="status" data-devices-value="needs_pair"
                                         type="button"
-                                        class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'needs_pair' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">
-                                        Needs re-pair <span class="ml-1 font-mono text-[10px] opacity-80"
+                                        class="status-tab px-3 py-1.5 rounded-lg text-[13px] font-semibold {{ $currentStatus === 'needs_pair' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
+                                        Needs re-pair <span class="ml-1 text-[11px] opacity-80"
                                             data-status-count="needs_pair">{{ $counts['needs_pair'] }}</span>
                                     </button>
                                 @endif
                                 @if (($counts['failed'] ?? 0) > 0)
                                     <button data-devices-filter="status" data-devices-value="failed" type="button"
-                                        class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'failed' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">
-                                        Failed <span class="ml-1 font-mono text-[10px] opacity-80"
+                                        class="status-tab px-3 py-1.5 rounded-lg text-[13px] font-semibold {{ $currentStatus === 'failed' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
+                                        Failed <span class="ml-1 text-[11px] opacity-80"
                                             data-status-count="failed">{{ $counts['failed'] }}</span>
                                     </button>
                                 @endif

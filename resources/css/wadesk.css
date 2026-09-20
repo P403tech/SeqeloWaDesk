@@ -2919,14 +2919,14 @@ html[data-theme="doodle"] .ts-control > input:not([type]) {
 /* Seqelo mint left rail (admin). Theme packs recast .bg-paper-0 / .bg-wa-mint
    to dark greens; pin the rail so it matches the Interakt-style menu. */
 #admin-sidebar-root {
-  background: #F4F8EA !important;
-  border-right-color: #E6EFD4 !important;
+  background: #EFF9F6 !important;
+  border-right-color: #D7EEE6 !important;
 }
 html[data-theme="dark"] #admin-sidebar-root,
 html[data-theme="doodle"] #admin-sidebar-root,
 html[data-theme="bright"] #admin-sidebar-root {
-  background: #F4F8EA !important;
-  border-right-color: #E6EFD4 !important;
+  background: #EFF9F6 !important;
+  border-right-color: #D7EEE6 !important;
 }
 
 /* ── ADMIN SIDEBAR COLLAPSE ─────────────────────────────────────────
