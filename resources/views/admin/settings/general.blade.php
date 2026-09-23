@@ -225,7 +225,7 @@
                                     class="rounded-2xl border border-paper-200 bg-paper-50 h-[120px] grid place-items-center overflow-hidden">
                                     <img src="{{ \App\Support\Brand::faviconUrl() }}"
                                         alt="{{ __('Favicon') }}" class="max-h-16 max-w-16 object-contain"
-                                        onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-wordmark-mark.svg') }}'">
+                                        onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-mark.png') }}'">
                                 </div>
                                 <div>
                                     <div class="font-semibold text-[13px]">{{ __('Favicon') }}</div>
@@ -268,7 +268,7 @@
                                                 <img src="{{ $previewSrc }}"
                                                     alt="Logo · {{ $t['id'] }}"
                                                     class="max-h-14 max-w-[140px] object-contain {{ $t['id'] === 'dark' && ! $cur ? 'brightness-0 invert' : '' }}"
-                                                    onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-logo.svg') }}'">
+                                                    onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-mark.png') }}'">
                                             </div>
                                             <input type="file" name="logos[{{ $t['id'] }}]"
                                                 data-preview-target="logo-preview-{{ $t['id'] }}"

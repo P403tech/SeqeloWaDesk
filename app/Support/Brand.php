@@ -66,22 +66,16 @@ class Brand
 
     public static function faviconUrl(): ?string
     {
-        $url = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
-        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
+        return asset('brand/seqelo-mark.png');
     }
 
     /**
-     * Square chrome (sidebars). Prefers an uploaded favicon/paper file that
-     * still exists on disk; otherwise the shipped S-mark.
+     * Square chrome (sidebars). Shipped transparent bag-S — not an uploaded
+     * file that may be missing or have a white background.
      */
     public static function markUrl(): string
     {
-        $favicon = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
-        if ($favicon) {
-            return $favicon;
-        }
-        $paper = self::resolveUrl((string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, ''));
-        return $paper ?: asset('brand/seqelo-wordmark-mark.svg');
+        return asset('brand/seqelo-mark.png');
     }
 
     /**
@@ -153,7 +147,7 @@ class Brand
         if (!$url && $theme !== self::DEFAULT_THEME) {
             $url = self::resolveUrl((string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, ''));
         }
-        return $url ?: asset('brand/seqelo-logo.svg');
+        return $url ?: asset('brand/seqelo-mark.png');
     }
 
     /** True if at least one logo has been uploaded. Used to decide

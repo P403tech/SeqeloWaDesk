@@ -124,8 +124,8 @@
     {{-- Brand --}}
         <a href="{{ url('/dashboard') }}" class="relative px-5 h-[64px] flex items-center gap-2.5 shrink-0">
             <img src="{{ \App\Support\Brand::markUrl() }}" alt="{{ brand_name() }}"
-                class="h-9 w-9 rounded-[10px] object-contain shrink-0 bg-[#1B4B3D]"
-                onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-wordmark-mark.svg') }}'">
+                class="h-9 w-9 rounded-[10px] object-contain shrink-0"
+                onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-mark.png') }}'">
         <div class="leading-none min-w-0">
             <div class="text-[16px] font-semibold rail-fg truncate">{{ brand_name() }}</div>
         </div>
