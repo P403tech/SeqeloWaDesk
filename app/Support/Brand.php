@@ -71,12 +71,32 @@ class Brand
     }
 
     /**
-     * Square mark for 36×36 chrome. Always the shipped S-icon — never an
-     * uploaded wordmark/favicon (those crop to "Seqe" in a square slot).
+     * Square chrome (sidebars). Prefers an uploaded favicon/paper file that
+     * still exists on disk; otherwise the shipped S-mark.
      */
     public static function markUrl(): string
     {
-        return asset('brand/seqelo-wordmark-mark.svg');
+        $favicon = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
+        if ($favicon) {
+            return $favicon;
+        }
+        $paper = self::resolveUrl((string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, ''));
+        return $paper ?: asset('brand/seqelo-wordmark-mark.svg');
+    }
+
+    /**
+     * True when an uploaded brand file is still on disk. Railway's disk is
+     * ephemeral — MySQL can keep a path after the PNG is gone, which used to
+     * render a broken-image icon instead of the Seqelo fallback.
+     */
+    public static function storedFileExists(string $path): bool
+    {
+        $rel = ltrim($path, '/');
+        if ($rel === '') {
+            return false;
+        }
+        return is_file(storage_path('app/public/' . $rel))
+            || is_file(public_path('storage/' . $rel));
     }
 
     /**
@@ -130,6 +150,9 @@ class Brand
             $path = (string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, '');
         }
         $url = self::resolveUrl($path);
+        if (!$url && $theme !== self::DEFAULT_THEME) {
+            $url = self::resolveUrl((string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, ''));
+        }
         return $url ?: asset('brand/seqelo-logo.svg');
     }
 
@@ -164,6 +187,7 @@ class Brand
         if ($path === '') return null;
         // Already absolute? (admin pasted an external URL) — pass through.
         if (preg_match('#^https?://#i', $path)) return $path;
+        if (! self::storedFileExists($path)) return null;
         return asset('storage/' . ltrim($path, '/'));
     }
 }

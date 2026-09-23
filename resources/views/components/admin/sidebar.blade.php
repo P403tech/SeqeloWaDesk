@@ -489,7 +489,10 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
             $brandName = (string) brand_name();
         @endphp
         <a href="{{ url('/dashboard') }}" class="js-sb-collapse-hide flex items-center gap-2.5 min-w-0">
-            <x-brand-mark />
+            @php $sidebarMark = \App\Support\Brand::markUrl(); @endphp
+            <img src="{{ $sidebarMark }}" alt="{{ $brandName }}"
+                class="h-9 w-9 rounded-[10px] object-contain shrink-0 bg-[#1B4B3D]"
+                onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-wordmark-mark.svg') }}'">
             <span class="leading-none min-w-0">
                 <span class="block font-semibold text-[16px] tracking-tight truncate">{{ $brandName }}</span>
                 <span

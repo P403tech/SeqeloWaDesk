@@ -223,13 +223,9 @@
                             <div class="grid grid-cols-[120px_1fr] gap-4 items-center">
                                 <div id="favicon-preview"
                                     class="rounded-2xl border border-paper-200 bg-paper-50 h-[120px] grid place-items-center overflow-hidden">
-                                    @if ($settings['brand_favicon'])
-                                        <img src="{{ asset('storage/' . $settings['brand_favicon']) }}"
-                                            alt="{{ __('Favicon') }}" class="max-h-16 max-w-16 object-contain">
-                                    @else
-                                        <img src="{{ asset('brand/seqelo-wordmark-mark.svg') }}"
-                                            alt="{{ __('Default icon') }}" class="max-h-16 max-w-16 object-contain">
-                                    @endif
+                                    <img src="{{ \App\Support\Brand::faviconUrl() }}"
+                                        alt="{{ __('Favicon') }}" class="max-h-16 max-w-16 object-contain"
+                                        onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-wordmark-mark.svg') }}'">
                                 </div>
                                 <div>
                                     <div class="font-semibold text-[13px]">{{ __('Favicon') }}</div>
@@ -252,7 +248,7 @@
                             <div>
                                 <div class="font-semibold text-[13px] mb-1">{{ __('Logo per theme') }}</div>
                                 <p class="text-[11.5px] text-ink-600 mb-3">
-                                    {{ __('Each theme uses its own logo. Falls back to "Paper" if no theme-specific logo is uploaded.') }}
+                                    {{ __('Each theme uses its own logo. Falls back to "Paper" if no theme-specific logo is uploaded. Missing files after a deploy also fall back to the Seqelo logo — re-upload to restore a custom file.') }}
                                 </p>
 
                                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -266,15 +262,13 @@
                                             </div>
                                             <div id="logo-preview-{{ $t['id'] }}"
                                                 class="rounded-xl border border-paper-200 {{ $t['id'] === 'dark' ? 'bg-[#0B1F1C]' : ($t['id'] === 'doodle' ? 'bg-wa-bubble' : 'bg-paper-50') }} h-20 grid place-items-center overflow-hidden mb-2">
-                                                @if ($cur)
-                                                    <img src="{{ asset('storage/' . $cur) }}"
-                                                        alt="Logo · {{ $t['id'] }}"
-                                                        class="max-h-14 max-w-[140px] object-contain">
-                                                @else
-                                                    <img src="{{ asset('brand/seqelo-logo.svg') }}"
-                                                        alt="{{ __('Default logo') }}"
-                                                        class="max-h-14 max-w-[140px] object-contain {{ $t['id'] === 'dark' ? 'brightness-0 invert' : '' }}">
-                                                @endif
+                                                @php
+                                                    $previewSrc = \App\Support\Brand::logoUrl($t['id']);
+                                                @endphp
+                                                <img src="{{ $previewSrc }}"
+                                                    alt="Logo · {{ $t['id'] }}"
+                                                    class="max-h-14 max-w-[140px] object-contain {{ $t['id'] === 'dark' && ! $cur ? 'brightness-0 invert' : '' }}"
+                                                    onerror="this.onerror=null;this.src='{{ asset('brand/seqelo-logo.svg') }}'">
                                             </div>
                                             <input type="file" name="logos[{{ $t['id'] }}]"
                                                 data-preview-target="logo-preview-{{ $t['id'] }}"
