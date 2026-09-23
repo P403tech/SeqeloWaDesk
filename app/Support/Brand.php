@@ -71,14 +71,12 @@ class Brand
     }
 
     /**
-     * Square mark for 36×36 chrome (admin/user sidebars). Never returns the
-     * wide wordmark — that was being cropped to "Seqe" inside a square box.
-     * Prefers an uploaded favicon; otherwise the shipped Seqelo S-mark.
+     * Square mark for 36×36 chrome. Always the shipped S-icon — never an
+     * uploaded wordmark/favicon (those crop to "Seqe" in a square slot).
      */
     public static function markUrl(): string
     {
-        $url = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
-        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
+        return asset('brand/seqelo-wordmark-mark.svg');
     }
 
     /**

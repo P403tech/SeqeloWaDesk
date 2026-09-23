@@ -79,7 +79,7 @@
             <div class="px-4 py-3 border-b border-paper-200 flex items-center justify-between gap-3">
                 <div>
                     <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Inbox') }}</div>
-                    <div class="font-serif text-[16px] text-ink-900">{{ __('Notifications') }}</div>
+                    <div class="font-semibold text-[16px] text-ink-900">{{ __('Notifications') }}</div>
                 </div>
                 <button id="notif-read-all" type="button" class="text-[11px] font-semibold text-wa-deep hover:underline">{{ __('Mark all read') }}</button>
             </div>

@@ -9,8 +9,8 @@
     @php
         $tabs = ['login' => __('Login'), 'register' => __('Register'), 'forgot' => __('Forgot password')];
         $active = in_array($page ?? 'login', array_keys($tabs), true) ? $page : 'login';
-        $accent = (string) ($cfg[$active]['accent'] ?? '#25D366');
-        $accentHex = \Illuminate\Support\Str::startsWith($accent, '#') ? $accent : '#25D366';
+        $accent = (string) ($cfg[$active]['accent'] ?? '#037D66');
+        $accentHex = \Illuminate\Support\Str::startsWith($accent, '#') ? $accent : '#037D66';
     @endphp
 
     <header class="h-16 bg-paper-0 hairline-b border-b border-paper-200 flex items-center px-4 sm:px-7 gap-4 sticky top-0 z-30">
@@ -83,7 +83,7 @@
                                     <div class="w-full bg-paper-50 grid place-items-center"><span class="w-1/2 h-2/3 rounded bg-paper-0 border border-paper-200"></span></div>
                                     @break
                                 @case(4)
-                                    <div class="w-1/2 h-full" style="background:linear-gradient(150deg,#25D366,#0B1F1C)"></div>
+                                    <div class="w-1/2 h-full" style="background:linear-gradient(150deg,#037D66,#1B4B3D)"></div>
                                     <div class="w-1/2 h-full bg-paper-0 grid place-items-center"><span class="w-2/3 h-2/3 rounded bg-paper-100"></span></div>
                                     @break
                                 @case(5)

@@ -374,22 +374,22 @@ html[data-theme="dark"] .divide-paper-100 > * + *     { border-color:#2D5A53 !im
    The --wa-* shades are the hand-picked dark variants — lighter and more
    saturated than the light-theme brand so they stay legible on dark surfaces. */
 html[data-theme="dark"] {
-    --color-wa-deep:   #0B4A42;
-    --color-wa-teal:   #0D8A78;
-    --color-wa-green:  #9AC055;
-    --color-wa-mint:   #F4F8EA;
-    --color-wa-bubble: #E6EFD4;
+    --color-wa-deep:   #1B4B3D;
+    --color-wa-teal:   #037D66;
+    --color-wa-green:  #00A68B;
+    --color-wa-mint:   #EFF9F6;
+    --color-wa-bubble: #E3F3EE;
 
-    --wa-brand-text:   #34D87A;
-    --wa-brand-bright: #7BFFB1;
-    --wa-brand-bg:     #0F8556;
-    --wa-brand-border: #34D87A;
-    --wa-teal-text:    #3BD4C7;
-    --wa-accent-text:  #5BFFA8;
+    --wa-brand-text:   #5EE0C8;
+    --wa-brand-bright: #7EE8D4;
+    --wa-brand-bg:     #037D66;
+    --wa-brand-border: #00A68B;
+    --wa-teal-text:    #5EE0C8;
+    --wa-accent-text:  #7EE8D4;
 }
 
 /* keep the accent borders visible */
-html[data-theme="dark"] .border-wa-deep               { border-color:#25D366 !important; }
+html[data-theme="dark"] .border-wa-deep               { border-color:#00A68B !important; }
 
 /* ── TEXT ───────────────────────────────────────────────── */
 html[data-theme="dark"] .text-ink-900                 { color:#FBFAF6 !important; }
@@ -424,7 +424,7 @@ html[data-theme="dark"] a.bg-paper-0                  { background-color:#1F4540
 
 /* keep brand-deep buttons visually consistent */
 html[data-theme="dark"] .bg-wa-deep                   { background-color:var(--wa-brand-bg) !important; }
-html[data-theme="dark"] .hover\:bg-wa-teal:hover      { background-color:#15A074 !important; }
+html[data-theme="dark"] .hover\:bg-wa-teal:hover      { background-color:#00A68B !important; }
 html[data-theme="dark"] .hover\:bg-wa-deep:hover      { background-color:var(--wa-brand-bg) !important; }
 
 /* ── ACCENT SURFACES ────────────────────────────────────── */
@@ -841,11 +841,11 @@ html[data-theme="doodle"]{
      Re-declaring the --color-* tokens pins every Tailwind utility inside doodle
      scope to the shipped palette, so switching the brand colour leaves this
      theme exactly as designed. */
-  --color-wa-deep:   #0B4A42;
-  --color-wa-teal:   #0D8A78;
-  --color-wa-green:  #9AC055;
-  --color-wa-mint:   #F4F8EA;
-  --color-wa-bubble: #E6EFD4;
+  --color-wa-deep:   #1B4B3D;
+  --color-wa-teal:   #037D66;
+  --color-wa-green:  #00A68B;
+  --color-wa-mint:   #EFF9F6;
+  --color-wa-bubble: #E3F3EE;
 
   --d-ink:       #15281F;
   --d-ink-72:    rgba(21,40,31,0.72);
@@ -853,12 +853,12 @@ html[data-theme="doodle"]{
   --d-ink-25:    rgba(21,40,31,0.25);
   --d-ink-15:    rgba(21,40,31,0.15);
   --d-ink-10:    rgba(21,40,31,0.10);
-  --d-mint:      #E8F5E9;
-  --d-mint-deep: #C8E8CB;
+  --d-mint:      #EFF9F6;
+  --d-mint-deep: #C5E8DE;
   --d-cream:     #FFF6E0;
   --d-paper:     #FFFDF5;
-  --d-wa:        #25D366;
-  --d-wa-deep:   #128C4B;
+  --d-wa:        #00A68B;
+  --d-wa-deep:   #1B4B3D;
   --d-sun:       #FFC94A;
   --d-coral:     #FF7A6B;
   --d-lav:       #C9B8FF;
@@ -2356,7 +2356,7 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   #ti-frame {
     /* Channel accents — WhatsApp reuses the brand token; the rest are the
        platforms' own marks so a thread reads as "which channel" at a glance. */
-    --ch-wa:  var(--color-wa-green, #25D366);
+    --ch-wa:  var(--color-wa-green, #00A68B);
     --ch-ig:  #E1306C;
     --ch-ms:  #0084FF;
     --ch-tg:  #229ED9;
@@ -2970,6 +2970,16 @@ html[data-theme="bright"] #admin-sidebar-root {
     padding-left: 0;
     padding-right: 0;
     gap: 0;
+  }
+
+  /* Keep the header glyph a square S — uploaded wordmarks must not paint here. */
+  #admin-sidebar-root .admin-brand-header a > span:first-child,
+  #admin-sidebar-root .admin-brand-header a > img {
+    width: 36px !important;
+    height: 36px !important;
+    max-width: 36px !important;
+    flex-shrink: 0;
+    overflow: hidden;
   }
 
   /* Flip the collapse glyph to point "open" when collapsed */

@@ -316,8 +316,8 @@ window.WA_CURRENCY = (function () {
       // A workspace's own white-label logo (data-ws-logo) is one fixed image —
       // never replace it with the platform's per-theme logo on theme change.
       if (img.hasAttribute('data-ws-logo')) return;
-      // Square sidebar marks must stay the 1:1 S-icon, not the wide wordmark.
       if (img.hasAttribute('data-brand-mark')) return;
+      if (img.closest('#admin-sidebar-root') || img.closest('[data-user-rail]')) return;
       if (img.src !== url) img.src = url;
     });
   }

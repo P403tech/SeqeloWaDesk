@@ -22,7 +22,7 @@ window.toast = function (message, type = 'success') {
     const palette = {
         success:   { bg: `linear-gradient(135deg, ${themeColor('wa-deep')}, ${themeColor('wa-teal')})`, color: '#FBFAF6' },
         error:     { bg: 'linear-gradient(135deg, #E87A5D, #C25744)', color: '#FBFAF6' },
-        info:      { bg: 'linear-gradient(135deg, #13478A, #0F8556)', color: '#FBFAF6' },
+        info:      { bg: 'linear-gradient(135deg, #13478A, #037D66)', color: '#FBFAF6' },
         // Instagram-branded toast — pink→orange gradient for IG module pages.
         instagram: { bg: 'linear-gradient(135deg, #833AB4 0%, #E1306C 55%, #F77737 100%)', color: '#FBFAF6' },
     };

@@ -139,6 +139,7 @@ if (! function_exists('seqelo_is_superseded_theme_hex')) {
         return in_array($hex, [
             '#0B4A42', '#0D8A78', '#9AC055', '#F4F8EA', '#E6EFD4',
             '#F7F9F2', '#EEF3E2', '#075E54', '#128C7E', '#25D366',
+            '#34D87A', '#0F8556', '#7BFFB1', '#5BFFA8', '#128C4B',
         ], true);
     }
 }
@@ -345,7 +346,13 @@ if (! function_exists('auth_cfg')) {
         } catch (\Throwable $e) {
             return $default;
         }
-        return ($val === null || $val === '') ? $default : $val;
+        if ($val === null || $val === '') {
+            return $default;
+        }
+        if ($key === 'accent' && is_string($val) && seqelo_is_superseded_theme_hex($val)) {
+            return $default;
+        }
+        return $val;
     }
 }
 

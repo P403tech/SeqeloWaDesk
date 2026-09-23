@@ -262,9 +262,9 @@
                 <!-- BRANDING -->
                 <div data-pane="branding" class="space-y-5 hidden">
                     @php
-                        $bp = old('brand_primary', $workspace?->brand_primary ?? '#075E54');
-                        $ba = old('brand_accent', $workspace?->brand_accent ?? '#25D366');
-                        $bg = old('brand_background', $workspace?->brand_background ?? '#FBFAF6');
+                        $bp = old('brand_primary', $workspace?->brand_primary ?? '#1B4B3D');
+                        $ba = old('brand_accent', $workspace?->brand_accent ?? '#00A68B');
+                        $bg = old('brand_background', $workspace?->brand_background ?? '#F4F6FA');
                     @endphp
                     <form method="POST" action="{{ route('user.settings.branding') }}"
                         enctype="multipart/form-data" class="space-y-5">

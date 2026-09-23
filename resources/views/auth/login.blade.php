@@ -45,7 +45,7 @@
                         </div>
                     </div>
 
-                    @php $__accent = auth_cfg('login', 'accent', '#25D366'); @endphp
+                    @php $__accent = auth_cfg('login', 'accent', '#037D66'); @endphp
                     <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-paper-0/70 mb-3" data-fc="login.eyebrow">{{ auth_cfg('login', 'eyebrow', __('Operator console for WhatsApp')) }}</div>
                     <h1 class="font-serif text-[42px] leading-[1.05] tracking-[-0.01em]"><span data-fc="login.heading">{{ auth_cfg('login', 'heading', __('One place for every')) }}</span>
                         <span class="italic" style="color: {{ $__accent }}" data-fc="login.heading_accent">{{ auth_cfg('login', 'heading_accent', __('conversation')) }}</span>.</h1>

@@ -17,15 +17,15 @@
  */
 
 const FALLBACKS = {
-    'wa-deep': '#0B4A42',
-    'wa-teal': '#0D8A78',
-    'wa-green': '#9AC055',
-    'wa-mint': '#F4F8EA',
-    'wa-bubble': '#E6EFD4',
+    'wa-deep': '#1B4B3D',
+    'wa-teal': '#037D66',
+    'wa-green': '#00A68B',
+    'wa-mint': '#EFF9F6',
+    'wa-bubble': '#E3F3EE',
     'paper-0': '#FFFFFF',
-    'paper-50': '#F7F9F2',
-    'paper-100': '#EEF3E2',
-    'paper-200': '#E6EFD4',
+    'paper-50': '#F4F6FA',
+    'paper-100': '#EEF0F4',
+    'paper-200': '#E5E7EB',
     'ink-500': '#5A5A5A',
     'ink-700': '#323A3D',
     'ink-900': '#111111',

@@ -14,7 +14,6 @@
     $wsInitials = \Illuminate\Support\Str::of($wsName)->trim()->limit(2, '')->upper()->__toString();
     $planLabel = $ws?->billingPackage()?->pname ?: __('Free');
     $walletMoney = \App\Support\FormatSettings::display((int) round(((int) ($u->wallet_credits ?? 0)) * \App\Services\MessageCreditRate::minorPerCredit()) / 100);
-    $logoUrl = \App\Support\Brand::markUrl();
     $allWorkspaces = $u ? $u->workspaces()->orderByDesc('last_active_at')->get() : collect();
     $canCreateWorkspace = $u ? $u->canCreateWorkspace() : false;
 
@@ -113,7 +112,7 @@
     :root[data-theme="bright"] .user-rail-root { background:#EFF9F6; }
 </style>
 
-<div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" style="{{ $styleVars }}">
+<div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" data-user-rail style="{{ $styleVars }}">
     <div class="absolute inset-0 rail-dot opacity-70 pointer-events-none"></div>
 
     {{-- Mobile close (X) --}}
@@ -124,13 +123,7 @@
 
     {{-- Brand --}}
     <a href="{{ url('/dashboard') }}" class="relative px-5 h-[64px] flex items-center gap-2.5 shrink-0">
-        @if ($logoUrl)
-            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-contain shrink-0">
-        @else
-            <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-wa-deep text-paper-0">
-                <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Z"/></svg>
-            </span>
-        @endif
+        <x-brand-mark />
         <div class="leading-none min-w-0">
             <div class="text-[16px] font-semibold rail-fg truncate">{{ brand_name() }}</div>
         </div>
@@ -140,7 +133,7 @@
     <div class="relative px-3.5 pt-1 shrink-0" data-ws-wrap>
         <button type="button" data-ws-toggle
             class="w-full rounded-xl px-3 py-2.5 flex items-center gap-2.5 rail-panel">
-            <span class="w-7 h-7 rounded-lg bg-gradient-to-br from-accent-coral to-accent-amber text-paper-0 text-[11px] font-bold grid place-items-center">{{ $wsInitials }}</span>
+            <span class="w-7 h-7 rounded-lg bg-gradient-to-br from-wa-teal to-wa-deep text-paper-0 text-[11px] font-bold grid place-items-center">{{ $wsInitials }}</span>
             <div class="text-left flex-1 min-w-0">
                 <div class="text-[12.5px] font-semibold rail-fg truncate">{{ $wsName }}</div>
                 <div class="text-[9px] font-mono rail-fgm truncate">{{ $planLabel }}</div>
@@ -235,7 +228,7 @@
             </div>
             <div class="text-[22px] font-semibold leading-none mt-1.5 rail-fg">{{ $walletMoney }}</div>
             <a href="{{ url('/account?tab=wallet') }}"
-                class="mt-2.5 block text-center w-full text-ink-950 rounded-full text-[11.5px] font-semibold py-1.5 transition hover:opacity-90" style="background:var(--racc)">{{ __('Top up') }} →</a>
+                class="mt-2.5 block text-center w-full text-paper-0 rounded-full text-[11.5px] font-semibold py-1.5 transition hover:opacity-90" style="background:#037D66;color:#fff">{{ __('Top up') }} →</a>
         </div>
     </div>
 </div>

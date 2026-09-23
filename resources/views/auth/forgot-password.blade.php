@@ -40,7 +40,7 @@
                         </div>
                     </div>
 
-                    @php $__accent = auth_cfg('forgot', 'accent', '#25D366'); @endphp
+                    @php $__accent = auth_cfg('forgot', 'accent', '#037D66'); @endphp
                     <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-paper-0/70 mb-3" data-fc="forgot.eyebrow">{{ auth_cfg('forgot', 'eyebrow', __('Account recovery')) }}</div>
                     <h1 class="font-serif text-[42px] leading-[1.05] tracking-[-0.01em]"><span data-fc="forgot.heading">{{ auth_cfg('forgot', 'heading', __('Get back in,')) }}</span>
                         <span class="italic" style="color: {{ $__accent }}" data-fc="forgot.heading_accent">{{ auth_cfg('forgot', 'heading_accent', __('fast')) }}</span>.</h1>
