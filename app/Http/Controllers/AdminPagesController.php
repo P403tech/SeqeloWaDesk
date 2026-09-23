@@ -2428,26 +2428,31 @@ class AdminPagesController extends Controller
             \App\Models\SystemSetting::set($key, $value, $type, 'General settings: ' . $key);
         }
 
-        // Favicon upload — single shared file.
+        // Brand assets are the git-tracked Seqelo bag in public/brand.
+        // Do not store uploads in storage/ — those files vanish on Railway
+        // rebuilds while MySQL keeps a dead path. Overwrite the shipped PNG
+        // on this instance only; the next deploy restores the repo file.
+        $destDir = public_path('brand');
         if ($request->hasFile('favicon')) {
-            $path = $request->file('favicon')->store('brand', 'public');
-            \App\Models\SystemSetting::set('brand.favicon', $path, 'string', 'Brand favicon (shared across themes)');
+            $request->file('favicon')->move($destDir, 'seqelo-mark-upload-favicon.png');
+            @copy($destDir . '/seqelo-mark-upload-favicon.png', $destDir . '/seqelo-mark.png');
         }
-
-        // Per-theme logo uploads. `logos[<theme-id>]` from the form.
         if ($request->hasFile('logos')) {
             foreach ($request->file('logos') as $themeId => $file) {
-                $themeId = preg_replace('/[^a-z0-9_-]/i', '', (string) $themeId);
-                if ($themeId === '' || !$file) continue;
-                $path = $file->store('brand', 'public');
-                \App\Models\SystemSetting::set(
-                    'brand.logo.' . $themeId,
-                    $path,
-                    'string',
-                    'Logo for theme: ' . $themeId
-                );
+                if (!$file) {
+                    continue;
+                }
+                $file->move($destDir, 'seqelo-mark.png');
+                break;
             }
         }
+        foreach (['seqelo-icon.png', 'seqelo-symbol.png', 'favicon.png', 'favicon-32.png'] as $copy) {
+            $src = $destDir . '/seqelo-mark.png';
+            if (is_file($src)) {
+                @copy($src, $destDir . '/' . $copy);
+            }
+        }
+        \App\Support\Brand::forgetEphemeralUploads();
 
         \App\Support\Audit::log('admin.settings.general_updated', [
             'layer' => 'platform',

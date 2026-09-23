@@ -22,6 +22,9 @@ class Brand
 {
     public const DEFAULT_THEME = 'paper';
 
+    /** Git-tracked transparent bag — survives Railway rebuilds. */
+    public const SHIPPED_MARK = 'brand/seqelo-mark.png';
+
     /** Every theme the UI ships (incl. doodle, which the DB column can't store). */
     public const THEMES = ['paper', 'bright', 'dark', 'doodle'];
 
@@ -64,18 +67,52 @@ class Brand
         return $v !== '' ? $v : 'WaDesk';
     }
 
+    public static function shippedMarkUrl(): string
+    {
+        return asset(self::SHIPPED_MARK);
+    }
+
     public static function faviconUrl(): ?string
     {
-        return asset('brand/seqelo-mark.png');
+        return self::shippedMarkUrl();
     }
 
     /**
-     * Square chrome (sidebars). Shipped transparent bag-S — not an uploaded
-     * file that may be missing or have a white background.
+     * Square chrome (sidebars). Always the git-tracked PNG so a Railway
+     * rebuild cannot lose the logo.
      */
     public static function markUrl(): string
     {
-        return asset('brand/seqelo-mark.png');
+        return self::shippedMarkUrl();
+    }
+
+    /**
+     * Drop DB paths that pointed at ephemeral storage/brand uploads.
+     * The Seqelo mark lives in public/brand (shipped with the app).
+     */
+    public static function forgetEphemeralUploads(): int
+    {
+        $keys = [
+            'brand.favicon',
+            'brand.logo.paper',
+            'brand.logo.bright',
+            'brand.logo.dark',
+            'brand.logo.doodle',
+        ];
+        $n = 0;
+        try {
+            foreach ($keys as $key) {
+                $row = SystemSetting::query()->where('key', $key)->first();
+                if ($row) {
+                    $row->delete();
+                    $n++;
+                }
+                Cache::forget(SystemSetting::CACHE_PREFIX . $key);
+            }
+        } catch (\Throwable $e) {
+            return $n;
+        }
+        return $n;
     }
 
     /**
@@ -125,29 +162,23 @@ class Brand
     public static function invoiceLogoUrl(): ?string
     {
         $path = (string) SystemSetting::get('billing.logo', '');
-        if ($path !== '') return self::resolveUrl($path);
-        return self::logoUrl(self::DEFAULT_THEME);
+        if ($path !== '') {
+            $url = self::resolveUrl($path);
+            if ($url) {
+                return $url;
+            }
+        }
+        return self::shippedMarkUrl();
     }
 
     /**
-     * Resolve a logo URL for a given theme.
-     *
-     *   Brand::logoUrl('dark')  → uploaded dark-theme logo, OR paper, OR null
-     *   Brand::logoUrl()        → defaults to 'paper'
+     * Resolve a logo URL for a given theme. The Seqelo bag is shipped in
+     * public/brand so updates never wipe it. Stale storage/ paths in
+     * system_settings are ignored.
      */
     public static function logoUrl(?string $theme = null): ?string
     {
-        $theme = $theme ?: self::DEFAULT_THEME;
-        $path = (string) SystemSetting::get('brand.logo.' . $theme, '');
-        if ($path === '' && $theme !== self::DEFAULT_THEME) {
-            // Fall back to the default theme's logo.
-            $path = (string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, '');
-        }
-        $url = self::resolveUrl($path);
-        if (!$url && $theme !== self::DEFAULT_THEME) {
-            $url = self::resolveUrl((string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, ''));
-        }
-        return $url ?: asset('brand/seqelo-mark.png');
+        return self::shippedMarkUrl();
     }
 
     /** True if at least one logo has been uploaded. Used to decide

@@ -26,6 +26,7 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
   done
   php artisan migrate:status --no-ansi || true
   php artisan migrate --force --no-interaction
+  php artisan seqelo:use-shipped-brand --no-interaction || true
   php -r '
     require "vendor/autoload.php";
     $app = require "bootstrap/app.php";

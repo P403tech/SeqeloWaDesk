@@ -214,7 +214,7 @@
                                 {{ __('brand-assets') }}</div>
                             <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Brand assets') }}</h2>
                             <p class="text-[12px] text-ink-600 mt-1">
-                                {{ __('Favicon is shared across every theme. Logo is per-theme — upload an inverted/light variant for dark mode, a doodle-friendly variant for the doodle theme, etc.') }}
+                                {{ __('The Seqelo bag logo is shipped in the app (public/brand) so it survives updates. Do not rely on database uploads — those files disappear on deploy.') }}
                             </p>
                         </div>
 
@@ -230,17 +230,12 @@
                                 <div>
                                     <div class="font-semibold text-[13px]">{{ __('Favicon') }}</div>
                                     <p class="text-[11.5px] text-ink-600 mt-0.5">
-                                        {{ __('Shown in browser tabs + bookmarks. Recommended') }} <span
-                                            class="font-mono">35×35 px</span>. PNG or ICO.</p>
+                                        {{ __('Shown in browser tabs + bookmarks. The default is the shipped Seqelo bag (transparent PNG).') }}</p>
                                     <input type="file" name="favicon" data-preview-target="favicon-preview"
                                         data-preview-class="max-h-16 max-w-16 object-contain"
                                         accept=".png,.ico,.jpg,.jpeg,.svg,.webp"
                                         class="mt-2 block w-full text-[12px] file:mr-3 file:px-3 file:py-1.5 file:rounded-full file:border-0 file:bg-wa-deep file:text-paper-0 file:text-[11.5px] file:font-medium file:cursor-pointer">
-                                    @if ($settings['brand_favicon'])
-                                        <div class="text-[10.5px] font-mono text-ink-500 mt-1">Current:
-                                            {{ basename($settings['brand_favicon']) }} · uploading a new file replaces
-                                            it</div>
-                                    @endif
+                                    <div class="text-[10.5px] font-mono text-ink-500 mt-1">{{ __('Current: seqelo-mark.png (shipped with the app)') }}</div>
                                 </div>
                             </div>
 
@@ -248,7 +243,7 @@
                             <div>
                                 <div class="font-semibold text-[13px] mb-1">{{ __('Logo per theme') }}</div>
                                 <p class="text-[11.5px] text-ink-600 mb-3">
-                                    {{ __('Each theme uses its own logo. Falls back to "Paper" if no theme-specific logo is uploaded. Missing files after a deploy also fall back to the Seqelo logo — re-upload to restore a custom file.') }}
+                                    {{ __('All themes use the same shipped Seqelo bag. It is stored in the app, not in the database, so it will not vanish after an update.') }}
                                 </p>
 
                                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
