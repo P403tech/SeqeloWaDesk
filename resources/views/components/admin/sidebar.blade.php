@@ -486,19 +486,16 @@ foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
 <div id="admin-sidebar-root" class="bg-wa-mint border-r border-[#d7eee6] flex flex-col sticky top-0 h-screen">
     <div class="admin-brand-header h-16 px-5 flex items-center justify-between border-b border-paper-200 shrink-0">
         @php
-            // Resolve the logo for the user's currently-selected theme.
-// Falls back through paper → null. When null we render the
-// legacy SVG+wordmark so nothing breaks if no logo's uploaded.
-            $brandTheme = \App\Support\Brand::activeTheme();
-            $brandLogo = \App\Support\Brand::logoUrl($brandTheme);
+            // Square S-mark only. The wide wordmark belongs in headers, not this 36×36 slot.
+            $brandLogo = \App\Support\Brand::markUrl();
             $brandName = (string) brand_name();
         @endphp
         <a href="{{ url('/dashboard') }}" class="js-sb-collapse-hide flex items-center gap-2.5">
             @if ($brandLogo)
-                {{-- data-brand-logo lets wadesk.js setTheme() swap the src
- to the matching per-theme logo at theme-change time. --}}
-                    <img src="{{ $brandLogo }}" alt="{{ $brandName }}" data-brand-logo
-                    class="h-9 w-9 rounded-[10px] object-contain">
+                {{-- Square mark only. data-brand-logo is omitted so theme
+                     switcher cannot swap in the wide wordmark (crops to "Seqe"). --}}
+                    <img src="{{ $brandLogo }}" alt="{{ $brandName }}"
+                    class="h-9 w-9 rounded-[10px] object-contain shrink-0">
             @else
                 <span
                     class="relative inline-flex items-center justify-center w-9 h-9 rounded-lg bg-wa-deep text-paper-0">

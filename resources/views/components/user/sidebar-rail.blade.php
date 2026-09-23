@@ -14,7 +14,7 @@
     $wsInitials = \Illuminate\Support\Str::of($wsName)->trim()->limit(2, '')->upper()->__toString();
     $planLabel = $ws?->billingPackage()?->pname ?: __('Free');
     $walletMoney = \App\Support\FormatSettings::display((int) round(((int) ($u->wallet_credits ?? 0)) * \App\Services\MessageCreditRate::minorPerCredit()) / 100);
-    $logoUrl = \App\Support\Brand::logoUrl(\App\Support\Brand::activeTheme());
+    $logoUrl = \App\Support\Brand::markUrl();
     $allWorkspaces = $u ? $u->workspaces()->orderByDesc('last_active_at')->get() : collect();
     $canCreateWorkspace = $u ? $u->canCreateWorkspace() : false;
 
@@ -125,7 +125,7 @@
     {{-- Brand --}}
     <a href="{{ url('/dashboard') }}" class="relative px-5 h-[64px] flex items-center gap-2.5 shrink-0">
         @if ($logoUrl)
-            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-contain">
+            <img src="{{ $logoUrl }}" alt="{{ brand_name() }}" class="h-9 w-9 rounded-[10px] object-contain shrink-0">
         @else
             <span class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-wa-deep text-paper-0">
                 <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Z"/></svg>

@@ -71,6 +71,17 @@ class Brand
     }
 
     /**
+     * Square mark for 36×36 chrome (admin/user sidebars). Never returns the
+     * wide wordmark — that was being cropped to "Seqe" inside a square box.
+     * Prefers an uploaded favicon; otherwise the shipped Seqelo S-mark.
+     */
+    public static function markUrl(): string
+    {
+        $url = self::resolveUrl((string) SystemSetting::get('brand.favicon', ''));
+        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
+    }
+
+    /**
      * Company / billing identity printed on invoices. Configured by the
      * admin at /admin/checkout-settings. The company name falls back to
      * the platform app name so an invoice is never blank-headed.
@@ -121,7 +132,7 @@ class Brand
             $path = (string) SystemSetting::get('brand.logo.' . self::DEFAULT_THEME, '');
         }
         $url = self::resolveUrl($path);
-        return $url ?: asset('brand/seqelo-wordmark-mark.svg');
+        return $url ?: asset('brand/seqelo-logo.svg');
     }
 
     /** True if at least one logo has been uploaded. Used to decide
