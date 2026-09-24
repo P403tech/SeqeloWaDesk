@@ -44,6 +44,9 @@ export default function init() {
         <circle cx="8"  cy="19" r="3" fill="#FF7A59"/>
         <circle cx="24" cy="19" r="3" fill="#FF7A59"/>`;
 
+      const SALESFORCE_SVG = `
+        <path fill="#00A1E0" d="M9.2 20.2c-1.2-2.4.1-5.1 2.7-5.8.5-2.3 2.6-4 5-4 1.4 0 2.7.5 3.6 1.4 2.2-.9 4.6.1 5.4 2.3.2 0 .4.1.6.1 2 .4 3.4 2.4 3 4.4-.4 1.8-2 3-3.8 3H11.5c-.9 0-1.8-.5-2.3-1.4z"/>`;
+
       // Google Calendar — blue calendar tile with 31
       const GCAL_SVG = `
         <rect x="6" y="9" width="20" height="17" rx="2" fill="#4285F4"/>
@@ -94,6 +97,7 @@ export default function init() {
         { id:'wa-store',    name:'WhatsApp Store',   cat:'ecom',         desc:'A full storefront inside WhatsApp — browse, add to cart, and pay without leaving the chat.', tile:brandTile('#E0F4F1', WA_STORE_SVG),    connected:false, official:false, multi:true },
         { id:'gsheets',     name:'Google Sheets',    cat:'productivity', desc:'Edit your shop catalog in a Google Sheet — add a row, tweak a price, click Sync. Every change goes live on your storefront.', tile:brandTile('#E8F5E9', GSHEETS_SVG),     connected: !!window.GSHEETS_CONNECTED,  official:false },
         { id:'hubspot',     name:'HubSpot CRM',      cat:'crm',          desc:'Push contacts and deals into HubSpot whenever a ' + APP + ' conversation triggers an event — new chat, order placed, SKU of interest.', tile:brandTile('#FFE4D6', HUBSPOT_SVG),     connected: !!window.HUBSPOT_CONNECTED,  official:true },
+        { id:'salesforce',  name:'Salesforce CRM',   cat:'crm',          desc:'Connect your Salesforce org. Import contacts and send WhatsApp (text, image, video, docs) will follow — connection is live first.', tile:brandTile('#D6E4F5', SALESFORCE_SVG), connected: !!window.SALESFORCE_CONNECTED, official:true },
         { id:'gcal',        name:'Google Calendar',  cat:'productivity', desc:'Let customers book appointments inside WhatsApp. ' + APP + ' reads your availability and writes confirmed bookings straight to your calendar.', tile:brandTile('#E8F0FE', GCAL_SVG),        connected: !!window.GCAL_CONNECTED,     official:true },
         { id:'slack',       name:'Slack',            cat:'productivity', desc:'Send a WhatsApp message straight from Slack — type /wa send <name>: <message> and ' + APP + ' delivers it to that contact.', tile:brandTile('#F3ECFA', SLACK_SVG),  connected: !!window.SLACK_CONNECTED,  official:true },
         { id:'trello',      name:'Trello',           cat:'productivity', desc:'When a Trello card is assigned or changes, the right person gets a WhatsApp notification automatically.', tile:brandTile('#E8F0FE', TRELLO_SVG), connected: !!window.TRELLO_CONNECTED, official:true },
@@ -129,6 +133,7 @@ export default function init() {
                            : a.id === 'tiktok-shop' ? '/tiktok-shop'
                            : a.id === 'woocommerce' ? '/woocommerce'
                            : a.id === 'hubspot'     ? '/hubspot'
+                           : a.id === 'salesforce'  ? '/salesforce'
                            : a.id === 'slack'       ? '/slack'
                            : a.id === 'trello'      ? '/trello'
                            : a.id === 'gcal'        ? '/appointments'
@@ -157,6 +162,7 @@ export default function init() {
                           : a.id === 'shopify'    ? '/shopify'
                           : a.id === 'woocommerce'? '/woocommerce'
                           : a.id === 'hubspot'    ? '/hubspot'
+                          : a.id === 'salesforce' ? '/salesforce'
                           : a.id === 'slack'      ? '/slack'
                           : a.id === 'trello'     ? '/trello'
                           : a.id === 'zapier'     ? '/webhooks'

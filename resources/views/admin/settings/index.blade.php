@@ -516,6 +516,24 @@
                         class="text-wa-deep group-hover:underline">{{ __('Open') }}</span></div>
             </a>
 
+            <a href="{{ url('/admin/settings/salesforce') }}"
+                class="group bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card hover:border-wa-deep transition">
+                <div class="flex items-start justify-between gap-3">
+                    <span class="w-11 h-11 rounded-2xl bg-[#D6E4F5] text-[#00A1E0] grid place-items-center"><svg
+                            viewBox="0 0 16 16" class="w-5 h-5" fill="currentColor">
+                            <path d="M4.2 9.6c-.6-1.3.1-2.7 1.4-3.1.3-1.2 1.4-2.1 2.7-2.1.7 0 1.4.3 1.9.7 1.1-.5 2.4.1 2.8 1.2h.3c1.1.2 1.8 1.3 1.6 2.4-.2.9-1.1 1.6-2 1.6H5.5c-.5 0-1-.3-1.3-.7z"/>
+                        </svg></span>
+                    <span class="font-mono text-[10px] text-ink-500">15b</span>
+                </div>
+                <h2 class="font-serif text-[24px] leading-tight mt-4">{{ __('Salesforce CRM settings') }}</h2>
+                <p class="text-[12.5px] text-ink-600 mt-2">
+                    {{ __('Connected App: Consumer Key/secret, scopes, callback URL. Workspaces then OAuth-connect their Salesforce org.') }}
+                </p>
+                <div class="mt-4 flex items-center justify-between text-[11px] font-mono text-ink-500">
+                    <span>{{ __('OAuth app / scopes') }}</span><span
+                        class="text-wa-deep group-hover:underline">{{ __('Open') }}</span></div>
+            </a>
+
             {{-- ─── Google integration — one OAuth client powers Calendar/Meet/Sheets/Docs/Forms ─── --}}
             <a href="{{ url('/admin/settings/google-calendar') }}"
                 class="group bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card hover:border-wa-deep transition">

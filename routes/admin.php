@@ -514,6 +514,8 @@ Route::prefix('settings')->name('settings.')->group(function () {
     Route::post('/woocommerce',    [AdminPagesController::class, 'settingWoocommerceUpdate'])->name('woocommerce.update');
     Route::get('/hubspot',         [AdminPagesController::class, 'settingHubspot'])->name('hubspot');
     Route::post('/hubspot',        [AdminPagesController::class, 'settingHubspotUpdate'])->name('hubspot.update');
+    Route::get('/salesforce',      [AdminPagesController::class, 'settingSalesforce'])->name('salesforce');
+    Route::post('/salesforce',     [AdminPagesController::class, 'settingSalesforceUpdate'])->name('salesforce.update');
     Route::get('/slack',           [AdminPagesController::class, 'settingSlack'])->name('slack');
     Route::post('/slack',          [AdminPagesController::class, 'settingSlackUpdate'])->name('slack.update');
     // Mobile App Push (FCM) — paste the Firebase service-account JSON + project id.

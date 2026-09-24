@@ -170,6 +170,7 @@ const PAGE_INITIALIZERS = {
     'admin-settings-seo':         () => import('./charts/admin-settings-seo.js').then((m) => m.default()),
     'admin-settings-shopify':     () => import('./charts/admin-settings-shopify.js').then((m) => m.default()),
     'admin-settings-hubspot':     () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
+    'admin-settings-salesforce':  () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
     'admin-settings-social-login': () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
     'admin-languages-index':      () => import('./charts/packages-index.js').then((m) => m.default()),
     'admin-payment-gateways-index': () => import('./charts/admin-payment-gateways-index.js').then((m) => m.default()),

@@ -77,6 +77,8 @@ return [
     'woocommerce/*'     => 'integration_woocommerce',
     'hubspot'           => 'integration_hubspot',
     'hubspot/*'         => 'integration_hubspot',
+    'salesforce'        => 'integration_salesforce',
+    'salesforce/*'      => 'integration_salesforce',
     'google-account'    => 'integration_google_calendar',
     'google-account/*'  => 'integration_google_calendar',
 ];

@@ -202,6 +202,11 @@ if ($wsId = auth()->user()?->current_workspace_id) {
                 : false);
         window.HUBSPOT_ENABLED = @json((bool) \App\Models\SystemSetting::get('hubspot_enabled', false));
 
+        window.SALESFORCE_CONNECTED = @json(auth()->user()?->current_workspace_id
+                ? \App\Models\SalesforceIntegration::where('workspace_id', auth()->user()->current_workspace_id)->where('status', 'active')->exists()
+                : false);
+        window.SALESFORCE_ENABLED = @json((bool) \App\Models\SystemSetting::get('salesforce_enabled', false));
+
         // Google Calendar connection state — true when the current workspace
         // has a valid access_token + chosen calendar_id stashed in
         // appointment_settings JSON. Read live so this stays accurate after

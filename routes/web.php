@@ -468,6 +468,10 @@ Route::middleware('auth')->group(function () {
         [\App\Http\Controllers\HubspotController::class, 'oauthCallback'])
         ->name('hubspot.oauth.callback');
 
+    Route::get('/salesforce/oauth/callback',
+        [\App\Http\Controllers\SalesforceController::class, 'oauthCallback'])
+        ->name('salesforce.oauth.callback');
+
     // Google Calendar OAuth callback — same exemption rationale as
     // Shopify/HubSpot: anyone with workspace context can complete the
     // OAuth round-trip; the controller validates state + workspace id
@@ -1126,6 +1130,11 @@ Route::middleware('auth')->group(function () {
             Route::get('/hubspot',                  [$hs, 'index'])->name('hubspot');
             Route::post('/hubspot/connect',         [$hs, 'startOAuth'])->name('hubspot.connect');
             Route::post('/hubspot/{id}/disconnect', [$hs, 'disconnect'])->whereNumber('id')->name('hubspot.disconnect');
+
+            $sf = \App\Http\Controllers\SalesforceController::class;
+            Route::get('/salesforce',                  [$sf, 'index'])->name('salesforce');
+            Route::post('/salesforce/connect',         [$sf, 'startOAuth'])->name('salesforce.connect');
+            Route::post('/salesforce/{id}/disconnect', [$sf, 'disconnect'])->whereNumber('id')->name('salesforce.disconnect');
 
             // Slack → WhatsApp: a `/wa send <name>: <msg>` slash command in
             // Slack sends a WhatsApp message via the workspace's device.

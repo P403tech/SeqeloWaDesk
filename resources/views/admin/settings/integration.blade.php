@@ -131,6 +131,10 @@
                                 class="rounded-2xl border border-paper-200 p-4 hover:border-wa-deep transition flex items-center justify-between"><span
                                     class="text-[13px] font-semibold">{{ __('Open HubSpot CRM configuration') }}</span><span
                                     class="font-mono text-[11px] text-wa-deep">{{ __('Open') }}</span></a>
+                            <a href="{{ url('/admin/settings/salesforce') }}"
+                                class="rounded-2xl border border-paper-200 p-4 hover:border-wa-deep transition flex items-center justify-between"><span
+                                    class="text-[13px] font-semibold">{{ __('Open Salesforce CRM configuration') }}</span><span
+                                    class="font-mono text-[11px] text-wa-deep">{{ __('Open') }}</span></a>
                             <a href="{{ url('/admin/settings/google-calendar') }}"
                                 class="rounded-2xl border border-paper-200 p-4 hover:border-wa-deep transition flex items-center justify-between"><span
                                     class="text-[13px] font-semibold">{{ __('Open Google integration configuration') }}</span><span

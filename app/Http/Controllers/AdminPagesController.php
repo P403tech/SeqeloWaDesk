@@ -156,7 +156,7 @@ class AdminPagesController extends Controller
         'access_drip_campaigns', 'access_ctwa', 'access_analytics', 'remove_branding',
         'access_instagram',
         // Integrations.
-        'integration_shopify', 'integration_woocommerce', 'integration_hubspot',
+        'integration_shopify', 'integration_woocommerce', 'integration_hubspot', 'integration_salesforce',
         'integration_google_calendar', 'integration_google_sheets',
         'integration_slack', 'integration_trello',
         // Granular feature gates added in 2026_05_17.
@@ -930,6 +930,7 @@ class AdminPagesController extends Controller
             ['label' => 'Shopify',             'count' => $countDistinctWs('shopify_integrations')],
             ['label' => 'WooCommerce',         'count' => $countDistinctWs('woocommerce_integrations')],
             ['label' => 'HubSpot CRM',         'count' => $countDistinctWs('hubspot_integrations')],
+            ['label' => 'Salesforce CRM',      'count' => $countDistinctWs('salesforce_integrations')],
         ];
         foreach ($featureAdoption as &$f) {
             $f['pct'] = $subsTotal > 0 ? (int) round($f['count'] / $payingWs * 100) : 0;
@@ -2959,6 +2960,50 @@ class AdminPagesController extends Controller
         ]]);
 
         return back()->with('success', 'HubSpot settings saved.');
+    }
+
+    public function settingSalesforce(): View
+    {
+        return view('admin.settings.salesforce', [
+            'enabled'      => (bool) \App\Models\SystemSetting::get('salesforce_enabled', false),
+            'clientId'     => (string) \App\Models\SystemSetting::get('salesforce_client_id', ''),
+            'hasSecret'    => \App\Models\SystemSetting::get('salesforce_client_secret', '') !== '',
+            'scopes'       => (string) \App\Models\SystemSetting::get('salesforce_scopes', \App\Services\Salesforce\SalesforceService::DEFAULT_SCOPES),
+            'redirectUri'  => (string) (\App\Models\SystemSetting::get('salesforce_redirect_uri') ?: url('/salesforce/oauth/callback')),
+            'loginHost'    => (string) \App\Models\SystemSetting::get('salesforce_login_host', 'login.salesforce.com'),
+            'integrationsCount' => \App\Models\SalesforceIntegration::count(),
+            'activeCount'       => \App\Models\SalesforceIntegration::where('status', 'active')->count(),
+            'logsCount'         => \App\Models\SalesforceIntegrationLog::count(),
+        ]);
+    }
+
+    public function settingSalesforceUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $request->validate([
+            'salesforce_enabled'       => 'nullable|in:0,1',
+            'salesforce_client_id'     => 'nullable|string|max:255',
+            'salesforce_client_secret' => 'nullable|string|max:255',
+            'salesforce_scopes'        => 'nullable|string|max:500',
+            'salesforce_redirect_uri'  => 'nullable|url|max:255',
+            'salesforce_login_host'    => 'nullable|in:login.salesforce.com,test.salesforce.com',
+        ]);
+
+        \App\Models\SystemSetting::set('salesforce_enabled',   $request->boolean('salesforce_enabled'), 'bool', 'Toggle Salesforce OAuth integration');
+        \App\Models\SystemSetting::set('salesforce_client_id', (string) $request->input('salesforce_client_id', ''), 'string', 'Salesforce Connected App consumer key');
+        if ($request->filled('salesforce_client_secret')) {
+            \App\Models\SystemSetting::set('salesforce_client_secret', (string) $request->input('salesforce_client_secret'), 'string', 'Salesforce Connected App consumer secret');
+        }
+        \App\Models\SystemSetting::set('salesforce_scopes',       (string) $request->input('salesforce_scopes', \App\Services\Salesforce\SalesforceService::DEFAULT_SCOPES), 'string', 'Salesforce OAuth scopes');
+        \App\Models\SystemSetting::set('salesforce_redirect_uri', (string) $request->input('salesforce_redirect_uri', ''), 'string', 'Salesforce OAuth redirect URI');
+        \App\Models\SystemSetting::set('salesforce_login_host',   (string) $request->input('salesforce_login_host', 'login.salesforce.com'), 'string', 'Salesforce login host');
+
+        \App\Support\Audit::log('settings.salesforce_update', ['meta' => [
+            'enabled'    => $request->boolean('salesforce_enabled'),
+            'has_id'     => $request->filled('salesforce_client_id'),
+            'set_secret' => $request->filled('salesforce_client_secret'),
+        ]]);
+
+        return back()->with('success', 'Salesforce settings saved.');
     }
 
     // ---- Slack (per-workspace creds; admin holds the platform on/off + setup) ----

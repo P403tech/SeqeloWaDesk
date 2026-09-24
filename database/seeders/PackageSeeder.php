@@ -50,7 +50,7 @@ class PackageSeeder extends Seeder
             'access_wa_storefront', 'access_flows_commerce', 'access_carousel_templates',
             'access_ctwa',
             // integrations
-            'integration_shopify', 'integration_woocommerce', 'integration_hubspot',
+            'integration_shopify', 'integration_woocommerce', 'integration_hubspot', 'integration_salesforce',
             'integration_google_calendar', 'integration_google_sheets',
             // calling
             'access_waba_calling', 'access_call_recording',
@@ -71,7 +71,7 @@ class PackageSeeder extends Seeder
         $starterOn = ['autoreply', 'broadcast', 'schedulemessage', 'template', 'access_keyword_replies'];
         $growthOn  = array_merge($starterOn, [
             'bulkmessage', 'campaign', 'autoflow', 'ads', 'access_drip_campaigns',
-            'integration_shopify', 'integration_woocommerce', 'integration_hubspot',
+            'integration_shopify', 'integration_woocommerce', 'integration_hubspot', 'integration_salesforce',
             'integration_google_calendar', 'integration_google_sheets',
             'access_kanban_view', 'access_internal_notes', 'access_message_reactions',
             'access_edit_messages', 'access_business_hours', 'access_appointment_booking',

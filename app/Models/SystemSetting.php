@@ -39,6 +39,7 @@ class SystemSetting extends Model
         'meta_ads.token',   // admin global Meta Ads (CTWA) fallback access token
         'shopify_client_secret',          // Shopify app secret (OAuth + webhook HMAC)
         'hubspot_client_secret',          // HubSpot OAuth app secret
+        'salesforce_client_secret',       // Salesforce Connected App consumer secret
         'google_calendar_client_secret',  // Google OAuth client secret
         'social_google_client_secret',    // Google social sign-in secret
         'social_facebook_client_secret',  // Facebook social sign-in app secret
