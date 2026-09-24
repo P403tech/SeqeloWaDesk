@@ -16,15 +16,15 @@ use Illuminate\Support\Str;
  *
  * Config lives in a single SystemSetting JSON key `cloud_storage`:
  *   {
- *     enabled: bool, provider: 's3'|'wasabi'|'bunny'|'spaces'|'r2'|'minio',
+     *     enabled: bool, provider: 's3'|'wasabi'|'bunny'|'spaces'|'r2'|'minio'|'railway',
  *     visibility: 'public'|'private', base_path: 'wadesk',
  *     providers: { <provider>: { key, secret(enc), region, bucket, endpoint, url, ... } }
  *   }
  * Secret fields are encrypted at rest via Crypt.
  *
  * Mirrors the SnapNest CloudStorageManager pattern (S3-compatible family only —
- * AWS S3, Wasabi, Bunny.net, DigitalOcean Spaces, Cloudflare R2, MinIO — all of
- * which use Laravel's `s3` driver). That driver is NOT bundled with the
+ * AWS S3, Wasabi, Bunny.net, DigitalOcean Spaces, Cloudflare R2, Railway
+ * Buckets, MinIO — all of which use Laravel's `s3` driver). That driver is NOT bundled with the
  * framework: it needs `league/flysystem-aws-s3-v3` (+ `aws/aws-sdk-php`), which
  * are declared in composer.json. If a "Connection failed: Class …
  * PortableVisibilityConverter not found" appears, run `composer install` — the
@@ -45,6 +45,7 @@ class CloudStorageManager
 
     /** Provider → human label (for the admin UI + logs). */
     public const PROVIDERS = [
+        'railway'=> 'Railway Buckets',
         's3'     => 'Amazon S3',
         'wasabi' => 'Wasabi',
         'bunny'  => 'Bunny.net Storage',
@@ -127,6 +128,10 @@ class CloudStorageManager
         if ($this->provider() === 'bunny') {
             return $this->hasAll($cfg, ['storage_zone', 'access_key']);
         }
+        if ($this->provider() === 'railway') {
+            $cfg = array_merge(self::railwayEnv(), array_filter($cfg, fn ($v) => $v !== null && $v !== ''));
+            return $this->hasAll($cfg, ['key', 'secret', 'bucket']);
+        }
         return $this->hasAll($cfg, ['key', 'secret', 'bucket']);
     }
 
@@ -188,17 +193,27 @@ class CloudStorageManager
     {
         $current = $this->config();
         $provider = (string) ($incoming['provider'] ?? $current['provider'] ?? 's3');
+        if ($provider === 'railway') {
+            $incoming['visibility'] = 'private';
+        }
 
         $providers = $current['providers'] ?? [];
         $existing  = $providers[$provider] ?? [];
         $posted    = $incoming['providers'][$provider] ?? [];
 
         $merged = array_merge($existing, array_filter($posted, fn ($v) => $v !== null));
+        if ($provider === 'railway') {
+            $env = self::railwayEnv();
+            foreach (['key', 'secret', 'bucket', 'region', 'endpoint'] as $k) {
+                if (($merged[$k] ?? '') === '' && ($env[$k] ?? '') !== '') {
+                    $merged[$k] = $k === 'secret' ? Crypt::encryptString($env[$k]) : $env[$k];
+                }
+            }
+        }
         foreach (self::SECRET_FIELDS as $field) {
             $val = $posted[$field] ?? null;
             if ($val === null || $val === '') {
-                // keep the previously-stored (already encrypted) secret
-                $merged[$field] = $existing[$field] ?? '';
+                $merged[$field] = $existing[$field] ?? ($merged[$field] ?? '');
             } else {
                 $merged[$field] = Crypt::encryptString((string) $val);
             }
@@ -232,7 +247,55 @@ class CloudStorageManager
         }
         unset($pc);
         $cfg['providers'] = $providers;
+        $cfg['railway_env'] = self::railwayEnv();
+        $cfg['railway_env_ready'] = self::railwayEnvReady();
         return $cfg;
+    }
+
+    /**
+     * Credentials Railway injects when a Bucket is linked to this service
+     * (Credentials tab / Laravel or AWS SDK variable preset).
+     *
+     * @return array{key:string,secret:string,bucket:string,region:string,endpoint:string}
+     */
+    public static function railwayEnv(): array
+    {
+        $linked = (string) env('RAILWAY_BUCKET_ID', '') !== ''
+            || str_contains((string) env('AWS_ENDPOINT', ''), 'storageapi.dev')
+            || str_contains((string) env('ENDPOINT', ''), 'storageapi.dev');
+
+        $key = (string) (env('AWS_ACCESS_KEY_ID') ?: '');
+        $secret = (string) (env('AWS_SECRET_ACCESS_KEY') ?: '');
+        $bucket = (string) (env('AWS_BUCKET') ?: '');
+        $region = (string) (env('AWS_DEFAULT_REGION') ?: 'auto');
+        $endpoint = (string) (env('AWS_ENDPOINT') ?: '');
+
+        if ($linked) {
+            $key = $key !== '' ? $key : (string) (env('ACCESS_KEY_ID') ?: env('BUCKET_ACCESS_KEY_ID') ?: '');
+            $secret = $secret !== '' ? $secret : (string) (env('SECRET_ACCESS_KEY') ?: env('BUCKET_SECRET_ACCESS_KEY') ?: '');
+            $bucket = $bucket !== '' ? $bucket : (string) (env('BUCKET') ?: env('BUCKET_NAME') ?: '');
+            $region = (string) (env('AWS_DEFAULT_REGION') ?: env('REGION') ?: 'auto');
+            $endpoint = $endpoint !== '' ? $endpoint : (string) (env('ENDPOINT') ?: env('BUCKET_ENDPOINT') ?: '');
+        }
+
+        if ($endpoint === '' && ($key !== '' || $bucket !== '')) {
+            $endpoint = 'https://t3.storageapi.dev';
+        }
+
+        return [
+            'key'      => $key,
+            'secret'   => $secret,
+            'bucket'   => $bucket,
+            'region'   => $region !== '' ? $region : 'auto',
+            'endpoint' => $endpoint,
+        ];
+    }
+
+    public static function railwayEnvReady(): bool
+    {
+        $e = self::railwayEnv();
+
+        return $e['key'] !== '' && $e['secret'] !== '' && $e['bucket'] !== '';
     }
 
     // ---- internals -------------------------------------------------------
@@ -249,6 +312,20 @@ class CloudStorageManager
                 } catch (\Throwable) {
                     // tolerate plaintext (pre-encryption) values
                 }
+            }
+        }
+        if ($this->provider() === 'railway') {
+            $env = self::railwayEnv();
+            foreach (['key', 'secret', 'bucket', 'region', 'endpoint'] as $k) {
+                if (($cfg[$k] ?? '') === '' && ($env[$k] ?? '') !== '') {
+                    $cfg[$k] = $env[$k];
+                }
+            }
+            if (($cfg['endpoint'] ?? '') === '') {
+                $cfg['endpoint'] = 'https://t3.storageapi.dev';
+            }
+            if (($cfg['region'] ?? '') === '') {
+                $cfg['region'] = 'auto';
             }
         }
         return $cfg;
@@ -283,6 +360,9 @@ class CloudStorageManager
         if ($provider === 'wasabi' && empty($endpoint) && !empty($c['region'])) {
             $endpoint = 'https://s3.' . $c['region'] . '.wasabisys.com';
         }
+        if ($provider === 'railway' && empty($endpoint)) {
+            $endpoint = 'https://t3.storageapi.dev';
+        }
 
         if (empty($c['key']) || empty($c['secret']) || empty($c['bucket'])) {
             return null;
@@ -314,7 +394,7 @@ class CloudStorageManager
             'bucket'                  => $bucket,
             'endpoint'                => $endpoint ?: null,
             'url'                     => $c['cdn_url'] ?? $c['url'] ?? null,
-            'use_path_style_endpoint' => filter_var($c['use_path_style_endpoint'] ?? ($provider !== 's3'), FILTER_VALIDATE_BOOLEAN),
+            'use_path_style_endpoint' => filter_var($c['use_path_style_endpoint'] ?? (! in_array($provider, ['s3', 'railway'], true)), FILTER_VALIDATE_BOOLEAN),
         ]);
     }
 

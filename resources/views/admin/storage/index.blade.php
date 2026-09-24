@@ -1,8 +1,17 @@
 <x-layouts.admin :title="__('Storage')" admin-key="storage" page="admin-storage-index">
 
     @php
-        $cur = old('provider', $cfg['provider'] ?? 's3');
+        $railwayEnv = $cfg['railway_env'] ?? [];
+        $railwayReady = (bool) ($cfg['railway_env_ready'] ?? false);
+        $cur = old('provider', ($cfg['provider'] ?? '') !== '' ? $cfg['provider'] : ($railwayReady ? 'railway' : 's3'));
         $pc = $cfg['providers'][$cur] ?? [];
+        if ($cur === 'railway') {
+            foreach (['key', 'bucket', 'region', 'endpoint'] as $rk) {
+                if (($pc[$rk] ?? '') === '' && ($railwayEnv[$rk] ?? '') !== '') {
+                    $pc[$rk] = $railwayEnv[$rk];
+                }
+            }
+        }
         $val = fn($k, $d = '') => old('cfg.' . $k, $pc[$k] ?? $d);
         $hasSecret = !empty($pc['__has_secret']);
         $hasBunnyKey = !empty($pc['__has_access_key']);
@@ -32,7 +41,7 @@
                 <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[40px] leading-[1.0]">
                     {{ __('Cloud') }} <span class="italic text-wa-deep">{{ __('storage') }}</span>.</h1>
                 <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-                    {{ __('Send all client media attachments to your own bucket — Amazon S3, Wasabi, Bunny.net, DigitalOcean Spaces, Cloudflare R2 or any S3-compatible store — instead of the app server. When off, media stays on the local disk, so nothing breaks until you turn it on.') }}
+                    {{ __('Send client media to a Railway Bucket, Amazon S3, Wasabi, Bunny.net, DigitalOcean Spaces, Cloudflare R2 or any S3-compatible store instead of the app server. When off, media stays on the local disk.') }}
                 </p>
             </div>
             <div class="flex items-center gap-2 shrink-0 pb-1">
@@ -100,20 +109,25 @@
                         <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('credentials') }}</div>
                         <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Bucket connection') }}</h2>
                     </div>
+                    @if ($railwayReady)
+                        <div class="mx-5 mb-4 rounded-xl border border-wa-green/40 bg-wa-mint px-4 py-3 text-[12.5px] text-ink-800">
+                            {{ __('Railway Bucket credentials were found on this service (linked variables). Choose Railway Buckets, save, then enable — you can leave the secret blank.') }}
+                        </div>
+                    @endif
                     <div class="p-5 space-y-4">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <label class="space-y-1.5"><span class="text-[11.5px] font-semibold">{{ __('Access key ID') }} <span class="text-accent-coral">*</span></span>
                                 <input name="cfg[key]" value="{{ $val('key') }}" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
-                                <span class="text-[11px] text-ink-500">{{ __('S3 / Wasabi / Spaces / R2 / MinIO.') }}</span></label>
+                                <span class="text-[11px] text-ink-500">{{ __('S3 / Railway / Wasabi / Spaces / R2 / MinIO.') }}</span></label>
                             <label class="space-y-1.5"><span class="text-[11.5px] font-semibold">{{ __('Secret access key') }} <span class="text-accent-coral">*</span></span>
                                 <input name="cfg[secret]" type="password" autocomplete="new-password" placeholder="{{ $hasSecret ? '••• stored, leave blank to keep' : 'paste secret' }}" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
                                 <span class="text-[11px] text-ink-500">{{ __('Hidden after save; re-paste only to rotate.') }}</span></label>
                             <label class="space-y-1.5"><span class="text-[11.5px] font-semibold">{{ __('Region') }}</span>
-                                <input name="cfg[region]" value="{{ $val('region') }}" placeholder="us-east-1" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
+                                <input name="cfg[region]" value="{{ $val('region') }}" placeholder="{{ $cur === 'railway' ? 'auto' : 'us-east-1' }}" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
                             <label class="space-y-1.5"><span class="text-[11.5px] font-semibold">{{ __('Bucket') }} <span class="text-accent-coral">*</span></span>
                                 <input name="cfg[bucket]" value="{{ $val('bucket') }}" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
                             <label class="space-y-1.5 sm:col-span-2"><span class="text-[11.5px] font-semibold">{{ __('Endpoint') }}</span>
-                                <input name="cfg[endpoint]" value="{{ $val('endpoint') }}" placeholder="https://… (required for Spaces / R2 / MinIO; auto for Wasabi & Bunny)" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
+                                <input name="cfg[endpoint]" value="{{ $val('endpoint') }}" placeholder="https://t3.storageapi.dev (Railway) · required for Spaces / R2 / MinIO" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
                             <label class="space-y-1.5 sm:col-span-2"><span class="text-[11.5px] font-semibold">{{ __('Public / CDN URL') }} <span class="text-ink-500 font-normal">· {{ __('optional') }}</span></span>
                                 <input name="cfg[cdn_url]" value="{{ $val('cdn_url') }}" placeholder="https://cdn.example.com" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep"></label>
                             <label class="flex items-center gap-2 sm:col-span-2 text-[12.5px]">
@@ -146,6 +160,10 @@
                     </div>
                     <div class="p-4 text-[12px] text-ink-700">
                         <ul class="space-y-2.5">
+                            <li>
+                                <div class="font-semibold text-[12.5px] text-ink-900">{{ __('Railway Buckets') }}</div>
+                                <p class="text-ink-600 mt-0.5">{{ __('In the Railway project click + New → Bucket. Open this app service → Variables → inject the bucket (Laravel / AWS SDK preset). Then pick Railway Buckets here, Save & test, Enable. Endpoint is usually https://t3.storageapi.dev. Region is auto. Railway buckets are private — keep File visibility on signed URLs.') }}</p>
+                            </li>
                             <li>
                                 <div class="font-semibold text-[12.5px] text-ink-900">{{ __('S3 / Wasabi') }}</div>
                                 <p class="text-ink-600 mt-0.5">{{ __('Access key + secret + region + bucket. Wasabi endpoint is auto from the region.') }}</p>

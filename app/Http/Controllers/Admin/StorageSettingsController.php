@@ -8,8 +8,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 /**
- * /admin/storage — choose & configure a cloud media provider (S3 / Wasabi /
- * Bunny / Spaces / R2 / MinIO). When enabled, all client media uploads route to
+ * /admin/storage — choose & configure a cloud media provider (Railway /
+ * S3 / Wasabi / Bunny / Spaces / R2 / MinIO). When enabled, all client media uploads route to
  * the bucket; when off, everything stays on the local disk.
  */
 class StorageSettingsController extends Controller
