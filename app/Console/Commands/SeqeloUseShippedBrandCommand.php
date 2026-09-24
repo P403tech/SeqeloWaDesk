@@ -13,10 +13,10 @@ class SeqeloUseShippedBrandCommand extends Command
 
     public function handle(): int
     {
-        $n = Brand::forgetEphemeralUploads();
+        $n = Brand::purgePreviousLogos();
         $this->info($n > 0
-            ? "Removed {$n} ephemeral brand path(s). Using public/brand/seqelo-mark.png."
-            : 'Brand already uses the shipped Seqelo mark.');
+            ? "Removed {$n} previous logo record(s)/file(s). Using public/brand/seqelo-mark.png only."
+            : 'No previous logos left. Using the shipped Seqelo mark.');
 
         return self::SUCCESS;
     }

@@ -87,19 +87,25 @@ class Brand
     }
 
     /**
-     * Drop DB paths that pointed at ephemeral storage/brand uploads.
-     * The Seqelo mark lives in public/brand (shipped with the app).
+     * Remove every previous platform/workspace uploaded logo from the DB and
+     * from storage/. The only remaining mark is public/brand/seqelo-mark.png.
      */
     public static function forgetEphemeralUploads(): int
     {
+        return self::purgePreviousLogos();
+    }
+
+    public static function purgePreviousLogos(): int
+    {
+        $n = 0;
         $keys = [
             'brand.favicon',
             'brand.logo.paper',
             'brand.logo.bright',
             'brand.logo.dark',
             'brand.logo.doodle',
+            'billing.logo',
         ];
-        $n = 0;
         try {
             foreach ($keys as $key) {
                 $row = SystemSetting::query()->where('key', $key)->first();
@@ -109,9 +115,47 @@ class Brand
                 }
                 Cache::forget(SystemSetting::CACHE_PREFIX . $key);
             }
+            $extra = SystemSetting::query()
+                ->where('key', 'like', 'brand.logo.%')
+                ->orWhere('key', 'like', 'brand.favicon%')
+                ->get();
+            foreach ($extra as $row) {
+                $row->delete();
+                $n++;
+            }
         } catch (\Throwable $e) {
-            return $n;
+            // table may not exist yet
         }
+
+        try {
+            if (\Illuminate\Support\Facades\Schema::hasTable('workspaces')) {
+                $n += (int) \Illuminate\Support\Facades\DB::table('workspaces')->whereNotNull('brand_logo_path')->update([
+                    'brand_logo_path' => null,
+                ]);
+                if (\Illuminate\Support\Facades\Schema::hasColumn('workspaces', 'brand_favicon_path')) {
+                    \Illuminate\Support\Facades\DB::table('workspaces')->whereNotNull('brand_favicon_path')->update([
+                        'brand_favicon_path' => null,
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            //
+        }
+
+        foreach ([
+            storage_path('app/public/brand'),
+            public_path('storage/brand'),
+        ] as $dir) {
+            if (! is_dir($dir)) {
+                continue;
+            }
+            foreach (glob($dir . '/*') ?: [] as $file) {
+                if (is_file($file) && @unlink($file)) {
+                    $n++;
+                }
+            }
+        }
+
         return $n;
     }
 
@@ -161,13 +205,6 @@ class Brand
      */
     public static function invoiceLogoUrl(): ?string
     {
-        $path = (string) SystemSetting::get('billing.logo', '');
-        if ($path !== '') {
-            $url = self::resolveUrl($path);
-            if ($url) {
-                return $url;
-            }
-        }
         return self::shippedMarkUrl();
     }
 

@@ -262,9 +262,9 @@ $brandName = (string) brand_name();
 // Branding) OVERRIDES the platform logo for that workspace. data-ws-logo tells
 // wadesk.js NOT to swap it on theme change (it's a single image, not per-theme).
 $__bw     = auth()->user()?->currentWorkspace;
-$wsLogo   = $__bw && $__bw->brand_logo_path ? asset('storage/' . $__bw->brand_logo_path) : null;
-$logoSrc  = $wsLogo ?: $brandLogo;
-$logoName = $wsLogo ? ($__bw->name ?: $brandName) : $brandName;
+$wsLogo   = null;
+$logoSrc  = $brandLogo;
+$logoName = $brandName;
         @endphp
         <a class="flex items-center gap-2 mr-2 shrink-0" href="{{ url('/dashboard') }}">
             @if ($logoSrc)
