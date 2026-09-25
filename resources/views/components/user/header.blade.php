@@ -167,7 +167,7 @@ $allNavItems = [
         'icon' => '<rect x="3" y="4" width="10" height="8" rx="2"/><circle cx="6.2" cy="8" r="0.9"/><circle cx="9.8" cy="8" r="0.9"/><path d="M8 2v2"/>', 'sw' => 1.4, 'promo' => true, 'feature' => 'access_ai_agents',
     ],
     [
-        'key' => 'ai-training', 'tier' => 'admin', 'href' => url('/ai-training'), 'label' => __('AI Training'),
+        'key' => 'ai-training', 'tier' => 'admin', 'href' => url('/ai-training'), 'label' => __('AI Agents'),
         'icon' => '<path d="M8 2l5 3v3c0 3-2.2 5-5 6-2.8-1-5-3-5-6V5l5-3Z"/>', 'sw' => 1.5, 'promo' => true, 'feature' => 'access_ai_training',
     ],
     [

@@ -3677,7 +3677,7 @@ class AdminPagesController extends Controller
             'scheduled'       => ['label' => __('Scheduled'),     'zone' => 'more', 'desc' => __('Scheduled messages')],
             'message-history' => ['label' => __('History'),       'zone' => 'more', 'desc' => __('Message history')],
             'ai-assistants'   => ['label' => __('AI Assistants'), 'zone' => 'more', 'desc' => __('AI reply agents')],
-            'ai-training'     => ['label' => __('AI Training'),   'zone' => 'more', 'desc' => __('Knowledge base')],
+            'ai-training'     => ['label' => __('AI Agents'),   'zone' => 'more', 'desc' => __('Smart agents')],
             'wa-links'        => ['label' => __('WA Links'),      'zone' => 'more', 'desc' => __('Click-to-chat links')],
             'chatbot-widgets' => ['label' => __('Chat Widget'),   'zone' => 'more', 'desc' => __('Website chat widget')],
             'webhooks'        => ['label' => __('Webhooks'),      'zone' => 'more', 'desc' => __('Outbound webhooks')],

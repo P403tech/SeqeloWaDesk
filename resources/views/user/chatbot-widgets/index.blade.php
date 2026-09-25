@@ -73,7 +73,7 @@
                         <span class="w-2 h-2 rounded-full bg-wa-green"></span>Train first
                     </div>
                     Build a smart agent + add knowledge in <a href="{{ url('/ai-training') }}"
-                        class="font-semibold text-wa-deep underline">{{ __('AI Training') }}</a>, then attach it here
+                        class="font-semibold text-wa-deep underline">{{ __('AI Agents') }}</a>, then attach it here
                     so your widget answers in your voice.
                 </div>
             </aside>

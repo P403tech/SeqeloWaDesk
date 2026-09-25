@@ -132,7 +132,7 @@ class UserNav
                         'icon' => '<path d="M6 3 2 7l4 4M2.5 7H9a4 4 0 0 1 4 4v1"/>', 'sw' => 1.5],
                     ['key' => 'appointments', 'tier' => 'admin', 'href' => url('/appointments'), 'label' => __('Appointments'),
                         'icon' => '<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6h12M5 1.5v2M11 1.5v2M5.5 9l1.3 1.3L10 8"/>', 'sw' => 1.5, 'feature' => 'access_appointment_booking'],
-                    ['key' => 'ai-training', 'tier' => 'admin', 'href' => url('/ai-training'), 'label' => __('AI Training'),
+                    ['key' => 'ai-training', 'tier' => 'admin', 'href' => url('/ai-training'), 'label' => __('AI Agents'),
                         'icon' => '<path d="M8 2l5 3v3c0 3-2.2 5-5 6-2.8-1-5-3-5-6V5l5-3Z"/>', 'sw' => 1.5, 'feature' => 'access_ai_training'],
                     ['key' => 'ai-usage', 'tier' => 'manager', 'href' => url('/ai-usage'), 'label' => __('AI Usage'),
                         'icon' => '<path d="M2 13V3M2 13h12M5 11V7M8 11V4.5M11 11V8.5"/>', 'sw' => 1.6, 'feature' => 'access_ai_agents'],

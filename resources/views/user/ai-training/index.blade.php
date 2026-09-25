@@ -1,4 +1,4 @@
-<x-layouts.user :title="__('AI Training')" nav-key="more" page="user-ai-training-index">
+<x-layouts.user :title="__('AI Agents')" nav-key="more" page="user-ai-training-index">
 
     @php
         $currentStatus = $currentStatus ?? 'all';
@@ -130,7 +130,7 @@
                         <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500 mb-2">
                             {{ __('Workspace') }}</div>
                         <h1 class="font-serif font-normal tracking-tight text-[32px] sm:text-[38px] lg:text-[44px] leading-none">AI <span
-                                class="italic text-wa-deep">{{ __('Training') }}</span></h1>
+                                class="italic text-wa-deep">{{ __('Agents') }}</span></h1>
                         <p class="text-[13px] text-ink-600 mt-2">
                             {{ __("Build smart agents that speak in your brand's voice — train them on URLs, text, Q&A pairs, and plain-text files.") }}
                         </p>

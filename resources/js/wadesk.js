@@ -82,7 +82,7 @@ window.WA_CURRENCY = (function () {
     { title:'Flows',             desc:'Automated flow library',                     href:'/flows',       tag:'page', kw:'automation journey workflow' },
     { title:'Flow Builder',      desc:'Visual automation builder',                  href:'/flows/builder',tag:'page', kw:'no-code drag drop nodes' },
     { title:'AI Assistants',     desc:'AI chat agents & bots',                      href:'/ai-assistants',tag:'page', kw:'bot agent gpt chatbot copilot' },
-    { title:'AI Training',       desc:'Train AI on your content',                   href:'/ai-training', tag:'page', kw:'knowledge base train documents' },
+    { title:'AI Agents',       desc:'Build and train smart agents',                   href:'/ai-training', tag:'page', kw:'knowledge base train documents ai agents' },
     { title:'Call logs',         desc:'AI voice calls · recordings · transcripts',  href:'/call-logs',   tag:'page', kw:'wa calling voice phone recording transcript' },
     { title:'Chatbot widgets',   desc:'Website chat widget · embed',                href:'/chatbot-widgets', tag:'page', kw:'website embed widget live chat' },
     { title:'WhatsApp Forms',    desc:'WhatsApp Flows lead forms',                  href:'/wa-forms',    tag:'page', kw:'flow form lead capture' },

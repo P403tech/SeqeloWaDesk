@@ -392,7 +392,7 @@
             'Webhooks' => __('Send events to your own systems'),
             'Meta Ads' => __('Click-to-WhatsApp ad campaigns'),
             'WA Links' => __('Shareable click-to-chat links'),
-            'AI Training' => __('Teach the AI from your content'),
+            'AI Agents' => __('Build smart agents and train them on your content'),
         ];
     @endphp
     <section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 pb-3" data-tour="quick-access">

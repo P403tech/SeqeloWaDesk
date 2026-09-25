@@ -30,13 +30,13 @@
             <div class="flex items-center gap-3 min-w-0">
                 <a href="{{ url('/ai-training') }}"
                     class="w-8 h-8 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 flex items-center justify-center"
-                    title="{{ __('Back to AI Training') }}">
+                    title="{{ __('Back to AI Agents') }}">
                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
                         <path d="M10 4l-4 4 4 4" />
                     </svg>
                 </a>
                 <div class="min-w-0">
-                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">AI Training /
+                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">AI Agents /
                         {{ $mode === 'edit' ? 'Edit' : 'New' }}</div>
                     <div class="font-serif text-[20px] leading-tight truncate">
                         {{ $mode === 'edit' ? 'Edit smart' : 'Build a smart' }} <span

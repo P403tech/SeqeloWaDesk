@@ -942,8 +942,7 @@
                         </div>
                     </a>
 
-                    {{-- AI Training — chat assistants + their knowledge sources.
- Powers the chatbot widget (and future text channels). --}}
+                    {{-- AI Agents — chat assistants + their knowledge sources. --}}
                     @php
                         $aitAssistants = (int) \App\Models\AiChatAssistant::where('workspace_id', $wsForCards)->count();
                         $aitSources = (int) \App\Models\AiTrainingSource::where('workspace_id', $wsForCards)
@@ -962,7 +961,7 @@
                             </span>
                             <span class="font-mono text-[10px] text-ink-500">11</span>
                         </div>
-                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('AI Training') }}<x-plan-crown
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('AI Agents') }}<x-plan-crown
                                 feature="access_ai_training" :link="false" size="sm" /></h2>
                         <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
                             {{ __('Train chat assistants on your own content — URLs, text snippets, Q&A pairs, plain-text files.') }}

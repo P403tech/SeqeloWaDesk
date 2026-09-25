@@ -2109,7 +2109,7 @@ export default function init() {
           body = html`
             ${Field('Model', Sel('model', modelOpts))}
             ${Field('Instructions (system prompt)', Ta('prompt', 'You are a helpful phone assistant. Keep answers short and natural.', 4))}
-            ${Field('Knowledge base (optional)', Sel('assistant', aOpts), 'Attach a trained assistant from AI Training to answer from your content.')}
+            ${Field('Knowledge base (optional)', Sel('assistant', aOpts), 'Attach a trained assistant from AI Agents to answer from your content.')}
             ${Field('Save spoken reply to', Txt('save', 'ai_reply'))}
             <label className="flex items-center gap-2 mt-1 text-[12.5px] text-ink-700 cursor-pointer select-none">
               <input type="checkbox" checked=${!!d.endOnGoodbye} onChange=${e => onChange('endOnGoodbye', e.target.checked)} className="w-4 h-4 accent-wa-deep" />
@@ -2248,7 +2248,7 @@ export default function init() {
           body = html`
             ${Field('Model', Sel('model', modelOpts))}
             ${Field('Instructions (system prompt)', Ta('prompt', 'You are our friendly Instagram assistant. Answer briefly.', 4))}
-            ${Field('Knowledge base (optional)', Sel('assistant', aOpts), 'Attach a trained assistant from AI Training to answer from your content.')}
+            ${Field('Knowledge base (optional)', Sel('assistant', aOpts), 'Attach a trained assistant from AI Agents to answer from your content.')}
             ${Field('Save reply to', Txt('save', 'ai_reply'))}
           `;
           break;
@@ -2506,9 +2506,9 @@ export default function init() {
               }
               const picked = AI_ASSISTANTS_CACHE.find(a => String(a.id) === String(d.assistant));
               const hint = !AI_ASSISTANTS_CACHE.length
-                ? 'No trained assistants yet — create one in <a href="/ai-training" class="text-wa-deep underline">AI Training</a>.'
+                ? 'No trained assistants yet — create one in <a href="/ai-training" class="text-wa-deep underline">AI Agents</a>.'
                 : (picked && (picked.sources || 0) === 0
-                    ? 'Note: this assistant has 0 trained sources — add some in <a href="/ai-training" class="text-wa-deep underline">AI Training</a> or the reply uses the prompt only.'
+                    ? 'Note: this assistant has 0 trained sources — add some in <a href="/ai-training" class="text-wa-deep underline">AI Agents</a> or the reply uses the prompt only.'
                     : 'Pulls the chosen assistant\'s trained content into this reply. <a href="/ai-training" class="text-wa-deep underline">Manage knowledge →</a>');
               return Field('Knowledge base (optional)', Sel('assistant', aOpts), hint);
             })()}

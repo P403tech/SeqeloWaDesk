@@ -126,7 +126,7 @@ class ChatbotWidgetController extends Controller
         if (in_array($data['mode'], ['ai', 'both'], true)) {
             if (empty($data['assistant_id'])) {
                 return response()->json([
-                    'ok' => false, 'error' => 'AI mode needs an assistant. Pick one or create one in AI Training.',
+                    'ok' => false, 'error' => 'AI mode needs an assistant. Pick one or create one in AI Agents.',
                 ], 422);
             }
             $ok = AiChatAssistant::where('workspace_id', $wsId)
