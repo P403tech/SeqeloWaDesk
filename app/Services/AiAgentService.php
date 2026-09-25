@@ -11,7 +11,9 @@ use App\Models\Message;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\WalletService;
+use App\Services\Ai\AgentChannelControl;
 use App\Services\Ai\ShopManagerRouter;
+use App\Services\Ai\AgentShopifyContext;
 use App\Services\InboxDispatcher;
 use App\Services\PlanLimitGuard;
 use Illuminate\Support\Facades\Http;
@@ -47,11 +49,17 @@ class AiAgentService
             // Meta Business Agent coexistence — if Meta's own agent is fronting
             // this workspace's WhatsApp, stand down so the customer never gets
             // two replies (one from Meta's agent, one from ours).
+            // Meta Business Agent coexistence is WhatsApp Cloud API only.
+            // Facebook / Instagram / TikTok must still get this smart agent.
             if ($ws && $ws->suppressesOurAutoReply()) {
-                Log::info('[AI-AGENT] skipped — Meta Business Agent is fronting this workspace', [
-                    'workspace_id' => $ws->id, 'conv_id' => $convo->id, 'mode' => $ws->ai_responder_mode,
-                ]);
-                return null;
+                $ch = strtolower(trim((string) ($convo->channel ?? '')));
+                $other = in_array($ch, ['facebook', 'instagram', 'tiktok'], true);
+                if (! $other) {
+                    Log::info('[AI-AGENT] skipped — Meta Business Agent is fronting WhatsApp', [
+                        'workspace_id' => $ws->id, 'conv_id' => $convo->id, 'mode' => $ws->ai_responder_mode,
+                    ]);
+                    return null;
+                }
             }
         }
 
@@ -76,6 +84,25 @@ class AiAgentService
         // without cross-talk. Agents with no device_ids (the default)
         // handle every device — same behavior single-device installs
         // saw before this feature shipped.
+        if (! \App\Services\Ai\InboxAgentBridge::handlesChannel($agent, $convo->channel ?? null)) {
+            Log::info('[AI-AGENT] skipped — channel not enabled on agent', [
+                'agent_id' => $agent->id, 'conv_id' => $convo->id, 'channel' => $convo->channel,
+            ]);
+            return null;
+        }
+
+        $lastIn = (string) InboxMessage::query()
+            ->where('conversation_id', $convo->id)
+            ->where('direction', 'in')
+            ->orderByDesc('id')
+            ->value('body');
+        if (! AgentChannelControl::allows($agent, $convo, $lastIn)) {
+            Log::info('[AI-AGENT] skipped — outside this agent\'s channel control', [
+                'agent_id' => $agent->id, 'conv_id' => $convo->id, 'channel' => $convo->channel,
+            ]);
+            return null;
+        }
+
         if (!$agent->handlesDevice($convo->device_id)) {
             Log::info('[AI-AGENT] skipped — device out of scope', [
                 'agent_id'      => $agent->id,
@@ -466,6 +493,13 @@ class AiAgentService
         $shopCanned = $this->applyShopManagerRouter($agent, $convo, $history, $image !== null, $systemPrompt);
         if ($shopCanned !== null) {
             return $shopCanned;
+        }
+
+        if (! empty($agent->shop_router)) {
+            $shopFacts = AgentShopifyContext::promptBlock((int) ($convo->workspace_id ?? 0));
+            if ($shopFacts !== '') {
+                $systemPrompt .= "\n\n--- Shopify (live) ---\n".$shopFacts."\n--- End Shopify ---";
+            }
         }
 
         $userPrompt = "Conversation history:\n" . $transcript

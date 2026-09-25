@@ -24,6 +24,8 @@ class AiAgent extends Model
         'shop_router',
         // Multi-device — null/empty array = any device (default).
         'device_ids',
+        'channel_whatsapp', 'channel_facebook', 'channel_instagram', 'channel_tiktok',
+        'channel_control',
         // Voice-AI channels (Phase A: voice notes on both stacks;
         // Phase D: voice calls on WABA). Off by default — operator
         // explicitly opts each AiAgent into each voice channel.
@@ -47,6 +49,11 @@ class AiAgent extends Model
         'use_saved_replies'            => 'boolean',
         'shop_router'                  => 'boolean',
         'device_ids'                   => 'array',
+        'channel_whatsapp'             => 'boolean',
+        'channel_facebook'             => 'boolean',
+        'channel_instagram'            => 'boolean',
+        'channel_tiktok'               => 'boolean',
+        'channel_control'              => 'array',
         'voice_note_enabled'           => 'boolean',
         'voice_call_enabled'           => 'boolean',
         'max_voice_notes_per_day'      => 'integer',
@@ -118,6 +125,8 @@ class AiAgent extends Model
             'use_saved_replies'            => (bool) ($this->use_saved_replies ?? false),
             'shop_router'                  => (bool) ($this->shop_router ?? false),
             'device_ids'                   => is_array($this->device_ids) ? array_values(array_map('intval', $this->device_ids)) : [],
+            'channel_whatsapp'             => (bool) ($this->channel_whatsapp ?? true),
+            'channel_facebook'             => (bool) ($this->channel_facebook ?? false),
             // Voice-AI config so the Voice tab on the edit form can rehydrate.
             'voice_note_enabled'      => (bool) ($this->voice_note_enabled ?? false),
             'voice_call_enabled'      => (bool) ($this->voice_call_enabled ?? false),

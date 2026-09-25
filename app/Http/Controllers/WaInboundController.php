@@ -835,6 +835,13 @@ class WaInboundController extends Controller
             Log::warning('[INBOUND] opt-out check failed: ' . $e->getMessage());
         }
 
+        try {
+            \App\Services\Ai\InboxAgentBridge::assignIfNeeded($convo->fresh() ?: $convo);
+            $convo = $convo->fresh() ?: $convo;
+        } catch (\Throwable $e) {
+            Log::warning('[INBOUND] AI channel assign failed: '.$e->getMessage());
+        }
+
         if ($convo->assignee_agent_id) {
             try {
                 $agent = \App\Models\AiAgent::find($convo->assignee_agent_id);

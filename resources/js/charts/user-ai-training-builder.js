@@ -1,9 +1,5 @@
-// Smart-agent builder — 5-step wizard (Identity → Persona → Brain →
-// Safety → Knowledge). Same stepper UX as /wa-campaigns/create and
-// /chatbot-widgets/create. Step 5 auto-saves the agent first because
-// knowledge entries need a saved row to attach to.
-//
-// All popups use window.toast / window.confirmDialog from app.js.
+// Smart-agent builder — Identity → Persona → Brain → Safety → Knowledge
+// (channels + training live together on Knowledge).
 export default function init() {
   const root = document.getElementById('ait-builder');
   if (!root) return;
@@ -11,6 +7,13 @@ export default function init() {
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
   const defaults = JSON.parse(root.dataset.defaults || '{}');
   const state = { ...defaults };
+  const MODEL_DEFAULTS = {
+    openai: 'gpt-4o-mini',
+    anthropic: 'claude-haiku-4-5-20251001',
+    gemini: 'gemini-2.5-flash-lite',
+    muse: 'muse-spark-1.3',
+    mistral: 'mistral-small-latest',
+  };
 
   const toast = (m, kind = 'success') => (window.toast ? window.toast(m, kind) : null);
   const confirmDialog = (opts) => {
@@ -55,7 +58,65 @@ export default function init() {
     if (el.type === 'checkbox') state[key] = el.checked;
     else if (el.type === 'radio') { if (el.checked) state[key] = el.value; }
     else state[key] = el.value;
+    if (String(key || '').startsWith('channel_')) paintChannelControl();
   }
+
+  if (!state.channel_control || typeof state.channel_control !== 'object') state.channel_control = {};
+  function ctrlRow(ch) {
+    const r = state.channel_control[ch] || {};
+    return {
+      mode: r.mode === 'specific' ? 'specific' : 'full',
+      dms: r.dms !== false,
+      comments: !!r.comments,
+      stories: !!r.stories,
+      orders: !!r.orders,
+      keyword: !!r.keyword,
+      keyword_text: r.keyword_text || '',
+    };
+  }
+  function paintChannelControl() {
+    ['whatsapp', 'facebook', 'instagram', 'tiktok'].forEach((ch) => {
+      const on = !!state['channel_' + ch];
+      root.querySelector(`[data-control-wrap="${ch}"]`)?.classList.toggle('hidden', !on);
+      const row = ctrlRow(ch);
+      root.querySelector(`[data-control-specific="${ch}"]`)?.classList.toggle('hidden', row.mode !== 'specific');
+      root.querySelectorAll(`[data-control^="${ch}."]`).forEach((el) => {
+        const key = el.dataset.control.split('.')[1];
+        if (el.type === 'radio') el.checked = el.value === row.mode;
+        else if (el.type === 'checkbox') el.checked = !!row[key];
+        else el.value = row.keyword_text || '';
+      });
+    });
+  }
+  function writeControl(el) {
+    const [ch, key] = (el.dataset.control || '').split('.');
+    if (!ch || !key) return;
+    state.channel_control[ch] = ctrlRow(ch);
+    if (el.type === 'radio' && el.checked) state.channel_control[ch].mode = el.value;
+    else if (el.type === 'checkbox') state.channel_control[ch][key] = el.checked;
+    else state.channel_control[ch][key] = el.value;
+    paintChannelControl();
+  }
+  function readChannelControl() {
+    const out = {};
+    ['whatsapp', 'facebook', 'instagram', 'tiktok'].forEach((ch) => { out[ch] = ctrlRow(ch); });
+    return out;
+  }
+  root.querySelectorAll('[data-control]').forEach((el) => {
+    el.addEventListener('change', () => writeControl(el));
+    el.addEventListener('input', () => writeControl(el));
+  });
+  paintChannelControl();
+
+  const providerEl = root.querySelector('[data-field="ai_provider"]');
+  const modelEl = root.querySelector('[data-field="ai_model"]');
+  providerEl?.addEventListener('change', () => {
+    const def = MODEL_DEFAULTS[state.ai_provider];
+    if (def && modelEl) {
+      modelEl.value = def;
+      state.ai_model = def;
+    }
+  });
 
   // --------------------------- step nav ---------------------------
 
@@ -168,8 +229,7 @@ export default function init() {
         return { ok: false, msg: 'Creativity must be between 0 and 2.', el: field('temperature') };
       }
     }
-    // Step 4 (Safety) is all defaulted/optional; Step 5 (Knowledge)
-    // sources are optional — neither gates.
+    // Step 4 safety optional; Step 5 knowledge + channels optional.
     return { ok: true };
   }
 
@@ -204,6 +264,13 @@ export default function init() {
       handoff_enabled: !!state.handoff_enabled,
       handoff_keyword: state.handoff_keyword,
       handoff_message: state.handoff_message,
+      business_brief: state.business_brief,
+      channel_whatsapp: !!state.channel_whatsapp,
+      channel_facebook: !!state.channel_facebook,
+      channel_instagram: !!state.channel_instagram,
+      channel_tiktok: !!state.channel_tiktok,
+      shopify_tools: !!state.shopify_tools,
+      channel_control: readChannelControl(),
     };
     const { ok, json } = await api('/ai-training/api/assistant', { method: 'POST', body });
     if (!ok) { toast(json.error || 'Save failed — check the fields above.', 'error'); return false; }
@@ -219,6 +286,67 @@ export default function init() {
     if (ok) window.location.href = window.appUrl('/ai-training');
   });
 
+  function agentReturnUrl() {
+    const path = state.id
+      ? `/ai-training/${state.id}/edit?step=5`
+      : '/ai-training/create?step=5';
+    return window.location.origin + window.appUrl(path);
+  }
+
+  async function prepareConnect() {
+    if (!String(state.name || '').trim()) {
+      toast('Name the agent first so we can save before connecting.', 'error');
+      showStep(1);
+      return false;
+    }
+    const ok = await saveAssistant({ silent: true });
+    if (!ok) return false;
+    history.replaceState({}, '', window.appUrl(`/ai-training/${state.id}/edit?step=5`));
+    return true;
+  }
+
+  root.querySelectorAll('[data-channel-connect]').forEach((el) => {
+    el.addEventListener('click', async (e) => {
+      const kind = el.dataset.channelConnect;
+      if (kind === 'whatsapp') {
+        e.preventDefault();
+        if (!(await prepareConnect())) return;
+        window.location.href = window.appUrl('/devices');
+        return;
+      }
+      if (kind === 'instagram') {
+        e.preventDefault();
+        if (!(await prepareConnect())) return;
+        const ret = encodeURIComponent(agentReturnUrl());
+        const { ok, json } = await api('/devices/instagram/connect-start?return=' + ret, {
+          method: 'POST',
+          body: { return: agentReturnUrl() },
+        });
+        if (!ok || !json.url) {
+          toast(json.error || 'Could not start Instagram connect.', 'error');
+          return;
+        }
+        window.location.href = json.url;
+        return;
+      }
+      e.preventDefault();
+      if (!(await prepareConnect())) return;
+      const href = el.getAttribute('href') || '';
+      const join = href.includes('?') ? '&' : '?';
+      window.location.href = href + join + 'return=' + encodeURIComponent(agentReturnUrl());
+    });
+  });
+
+  root.querySelectorAll('[data-channel-form]').forEach((form) => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!(await prepareConnect())) return;
+      const hidden = form.querySelector('input[name="return"]');
+      if (hidden) hidden.value = agentReturnUrl();
+      form.submit();
+    });
+  });
+
   // ----------------------------- sources -----------------------------
 
   async function loadSources() {
@@ -228,7 +356,7 @@ export default function init() {
     const rows = document.getElementById('ait-source-rows');
     if (!rows) return;
     if (!json.sources?.length) {
-      rows.innerHTML = `<div class="px-3 py-6 text-center text-[12px] text-ink-500">No knowledge yet. Pick a kind above to add the first entry.</div>`;
+      rows.innerHTML = `<div class="px-3 py-10 text-center text-[12px] text-ink-500">No knowledge yet. Pick a kind above to add the first entry.</div>`;
       return;
     }
     rows.innerHTML = json.sources.map((s) => `
@@ -369,6 +497,7 @@ export default function init() {
 
   // ------------------------------- boot -------------------------------
 
-  showStep(1);
+  const bootStep = parseInt(new URLSearchParams(location.search).get('step') || '0', 10);
+  showStep(bootStep >= 1 && bootStep <= TOTAL_STEPS ? bootStep : 1);
   if (state.id) loadSources();
 }

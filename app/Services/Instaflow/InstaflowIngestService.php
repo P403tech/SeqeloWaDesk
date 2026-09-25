@@ -263,10 +263,24 @@ class InstaflowIngestService
 
                 if (! $consumedByFlow) {
                     try {
-                        app(KeywordReplyDispatcher::class)
-                            ->maybeDispatch($convo->fresh() ?: $convo, $body, (string) $igConvId, null, $igTrigger);
+                        \App\Services\Ai\InboxAgentBridge::assignIfNeeded($convo->fresh() ?: $convo);
+                        $convo = $convo->fresh() ?: $convo;
                     } catch (\Throwable $e) {
-                        Log::warning('[INSTAFLOW] keyword auto-reply failed: '.$e->getMessage(), ['convo' => $convo->id]);
+                        Log::warning('[INSTAFLOW] AI assign failed: '.$e->getMessage(), ['convo' => $convo->id]);
+                    }
+                    if ((int) ($convo->assignee_agent_id ?? 0) > 0) {
+                        try {
+                            app(\App\Services\AiAgentService::class)->respondIfAssigned($convo);
+                        } catch (\Throwable $e) {
+                            Log::warning('[INSTAFLOW] AI respond failed: '.$e->getMessage(), ['convo' => $convo->id]);
+                        }
+                    } else {
+                        try {
+                            app(KeywordReplyDispatcher::class)
+                                ->maybeDispatch($convo->fresh() ?: $convo, $body, (string) $igConvId, null, $igTrigger);
+                        } catch (\Throwable $e) {
+                            Log::warning('[INSTAFLOW] keyword auto-reply failed: '.$e->getMessage(), ['convo' => $convo->id]);
+                        }
                     }
                 }
             }

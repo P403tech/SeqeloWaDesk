@@ -8,6 +8,7 @@ use App\Models\ShopifyIntegrationLog;
 use App\Models\SystemSetting;
 use App\Models\WaTemplate;
 use App\Services\Shopify\ShopifyService;
+use App\Support\ChannelSetupReturn;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -60,6 +61,7 @@ class ShopifyController extends Controller
             'shop' => ['required', 'string', 'max:191'],
         ]);
 
+        ChannelSetupReturn::remember();
         $shop = $this->shopify->normalizeShop($request->string('shop')->toString());
         if (!$this->shopify->isValidShop($shop)) {
             return back()->with('error', 'Enter a valid Shopify domain like my-store.myshopify.com.');
@@ -87,7 +89,7 @@ class ShopifyController extends Controller
         $query = $request->query();
 
         if (!$this->shopify->verifyOAuthHmac($query)) {
-            return redirect('/shopify')->with('error', 'Invalid Shopify signature. Try again.');
+            return redirect(ChannelSetupReturn::url('/shopify'))->with('error', 'Invalid Shopify signature. Try again.');
         }
 
         $sessionState = session('shopify_oauth_state');
@@ -97,21 +99,21 @@ class ShopifyController extends Controller
         $code  = (string) $request->query('code', '');
 
         if (!$state || !$sessionState || !hash_equals((string) $sessionState, $state)) {
-            return redirect('/shopify')->with('error', 'Session expired. Please reconnect.');
+            return redirect(ChannelSetupReturn::url('/shopify'))->with('error', 'Session expired. Please reconnect.');
         }
         if (!$shop || $shop !== $sessionShop) {
-            return redirect('/shopify')->with('error', 'Shop mismatch during callback.');
+            return redirect(ChannelSetupReturn::url('/shopify'))->with('error', 'Shop mismatch during callback.');
         }
 
         $exchange = $this->shopify->exchangeCode($shop, $code);
         if (!$exchange['success']) {
-            return redirect('/shopify')->with('error', 'OAuth failed: ' . ($exchange['error'] ?? 'unknown'));
+            return redirect(ChannelSetupReturn::url('/shopify'))->with('error', 'OAuth failed: ' . ($exchange['error'] ?? 'unknown'));
         }
 
         $user = Auth::user();
         $wsId = $user?->current_workspace_id;
         if (!$wsId) {
-            return redirect('/shopify')->with('error', 'No workspace selected for this account.');
+            return redirect(ChannelSetupReturn::url('/shopify'))->with('error', 'No workspace selected for this account.');
         }
 
         $shopData = $this->shopify->getShop($shop, $exchange['access_token'])['shop'] ?? [];
@@ -164,7 +166,7 @@ class ShopifyController extends Controller
 
         session()->forget(['shopify_oauth_state', 'shopify_oauth_shop']);
 
-        return redirect('/shopify?tab=overview')->with('success', 'Shopify store connected.');
+        return redirect(ChannelSetupReturn::url('/shopify?tab=overview'))->with('success', 'Shopify store connected.');
     }
 
     /**

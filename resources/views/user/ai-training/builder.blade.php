@@ -21,7 +21,15 @@
             'handoff_enabled' => (bool) ($a?->handoff_enabled ?? true),
             'handoff_keyword' => $a?->handoff_keyword ?? 'talk to human',
             'handoff_message' => $a?->handoff_message ?? 'Sure — pulling in a teammate now.',
+            'business_brief' => $a?->business_brief ?? '',
+            'channel_whatsapp' => (bool) ($a?->channel_whatsapp ?? true),
+            'channel_facebook' => (bool) ($a?->channel_facebook ?? false),
+            'channel_instagram' => (bool) ($a?->channel_instagram ?? false),
+            'channel_tiktok' => (bool) ($a?->channel_tiktok ?? false),
+            'shopify_tools' => (bool) ($a?->shopify_tools ?? false),
+            'channel_control' => \App\Services\Ai\AgentChannelControl::normalize($a?->channel_control ?? []),
         ];
+        $channelSetup = $channelSetup ?? [];
     @endphp
 
     {{-- Sticky header — same shape as /wa-campaigns/create + /chatbot-widgets/create --}}
@@ -170,8 +178,18 @@
                             <span
                                 class="w-[23px] h-[23px] rounded-[7px] bg-paper-50 text-wa-deep inline-flex items-center justify-center text-[10px] font-semibold font-mono shrink-0">02</span>
                             <span
-                                class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Persona & opening line') }}</span>
+                                class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Instructions') }}</span>
                             <span class="font-mono text-[10px] text-ink-500">{{ __('content') }}</span>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Business information') }}</label>
+                            <textarea data-field="business_brief" rows="6"
+                                placeholder="{{ __('What you sell, prices, hours, services, FAQs, common questions. This is what the agent is allowed to know.') }}"
+                                class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"></textarea>
+                            <div class="text-[10.5px] text-ink-500 mt-1">
+                                {{ __('Folded into the agent rules: never invent, one question at a time, confirm only after a real Shopify or calendar action.') }}
+                            </div>
                         </div>
 
                         <div class="mb-4">
@@ -181,8 +199,8 @@
                             <textarea data-field="greeting" rows="2"
                                 placeholder="{{ __("Hi! I'm here to help — ask me anything about pricing or plans.") }}"
                                 class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"></textarea>
-                            <div class="text-[10.5px] text-ink-500 mt-1">
-                                {{ __('Visitor-facing. Shown as the first bubble when chat opens.') }}</div>
+                                <div class="text-[10.5px] text-ink-500 mt-1">
+                                    {{ __('Visitor-facing on the website widget. Inbox chats use the business information and character brief instead.') }}</div>
                         </div>
 
                         <div>
@@ -213,13 +231,26 @@
                                     class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Model provider') }}</label>
                                 <select data-field="ai_provider"
                                     class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="openai">{{ __('OpenAI · GPT family') }}</option>
-                                    <option value="anthropic">{{ __('Anthropic · Claude family') }}</option>
-                                    <option value="gemini">{{ __('Google · Gemini family') }}</option>
+                                    <option value="openai">{{ __('OpenAI · GPT') }}</option>
+                                    <option value="anthropic">{{ __('Anthropic · Claude') }}</option>
+                                    <option value="gemini">{{ __('Google · Gemini') }}</option>
                                     <option value="muse">{{ __('Muse · Meta Spark') }}</option>
+                                    <option value="mistral">{{ __('Mistral') }}</option>
                                 </select>
                                 <div class="text-[10.5px] text-ink-500 mt-1">
-                                    {{ __('Admin pre-configures the API keys — no key required from you.') }}</div>
+                                    {{ __('Platform key first, or your own key from') }}
+                                    <a href="{{ url('/settings?tab=aikeys') }}" class="text-wa-deep font-semibold">{{ __('Settings → AI keys') }}</a>
+                                    {{ __('(BYOK). Cursor is not a customer-chat model.') }}
+                                </div>
+                                @php $brainKeys = $brainKeys ?? []; @endphp
+                                <div class="flex flex-wrap gap-1 mt-2">
+                                    @foreach (['openai' => 'OpenAI', 'anthropic' => 'Claude', 'gemini' => 'Gemini', 'muse' => 'Muse', 'mistral' => 'Mistral'] as $pk => $pl)
+                                        @php $src = $brainKeys[$pk] ?? 'none'; @endphp
+                                        <span class="font-mono text-[9.5px] px-1.5 py-0.5 rounded-md {{ $src === 'none' ? 'bg-paper-100 text-ink-500' : 'bg-wa-mint text-wa-deep' }}">
+                                            {{ $pl }} · {{ $src === 'workspace' ? __('your key') : ($src === 'admin' ? __('platform') : __('no key')) }}
+                                        </span>
+                                    @endforeach
+                                </div>
                             </div>
                             <div>
                                 <label
@@ -312,7 +343,7 @@
                         </div>
                     </div>
 
-                    {{-- STEP 5: KNOWLEDGE --}}
+                    {{-- STEP 5: KNOWLEDGE (original train UI) + CHANNELS --}}
                     <div class="step-pane hidden" data-step="5">
                         <div class="flex items-center gap-2.5 mb-4">
                             <span
@@ -390,6 +421,12 @@
                             <div id="ait-source-rows"></div>
                            </div>
                           </div>
+                        </div>
+
+                        <div class="mt-6 pt-5 border-t border-paper-200">
+                            <h3 class="text-[13px] font-semibold text-ink-900 mb-1">{{ __('Channels') }}</h3>
+                            <p class="text-[12px] text-ink-500 mb-3">{{ __('Turn a pipe on, then choose full control or only the jobs you check. Same knowledge on every pipe.') }}</p>
+                            @include('user.ai-training._channel-setup')
                         </div>
                     </div>
                 </div>

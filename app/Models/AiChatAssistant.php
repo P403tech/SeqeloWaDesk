@@ -25,12 +25,22 @@ class AiChatAssistant extends Model
         'ai_provider', 'ai_model', 'reply_max_tokens', 'temperature',
         'fallback_message', 'handoff_enabled', 'handoff_keyword', 'handoff_message',
         'status',
+        'business_brief', 'channel_whatsapp', 'channel_facebook',
+        'channel_instagram', 'channel_tiktok', 'shopify_tools',
+        'channel_control',
+        'inbox_agent_id',
     ];
 
     protected $casts = [
         'reply_max_tokens' => 'integer',
         'temperature'      => 'float',
         'handoff_enabled'  => 'boolean',
+        'channel_whatsapp'  => 'boolean',
+        'channel_facebook'  => 'boolean',
+        'channel_instagram' => 'boolean',
+        'channel_tiktok'    => 'boolean',
+        'shopify_tools'     => 'boolean',
+        'channel_control'   => 'array',
     ];
 
     public function trainingSources(): HasMany

@@ -1,6 +1,4 @@
-// AI Training list — table rows with icon-button actions. Mirrors
-// /chatbot-widgets and /devices. The wizard lives on /ai-training/create
-// + /ai-training/{id}/edit, not on this page anymore.
+// AI Agents list — card rows with icon-button actions.
 export default function init() {
   const csrf  = document.querySelector('meta[name="csrf-token"]')?.content || '';
   const toast = (m, kind = 'success') => (window.toast ? window.toast(m, kind) : null);
@@ -38,14 +36,32 @@ export default function init() {
     });
   });
 
-  const search = document.getElementById('ait-search');
-  if (search) {
-    search.addEventListener('input', () => {
-      const q = search.value.trim().toLowerCase();
-      document.querySelectorAll('.ait-row').forEach((row) => {
-        const hay = row.dataset.searchHaystack || '';
-        row.classList.toggle('hidden', q !== '' && !hay.includes(q));
-      });
+  let statusFilter = 'all';
+  const applyFilters = () => {
+    const q = (document.getElementById('ait-search')?.value || '').trim().toLowerCase();
+    document.querySelectorAll('.ait-row').forEach((row) => {
+      const hay = row.dataset.searchHaystack || '';
+      const st = row.dataset.status || 'active';
+      const matchQ = q === '' || hay.includes(q);
+      const matchS = statusFilter === 'all' || st === statusFilter;
+      row.classList.toggle('hidden', !(matchQ && matchS));
     });
-  }
+  };
+
+  const search = document.getElementById('ait-search');
+  if (search) search.addEventListener('input', applyFilters);
+
+  document.querySelectorAll('[data-status-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      statusFilter = btn.dataset.statusTab || 'all';
+      document.querySelectorAll('[data-status-tab]').forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('bg-wa-deep', on);
+        b.classList.toggle('text-paper-0', on);
+        b.classList.toggle('text-ink-600', !on);
+        b.classList.toggle('hover:bg-paper-100', !on);
+      });
+      applyFilters();
+    });
+  });
 }

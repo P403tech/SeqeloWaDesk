@@ -159,6 +159,13 @@ class TiktokIngestService
                 Log::warning('[TT-INGEST] routing failed: '.$e->getMessage());
             }
 
+            try {
+                \App\Services\Ai\InboxAgentBridge::assignIfNeeded($conv->fresh() ?: $conv);
+                $conv = $conv->fresh() ?: $conv;
+            } catch (\Throwable $e) {
+                Log::warning('[TT-INGEST] AI assign failed: '.$e->getMessage());
+            }
+
             if ($conv->assignee_agent_id) {
                 try {
                     app(\App\Services\AiAgentService::class)->respondIfAssigned($conv->fresh() ?: $conv);

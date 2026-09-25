@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Device;
+use App\Support\ChannelSetupReturn;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -1977,6 +1978,7 @@ class DevicesController extends Controller
      */
     public function instagramConnectStart(): JsonResponse
     {
+        ChannelSetupReturn::remember();
         $wsId = Auth::user()?->current_workspace_id;
         if (!$wsId) return response()->json(['ok' => false, 'error' => 'No active workspace.'], 422);
 
@@ -2007,7 +2009,7 @@ class DevicesController extends Controller
         if ($wsId && $accountId !== '') {
             $this->upsertIgMirror((int) $wsId, $accountId);
         }
-        return redirect()->route('user.devices.index')->with('status', 'Instagram account connected.');
+        return redirect(ChannelSetupReturn::url(route('user.devices.index')))->with('status', 'Instagram account connected.');
     }
 
     /**

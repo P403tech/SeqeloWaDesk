@@ -4,12 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Models\AiChatAssistant;
 use App\Models\AiTrainingSource;
+use App\Services\Ai\AgentChannelSetup;
+use App\Services\AiKeyResolver;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -105,7 +108,14 @@ class AiTrainingController extends Controller
 
     public function create(): View
     {
-        return view('user.ai-training.builder', ['assistant' => null, 'mode' => 'create']);
+        $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
+
+        return view('user.ai-training.builder', [
+            'assistant' => null,
+            'mode' => 'create',
+            'channelSetup' => AgentChannelSetup::snapshot($wsId),
+            'brainKeys' => $this->brainKeys($wsId),
+        ]);
     }
 
     public function edit(int $id): View
@@ -114,7 +124,30 @@ class AiTrainingController extends Controller
         $assistant = AiChatAssistant::where('workspace_id', $wsId)
             ->withCount('trainingSources')
             ->findOrFail($id);
-        return view('user.ai-training.builder', ['assistant' => $assistant, 'mode' => 'edit']);
+        return view('user.ai-training.builder', [
+            'assistant' => $assistant,
+            'mode' => 'edit',
+            'channelSetup' => AgentChannelSetup::snapshot($wsId),
+            'brainKeys' => $this->brainKeys($wsId),
+        ]);
+    }
+
+    /**
+     * @return array<string, string> provider => workspace|admin|none
+     */
+    private function brainKeys(int $wsId): array
+    {
+        $ws = $wsId > 0 ? \App\Models\Workspace::find($wsId) : null;
+        $out = [];
+        foreach (['openai', 'anthropic', 'gemini', 'muse', 'mistral'] as $p) {
+            try {
+                $out[$p] = AiKeyResolver::resolve($ws, $p)['source'] ?? 'none';
+            } catch (\Throwable $e) {
+                $out[$p] = 'none';
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -137,6 +170,10 @@ class AiTrainingController extends Controller
             $clone = $tr->replicate();
             $clone->assistant_id = $copy->id;
             $clone->save();
+        }
+        try {
+            \App\Services\Ai\InboxAgentBridge::syncFromAssistant($copy->fresh());
+        } catch (\Throwable $e) {
         }
         return redirect()->route('user.ai-training.edit', $copy->id);
     }
@@ -165,7 +202,27 @@ class AiTrainingController extends Controller
             'handoff_keyword'  => 'nullable|string|max:60',
             'handoff_message'  => 'nullable|string|max:1000',
             'status'           => 'nullable|in:active,paused',
+            'business_brief'   => 'nullable|string|max:8000',
+            'channel_whatsapp'  => 'nullable|boolean',
+            'channel_facebook'  => 'nullable|boolean',
+            'channel_instagram' => 'nullable|boolean',
+            'channel_tiktok'    => 'nullable|boolean',
+            'shopify_tools'     => 'nullable|boolean',
+            'channel_control'   => 'nullable|array',
         ]);
+
+        $data['channel_whatsapp']  = $request->boolean('channel_whatsapp');
+        $data['channel_facebook']  = $request->boolean('channel_facebook');
+        $data['channel_instagram'] = $request->boolean('channel_instagram');
+        $data['channel_tiktok']    = $request->boolean('channel_tiktok');
+        $data['shopify_tools']     = $request->boolean('shopify_tools');
+        $data['channel_control']   = \App\Services\Ai\AgentChannelControl::normalize($request->input('channel_control'));
+
+        foreach (['channel_whatsapp', 'channel_facebook', 'channel_instagram', 'channel_tiktok', 'shopify_tools', 'business_brief', 'channel_control'] as $col) {
+            if (! Schema::hasColumn('ai_chat_assistants', $col)) {
+                unset($data[$col]);
+            }
+        }
 
         $assistant = !empty($data['id'])
             ? AiChatAssistant::where('workspace_id', $wsId)->find($data['id'])
@@ -196,6 +253,13 @@ class AiTrainingController extends Controller
 
         $assistant->fill($data);
         $assistant->save();
+
+        try {
+            \App\Services\Ai\InboxAgentBridge::syncFromAssistant($assistant->fresh());
+        } catch (\Throwable $e) {
+            \Log::warning('[AI-TRAINING] inbox agent sync failed: '.$e->getMessage());
+        }
+
         return response()->json(['ok' => true, 'id' => $assistant->id, 'slug' => $assistant->slug]);
     }
 
@@ -217,6 +281,12 @@ class AiTrainingController extends Controller
                 Storage::disk('local')->delete($s->file_path);
             }
             $s->delete();
+        }
+
+        try {
+            \App\Services\Ai\InboxAgentBridge::deactivateLinked($assistant);
+        } catch (\Throwable $e) {
+            \Log::warning('[AI-TRAINING] inbox agent deactivate failed: '.$e->getMessage());
         }
 
         $assistant->delete();

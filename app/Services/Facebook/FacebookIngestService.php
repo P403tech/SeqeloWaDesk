@@ -180,8 +180,6 @@ class FacebookIngestService
         $conv = Conversation::firstOrCreate(
             ['workspace_id' => $wsId, 'channel' => 'facebook', 'raw_jid' => $p['raw_jid']],
             [
-                // Never fall back to the raw PSID — a real name is resolved from the
-                // Graph profile just below; until then show a friendly placeholder.
                 'title'        => $title ?: __('Facebook user'),
                 'provider'     => 'facebook',
                 'origin'       => 'facebook',
@@ -189,8 +187,13 @@ class FacebookIngestService
                 'inbox_status' => 'open',
                 'last_message_at' => now(),
                 'contact_digits'  => null,
+                'routing_meta'    => ['thread_kind' => (string) ($p['kind'] ?? 'dm')],
             ]
         );
+        $rm = is_array($conv->routing_meta) ? $conv->routing_meta : [];
+        if (($rm['thread_kind'] ?? '') === '') {
+            $conv->forceFill(['routing_meta' => array_merge($rm, ['thread_kind' => (string) ($p['kind'] ?? 'dm')])])->save();
+        }
 
         // Resolve a friendly DM sender name + avatar once, on thread creation.
         if ($conv->wasRecentlyCreated && $p['kind'] === 'dm' && $p['sender_id'] !== '') {
@@ -303,24 +306,18 @@ class FacebookIngestService
                 // coexistence / handoff guards are already channel-agnostic and its
                 // reply dispatches via dispatchFacebook. When the AI is handling the
                 // thread the keyword layer is skipped so the bot never double-replies.
+                try {
+                    \App\Services\Ai\InboxAgentBridge::assignIfNeeded($conv->fresh() ?: $conv);
+                    $conv = $conv->fresh() ?: $conv;
+                } catch (\Throwable $e) {
+                    Log::warning('[FB-INGEST] AI channel assign failed: '.$e->getMessage());
+                }
+
                 if ($conv->assignee_agent_id) {
-                    // Channel-specific plan gate: the FB AI agent must be included in
-                    // the plan (facebook_ai_agent) on top of the generic access_ai_agents
-                    // guard inside respondIfAssigned. Off by default → skip the AI reply
-                    // (non-throwing; the thread stays assigned and waits for a human — we
-                    // deliberately do NOT fall through to the keyword layer here, matching
-                    // the "assigned = AI owns it, no double-reply" intent). This is what
-                    // makes the facebook_ai_agent plan toggle actually do something.
-                    $fbAiOk = \App\Services\PlanLimitGuard::hasFeature(
-                        \App\Models\Workspace::find($page->workspace_id),
-                        'facebook_ai_agent'
-                    );
-                    if ($fbAiOk) {
-                        try {
-                            app(\App\Services\AiAgentService::class)->respondIfAssigned($conv->fresh() ?: $conv);
-                        } catch (\Throwable $e) {
-                            Log::warning('[FB-INGEST] AI agent respond failed: '.$e->getMessage());
-                        }
+                    try {
+                        app(\App\Services\AiAgentService::class)->respondIfAssigned($conv->fresh() ?: $conv);
+                    } catch (\Throwable $e) {
+                        Log::warning('[FB-INGEST] AI agent respond failed: '.$e->getMessage());
                     }
                 } else {
                     // 4) KEYWORD / WELCOME / AWAY / OUT-OF-HOURS auto-reply.

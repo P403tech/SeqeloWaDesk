@@ -6,6 +6,7 @@ use App\Models\FacebookPage;
 use App\Models\SystemSetting;
 use App\Services\Facebook\FacebookPageClient;
 use App\Services\PlanLimitGuard;
+use App\Support\ChannelSetupReturn;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -50,8 +51,9 @@ class FacebookConnectController extends Controller
     /** Kick off the Facebook Login OAuth dialog. */
     public function start(Request $request)
     {
+        ChannelSetupReturn::remember();
         if (! $this->planOk()) {
-            return redirect('/devices')->withErrors(['facebook' => __('Your plan does not include Facebook. Upgrade to connect a Page.')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => __('Your plan does not include Facebook. Upgrade to connect a Page.')]);
         }
         $appId = FacebookPageClient::appId();
         if ($appId === '') {
@@ -85,39 +87,39 @@ class FacebookConnectController extends Controller
     public function callback(Request $request)
     {
         if ($request->filled('error')) {
-            return redirect('/devices')->withErrors(['facebook' => (string) $request->string('error_description')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => (string) $request->string('error_description')]);
         }
         // CSRF: the state we put on the dialog must round-trip back unchanged.
         // Without this a victim lured to /facebook/callback?code=… could have an
         // attacker's Page silently connected into their workspace (login-CSRF).
         if (! hash_equals(csrf_token(), (string) $request->query('state'))) {
-            return redirect('/devices')->withErrors(['facebook' => __('Facebook connect could not be verified. Please start the connection again.')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => __('Facebook connect could not be verified. Please start the connection again.')]);
         }
         // Enforce the plan feature: this is a write-on-GET, which the route
         // middleware does not hard-block (it only blocks unsafe methods).
         if (! $this->planOk()) {
-            return redirect('/devices')->withErrors(['facebook' => __('Your plan does not include Facebook.')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => __('Your plan does not include Facebook.')]);
         }
         $code = (string) $request->string('code');
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
         if ($code === '' || ! $wsId) {
-            return redirect('/devices')->withErrors(['facebook' => __('Missing code or workspace.')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => __('Missing code or workspace.')]);
         }
 
         $tok = FacebookPageClient::exchangeCode($code, $this->redirectUri());
         if (empty($tok['ok'])) {
             Log::warning('[FB-CONNECT] token exchange failed', ['err' => $tok['error'] ?? '']);
 
-            return redirect('/devices')->withErrors(['facebook' => __('Token exchange failed: ').($tok['error'] ?? 'unknown')]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => __('Token exchange failed: ').($tok['error'] ?? 'unknown')]);
         }
 
         $userToken = $this->longLived((string) $tok['access_token']);
         $res = $this->storePages($userToken, $wsId, 'oauth');
         if (! $res['ok']) {
-            return redirect('/devices')->withErrors(['facebook' => $res['message']]);
+            return redirect(ChannelSetupReturn::url('/devices'))->withErrors(['facebook' => $res['message']]);
         }
 
-        return redirect('/devices')->with('status', $res['message']);
+        return redirect(ChannelSetupReturn::url('/devices'))->with('status', $res['message']);
     }
 
     /**
@@ -158,6 +160,7 @@ class FacebookConnectController extends Controller
      */
     public function connectManual(Request $request)
     {
+        ChannelSetupReturn::remember();
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
         $data = $request->validate([
             'page_access_token' => 'required|string|min:20|max:1000',
@@ -187,7 +190,7 @@ class FacebookConnectController extends Controller
             'data_exp' => $dataExp,
         ], 'manual');
 
-        return redirect('/devices')->with('status', __('Facebook Page “:name” connected.', ['name' => ($p['name'] ?? $p['id'])]));
+        return redirect(ChannelSetupReturn::url('/devices'))->with('status', __('Facebook Page “:name” connected.', ['name' => ($p['name'] ?? $p['id'])]));
     }
 
     /**

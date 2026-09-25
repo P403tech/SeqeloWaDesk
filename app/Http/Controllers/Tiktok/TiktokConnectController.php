@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\TiktokAccount;
 use App\Services\PlanLimitGuard;
 use App\Services\Tiktok\TiktokClient;
+use App\Support\ChannelSetupReturn;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -38,11 +39,12 @@ class TiktokConnectController extends Controller
     /** Kick off the TikTok OAuth consent dialog. */
     public function start(Request $request)
     {
+        ChannelSetupReturn::remember();
         if (! TiktokClient::enabled()) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('TikTok is not configured. Ask the platform admin to enable it under Settings.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('TikTok is not configured. Ask the platform admin to enable it under Settings.')]);
         }
         if (! $this->planOk()) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('Your plan does not include TikTok. Upgrade to connect an account.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('Your plan does not include TikTok. Upgrade to connect an account.')]);
         }
 
         // Round-tripped `state` is validated on return to stop login-CSRF.
@@ -55,33 +57,33 @@ class TiktokConnectController extends Controller
     public function callback(Request $request)
     {
         if ($request->filled('error')) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => (string) $request->string('error_description', $request->string('error'))]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => (string) $request->string('error_description', $request->string('error'))]);
         }
         // CSRF: the state we issued must round-trip unchanged.
         $expected = (string) $request->session()->pull('tiktok_oauth_state', '');
         if ($expected === '' || ! hash_equals($expected, (string) $request->query('state'))) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('TikTok connect could not be verified. Please start again.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('TikTok connect could not be verified. Please start again.')]);
         }
         if (! $this->planOk()) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('Your plan does not include TikTok.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('Your plan does not include TikTok.')]);
         }
 
         $code = (string) $request->string('code');
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
         if ($code === '' || ! $wsId) {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('Missing code or workspace.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('Missing code or workspace.')]);
         }
 
         $tok = TiktokClient::exchangeCode($code, $this->redirectUri());
         if (empty($tok['ok'])) {
             Log::warning('[TIKTOK-CONNECT] token exchange failed', ['err' => $tok['error'] ?? '']);
 
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('Token exchange failed: ').($tok['error'] ?? 'unknown')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('Token exchange failed: ').($tok['error'] ?? 'unknown')]);
         }
 
         $openId = (string) $tok['open_id'];
         if ($openId === '') {
-            return redirect('/tiktok/accounts')->withErrors(['tiktok' => __('TikTok did not return an account id.')]);
+            return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('TikTok did not return an account id.')]);
         }
 
         $account = TiktokAccount::updateOrCreate(
@@ -104,7 +106,7 @@ class TiktokConnectController extends Controller
 
         $name = $account->display_name ?: ($account->username ? '@'.$account->username : $openId);
 
-        return redirect('/tiktok/accounts')->with('status', __('TikTok account connected: :name', ['name' => $name]));
+        return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->with('status', __('TikTok account connected: :name', ['name' => $name]));
     }
 
     /** Re-pull profile + stats for a connected account. */
