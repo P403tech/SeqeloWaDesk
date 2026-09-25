@@ -156,7 +156,7 @@ class AiTrainingController extends Controller
             'system_prompt'    => 'nullable|string|max:8000',
             'tone'             => 'nullable|string|max:32',
             'language'         => 'nullable|string|max:16',
-            'ai_provider'      => 'nullable|in:openai,anthropic,gemini',
+            'ai_provider'      => 'nullable|in:openai,anthropic,gemini,mistral,muse',
             'ai_model'         => 'nullable|string|max:80',
             'reply_max_tokens' => 'nullable|integer|min:50|max:4000',
             'temperature'      => 'nullable|numeric|min:0|max:2',

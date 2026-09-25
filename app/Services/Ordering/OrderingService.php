@@ -313,8 +313,9 @@ class OrderingService
         $ml = strtolower($model);
         $provider = str_starts_with($ml, 'claude') ? 'anthropic'
                   : (str_starts_with($ml, 'gemini') ? 'gemini'
+                  : ((str_starts_with($ml, 'muse') || str_contains($ml, 'muse-spark')) ? 'muse'
                   : ((str_starts_with($ml, 'mistral') || str_starts_with($ml, 'ministral') || str_starts_with($ml, 'open-mistral') || str_starts_with($ml, 'open-mixtral')) ? 'mistral'
-                  : 'openai'));
+                  : 'openai')));
 
         $system = 'You convert a customer\'s WhatsApp message into a product order. '
                 . 'Respond with ONLY a single valid JSON object of the form '
@@ -329,7 +330,7 @@ class OrderingService
             // vision-capable default. Modern gpt-4o/4.1/5, Claude 3+, and Gemini
             // are all multimodal, so the user's chosen model passes through.
             $blindOpenAi = $provider === 'openai' && (bool) preg_match('/gpt-3\.5|^gpt-4(-0|$)/', $ml);
-            if ($provider === 'mistral' || $blindOpenAi) {
+            if ($provider === 'mistral' || $provider === 'muse' || $blindOpenAi) {
                 $provider = 'openai';
                 $model    = 'gpt-4o-mini';
             }
@@ -731,8 +732,9 @@ class OrderingService
         $ml = strtolower($model);
         $provider = str_starts_with($ml, 'claude') ? 'anthropic'
                   : (str_starts_with($ml, 'gemini') ? 'gemini'
+                  : ((str_starts_with($ml, 'muse') || str_contains($ml, 'muse-spark')) ? 'muse'
                   : ((str_starts_with($ml, 'mistral') || str_starts_with($ml, 'ministral') || str_starts_with($ml, 'open-mistral') || str_starts_with($ml, 'open-mixtral')) ? 'mistral'
-                  : 'openai'));
+                  : 'openai')));
 
         $system = 'A customer was shown their saved delivery address and asked to either CONFIRM it '
                 . '(by replying with ANY affirmative, in ANY language) or send a NEW delivery address. '

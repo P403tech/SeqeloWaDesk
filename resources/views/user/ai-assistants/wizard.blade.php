@@ -199,7 +199,7 @@
 
                         {{-- 3 provider cards — pick one. Multi-provider, not Gemini-only. --}}
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4" data-provider-cards>
-                            @foreach ([['k' => 'gemini', 'l' => 'Gemini', 's' => 'Google · low latency', 'dot' => '#4285F4', 'models' => 'gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro'], ['k' => 'openai', 'l' => 'GPT', 's' => 'OpenAI · best reasoning', 'dot' => '#10A37F', 'models' => 'gpt-4o-mini, gpt-4o, gpt-4.1'], ['k' => 'anthropic', 'l' => 'Claude', 's' => 'Anthropic · steady tone', 'dot' => '#D97757', 'models' => 'claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7']] as $p)
+                            @foreach ([['k' => 'gemini', 'l' => 'Gemini', 's' => 'Google · low latency', 'dot' => '#4285F4', 'models' => 'gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro'], ['k' => 'openai', 'l' => 'GPT', 's' => 'OpenAI · best reasoning', 'dot' => '#10A37F', 'models' => 'gpt-4o-mini, gpt-4o, gpt-4.1'], ['k' => 'anthropic', 'l' => 'Claude', 's' => 'Anthropic · steady tone', 'dot' => '#D97757', 'models' => 'claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7'], ['k' => 'muse', 'l' => 'Muse', 's' => 'Meta · Spark', 'dot' => '#0668E1', 'models' => 'muse-spark-1.3, muse-spark-1.1']] as $p)
                                 <button type="button" data-provider="{{ $p['k'] }}"
                                     class="provider-card text-left px-3 py-3 border border-paper-200 rounded-xl hover:border-wa-deep transition">
                                     <div class="flex items-center gap-2 mb-1.5">

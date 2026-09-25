@@ -2884,6 +2884,7 @@ Tips:
                             <option value="openai">{{ __('OpenAI (GPT)') }}</option>
                             <option value="anthropic">{{ __('Anthropic (Claude)') }}</option>
                             <option value="gemini">{{ __('Google (Gemini)') }}</option>
+                            <option value="muse">{{ __('Muse (Meta)') }}</option>
                         </select>
                     </div>
                     <div>
@@ -3216,6 +3217,7 @@ Tips:
                             <option value="openai">{{ __('OpenAI') }}</option>
                             <option value="anthropic">{{ __('Anthropic') }}</option>
                             <option value="gemini">{{ __('Google Gemini') }}</option>
+                            <option value="muse">{{ __('Muse (Meta)') }}</option>
                             <option value="elevenlabs">{{ __('ElevenLabs (voice TTS)') }}</option>
                         </select>
                     </div>

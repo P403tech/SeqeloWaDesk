@@ -5375,7 +5375,7 @@ class TeamInboxController extends Controller
         $this->coerceAgentModel($request);
         $data = $request->validate([
             'name'          => 'required|string|max:191',
-            'provider'      => 'required|in:openai,anthropic,gemini',
+            'provider'      => 'required|in:openai,anthropic,gemini,mistral,muse',
             'model'         => 'required|string|max:64',
             'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
@@ -5444,7 +5444,7 @@ class TeamInboxController extends Controller
         $this->coerceAgentModel($request, $agent->model);
         $data = $request->validate([
             'name'          => 'sometimes|string|max:191',
-            'provider'      => 'sometimes|in:openai,anthropic,gemini',
+            'provider'      => 'sometimes|in:openai,anthropic,gemini,mistral,muse',
             'model'         => 'sometimes|string|max:64',
             'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
@@ -5543,6 +5543,7 @@ class TeamInboxController extends Controller
             'openai'    => 'gpt-4o-mini',
             'anthropic' => 'claude-haiku-4-5-20251001',
             'gemini'    => 'gemini-2.5-flash-lite',
+            'muse'      => 'muse-spark-1.3',
         ];
         $provider = (string) $request->input('provider', 'openai');
         $resolved = ($fallback !== null && trim((string) $fallback) !== '')
@@ -5574,7 +5575,7 @@ class TeamInboxController extends Controller
             // workspace can register its TTS key in the same modal.
             // The AsrDriver/TtsDriver classes look the value up via
             // AiProviderKey::keyFor(workspace, 'elevenlabs').
-            'provider' => 'required|in:openai,anthropic,gemini,elevenlabs',
+            'provider' => 'required|in:openai,anthropic,gemini,muse,elevenlabs',
             'api_key'  => 'required|string|min:8|max:512',
         ]);
         $wsId = $request->user()->current_workspace_id;

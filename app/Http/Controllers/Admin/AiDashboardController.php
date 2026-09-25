@@ -29,6 +29,7 @@ class AiDashboardController extends Controller
         'deepseek'  => 0.0008,
         'grok'      => 0.005,
         'mistral'   => 0.002,
+        'muse'      => 0.005,
     ];
 
     public function index(Request $request): View

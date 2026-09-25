@@ -56,6 +56,10 @@ class AdminAiKeyController extends Controller
             // Gemini 2.5 — still maintained
             'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
         ],
+        'muse' => [
+            'muse-spark-1.3',
+            'muse-spark-1.1',
+        ],
         'mistral' => [
             // Aliases — resolve to current generation automatically
             'mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest',
@@ -127,6 +131,20 @@ class AdminAiKeyController extends Controller
                 'label' => 'Project ID',
                 'type' => 'text',
                 'hint' => 'Optional. For Vertex AI billing.',
+            ],
+            'max_tokens' => [
+                'label' => 'Max tokens per request',
+                'type' => 'text',
+                'placeholder' => 'e.g. 4096',
+                'hint' => 'Optional ceiling — a single AI request can never burn more than this many output tokens. Leave blank for the model default.',
+            ],
+        ],
+        'muse' => [
+            'api_key' => [
+                'label' => 'API key',
+                'type' => 'password',
+                'hint' => 'Create at the Meta Model API dashboard (ai.developer.meta.com). OpenAI-compatible; model Muse Spark.',
+                'required' => true,
             ],
             'max_tokens' => [
                 'label' => 'Max tokens per request',

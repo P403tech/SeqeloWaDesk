@@ -4538,7 +4538,7 @@ Limits:
             list.innerHTML = `<div class="text-[12px] text-ink-500 text-center py-4">No keys saved yet.</div>`;
             return;
         }
-        const providerLabel = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini' };
+        const providerLabel = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', muse: 'Muse' };
         list.innerHTML = keys.map(k => `
             <div class="flex items-center gap-2 py-2 border-b border-paper-200 last:border-0">
                 <span class="font-mono text-[11.5px] text-ink-700 flex-1">${escape(providerLabel[k.provider] || k.provider)}</span>

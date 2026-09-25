@@ -686,6 +686,7 @@ class AiAgentService
                 'anthropic' => $this->callAnthropic($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode),
                 'gemini'    => $this->callGemini($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode),
                 'mistral'   => $this->callMistral($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $jsonMode),
+                'muse'      => $this->callMuse($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $jsonMode),
                 default     => null,
             };
 
@@ -718,6 +719,7 @@ class AiAgentService
             'anthropic' => env('ANTHROPIC_API_KEY') ?: null,
             'gemini'    => env('GEMINI_API_KEY')    ?: null,
             'mistral'   => env('MISTRAL_API_KEY')   ?: null,
+            'muse'      => env('MUSE_API_KEY') ?: env('MODEL_API_KEY') ?: null,
             default     => null,
         };
     }
@@ -753,6 +755,43 @@ class AiAgentService
             return trim((string) ($res->json('choices.0.message.content') ?? '')) ?: null;
         }
         Log::warning('[AI-AGENT] Mistral non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
+        return null;
+    }
+
+    /**
+     * Meta Muse Spark — OpenAI-compatible Chat Completions
+     * (https://api.meta.ai/v1/chat/completions). Bearer MODEL_API_KEY.
+     * Reasoning model: omit temperature (default 1.0) and use
+     * max_completion_tokens. Prefer the `developer` role for instructions.
+     */
+    private function callMuse(string $key, string $model, string $system, string $user, int $maxTokens, bool $jsonMode = false): ?string
+    {
+        $payload = [
+            'model' => $model ?: 'muse-spark-1.3',
+            'messages' => [
+                ['role' => 'developer', 'content' => $system],
+                ['role' => 'user', 'content' => $user],
+            ],
+            'max_completion_tokens' => $maxTokens,
+        ];
+        if ($jsonMode) {
+            $payload['response_format'] = ['type' => 'json_object'];
+        }
+
+        $res = Http::withToken($key)
+            ->acceptJson()
+            ->timeout(60)
+            ->post('https://api.meta.ai/v1/chat/completions', $payload);
+        if ($res->ok()) {
+            $text = trim((string) ($res->json('choices.0.message.content') ?? ''));
+            if ($jsonMode && $text !== '') {
+                $text = trim(preg_replace('/^```(?:json)?\s*|\s*```$/i', '', $text));
+            }
+
+            return $text ?: null;
+        }
+        Log::warning('[AI-AGENT] Muse non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
+
         return null;
     }
 

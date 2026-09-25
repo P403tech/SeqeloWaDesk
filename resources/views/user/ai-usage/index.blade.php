@@ -12,6 +12,7 @@
 
     $provColor = [
         'openai' => '#10a37f', 'anthropic' => '#d97757', 'gemini' => '#4285f4',
+        'mistral' => '#fa520f', 'muse' => '#0668e1',
         'google' => '#4285f4', 'deepseek' => '#4d6bfe', 'grok' => '#111', 'mistral' => '#fa520f',
     ];
 

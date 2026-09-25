@@ -1845,6 +1845,7 @@ class TemplatesController extends Controller
             'anthropic' => 'Anthropic',
             'gemini'    => 'Google',
             'mistral'   => 'Mistral',
+            'muse'      => 'Muse',
         ];
 
         $models = [];
@@ -1875,6 +1876,7 @@ class TemplatesController extends Controller
                 'anthropic' => ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
                 'gemini'    => ['gemini-2.0-flash', 'gemini-1.5-pro'],
                 'mistral'   => ['mistral-large-latest', 'mistral-small-latest'],
+                'muse'      => ['muse-spark-1.3', 'muse-spark-1.1'],
             ];
             $own = \App\Models\AiProviderKey::query()
                 ->where('workspace_id', $ws->id)->where('is_active', true)
@@ -1906,7 +1908,7 @@ class TemplatesController extends Controller
     {
         $data = $request->validate([
             'model'         => 'required|string|max:120',
-            'provider'      => 'required|string|in:openai,anthropic,gemini',
+            'provider'      => 'required|string|in:openai,anthropic,gemini,mistral,muse',
             'type'          => 'nullable|string|in:standard,carousel',
             'category'      => 'nullable|string|in:marketing,utility,authentication',
             'language'      => 'nullable|string|max:16',

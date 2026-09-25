@@ -747,6 +747,7 @@ class FlowsController extends Controller
             'anthropic' => 'Anthropic',
             'gemini'    => 'Google',
             'mistral'   => 'Mistral',
+            'muse'      => 'Muse',
         ];
 
         $models = [];
@@ -786,6 +787,7 @@ class FlowsController extends Controller
                 'anthropic' => ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
                 'gemini'    => ['gemini-2.0-flash', 'gemini-1.5-pro'],
                 'mistral'   => ['mistral-large-latest', 'mistral-small-latest'],
+                'muse'      => ['muse-spark-1.3', 'muse-spark-1.1'],
             ];
             $own = \App\Models\AiProviderKey::query()
                 ->where('workspace_id', $workspace->id)
@@ -876,7 +878,7 @@ class FlowsController extends Controller
             'model'     => 'required|string|max:120',
             // Only providers AiAgentService::callProvider() actually
             // implements — keep this in sync if a new branch lands.
-            'provider'  => 'required|string|in:openai,anthropic,gemini',
+            'provider'  => 'required|string|in:openai,anthropic,gemini,mistral,muse',
             // Which builder asked. A 'call' flow needs voice (cf_*) nodes,
             // not chat nodes. Defaults to chat for back-compat.
             'flow_type' => 'nullable|string|in:chat,call,instagram,facebook,tiktok,telegram',

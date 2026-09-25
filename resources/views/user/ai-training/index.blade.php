@@ -20,6 +20,12 @@
                 'dot' => 'bg-[#3D6FB5]',
                 'label' => 'Gemini',
             ],
+            'muse' => [
+                'bg' => 'bg-[#E8F1FF]',
+                'text' => 'text-[#0668E1]',
+                'dot' => 'bg-[#0668E1]',
+                'label' => 'Muse',
+            ],
         ];
         $accentPalette = [
             ['bg' => 'bg-wa-mint', 'text' => 'text-wa-deep'],

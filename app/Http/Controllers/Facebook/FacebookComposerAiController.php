@@ -74,6 +74,9 @@ class FacebookComposerAiController extends Controller
         if (str_contains($m, 'gemini')) {
             return 'gemini';
         }
+        if (str_contains($m, 'muse')) {
+            return 'muse';
+        }
         if (str_contains($m, 'mistral')) {
             return 'mistral';
         }

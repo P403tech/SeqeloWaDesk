@@ -40,22 +40,28 @@ class AdminAiKeySeeder extends Seeder
                 'sort_order'    => 3,
             ],
             [
+                'provider'      => 'muse',
+                'name'          => 'Muse (Meta)',
+                'default_model' => 'muse-spark-1.3',
+                'sort_order'    => 4,
+            ],
+            [
                 'provider'      => 'mistral',
                 'name'          => 'Mistral',
                 'default_model' => 'mistral-large-latest',
-                'sort_order'    => 4,
+                'sort_order'    => 5,
             ],
             [
                 'provider'      => 'elevenlabs',
                 'name'          => 'ElevenLabs',
                 'default_model' => 'eleven_v3',
-                'sort_order'    => 5,
+                'sort_order'    => 6,
             ],
             [
                 'provider'      => 'deepgram',
                 'name'          => 'Deepgram',
                 'default_model' => 'nova-2',
-                'sort_order'    => 6,
+                'sort_order'    => 7,
             ],
         ];
 

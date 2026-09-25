@@ -738,6 +738,11 @@
                                 'docs' => 'aistudio.google.com/app/apikey',
                                 'sub' => 'Gemini 3.5 Flash, 3.1 Pro, 2.5 Pro',
                             ],
+                            'muse' => [
+                                'name' => 'Muse (Meta)',
+                                'docs' => 'ai.developer.meta.com',
+                                'sub' => 'Muse Spark 1.3, 1.1',
+                            ],
                             'mistral' => [
                                 'name' => 'Mistral',
                                 'docs' => 'console.mistral.ai/api-keys',

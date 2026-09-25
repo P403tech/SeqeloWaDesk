@@ -116,7 +116,7 @@ class AiCallAssistantController extends Controller
             'status'               => 'required|in:live,draft,paused',
             'is_active'            => 'sometimes|boolean',
             // Step 2
-            'ai_provider'          => 'required|in:gemini,openai,anthropic',
+            'ai_provider'          => 'required|in:gemini,openai,anthropic,muse',
             'ai_model'             => 'required|string|max:80',
             'ai_api_key'           => 'nullable|string|max:500',  // BYOK override
             'ai_system_prompt'     => 'nullable|string|max:6000',

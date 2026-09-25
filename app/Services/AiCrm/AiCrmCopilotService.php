@@ -33,7 +33,7 @@ class AiCrmCopilotService
     private const MAX_STEPS = 5;
     private const MAX_TOKENS = 800;
     /** Preferred provider order when the workspace hasn't pinned one. */
-    private const PROVIDER_ORDER = ['anthropic', 'openai', 'gemini'];
+    private const PROVIDER_ORDER = ['anthropic', 'openai', 'gemini', 'muse'];
 
     /**
      * Handle one user turn.
@@ -69,6 +69,7 @@ class AiCrmCopilotService
                 'openai'    => $this->runOpenAI($ws, $user, $channel, $key, $model, $system, $history, $message, $toolkit),
                 'anthropic' => $this->runAnthropic($ws, $user, $channel, $key, $model, $system, $history, $message, $toolkit),
                 'gemini'    => $this->runGemini($ws, $user, $channel, $key, $model, $system, $history, $message, $toolkit),
+                'muse'      => $this->runOpenAI($ws, $user, $channel, $key, $model, $system, $history, $message, $toolkit, 'https://api.meta.ai/v1/chat/completions', 'muse'),
                 default     => ['reply' => 'AI provider not supported.', 'actions' => [], 'pending' => null, 'provider' => $provider],
             };
         } catch (\Throwable $e) {
@@ -79,9 +80,10 @@ class AiCrmCopilotService
 
     // ---- provider loops -----------------------------------------------------
 
-    private function runOpenAI(Workspace $ws, ?User $user, string $channel, string $key, string $model, string $system, array $history, string $message, CrmToolkit $toolkit): array
+    private function runOpenAI(Workspace $ws, ?User $user, string $channel, string $key, string $model, string $system, array $history, string $message, CrmToolkit $toolkit, string $endpoint = 'https://api.openai.com/v1/chat/completions', string $asProvider = 'openai'): array
     {
-        $messages = [['role' => 'system', 'content' => $system]];
+        $sysRole = $asProvider === 'muse' ? 'developer' : 'system';
+        $messages = [['role' => $sysRole, 'content' => $system]];
         foreach ($history as $h) {
             $messages[] = ['role' => $h['role'] === 'assistant' ? 'assistant' : 'user', 'content' => (string) $h['text']];
         }
@@ -93,7 +95,7 @@ class AiCrmCopilotService
         ], $toolkit->definitions());
 
         $m = strtolower($model);
-        $newFamily = (bool) preg_match('/^(gpt-5|gpt-6|o[1-9])/', $m);
+        $newFamily = $asProvider === 'muse' || (bool) preg_match('/^(gpt-5|gpt-6|o[1-9])/', $m);
         $actions = [];
         $tokens = 0;
 
@@ -102,10 +104,10 @@ class AiCrmCopilotService
             $payload[$newFamily ? 'max_completion_tokens' : 'max_tokens'] = self::MAX_TOKENS;
             if (!$newFamily) $payload['temperature'] = 0.2;
 
-            $res = Http::withToken($key)->timeout(45)->post('https://api.openai.com/v1/chat/completions', $payload);
+            $res = Http::withToken($key)->timeout(45)->post($endpoint, $payload);
             if (!$res->ok()) {
-                Log::warning('[AI-CRM] OpenAI non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
-                return ['reply' => 'The AI service returned an error. Please try again.', 'actions' => $actions, 'pending' => null, 'provider' => 'openai'];
+                Log::warning('[AI-CRM] '.$asProvider.' non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
+                return ['reply' => 'The AI service returned an error. Please try again.', 'actions' => $actions, 'pending' => null, 'provider' => $asProvider];
             }
             $tokens += (int) ($res->json('usage.total_tokens') ?? 0);
             $msg = $res->json('choices.0.message') ?? [];
@@ -113,27 +115,27 @@ class AiCrmCopilotService
 
             if (empty($calls)) {
                 $reply = trim((string) ($msg['content'] ?? ''));
-                $this->meter($ws, 'openai', $model, $tokens);
-                return ['reply' => $reply ?: 'Done.', 'actions' => $actions, 'pending' => null, 'provider' => 'openai'];
+                $this->meter($ws, $asProvider, $model, $tokens);
+                return ['reply' => $reply ?: 'Done.', 'actions' => $actions, 'pending' => null, 'provider' => $asProvider];
             }
 
-            $messages[] = $msg; // assistant turn carrying the tool_calls
+            $messages[] = $msg;
             foreach ($calls as $call) {
                 $name = $call['function']['name'] ?? '';
                 $args = json_decode((string) ($call['function']['arguments'] ?? '{}'), true) ?: [];
 
                 if ($toolkit->kindOf($name) === 'write') {
-                    $this->meter($ws, 'openai', $model, $tokens);
-                    return $this->askConfirm($ws, $user, $channel, $name, $args, $toolkit, $actions, 'openai');
+                    $this->meter($ws, $asProvider, $model, $tokens);
+                    return $this->askConfirm($ws, $user, $channel, $name, $args, $toolkit, $actions, $asProvider);
                 }
                 $result = $toolkit->execute($name, $args);
                 $actions[] = ['tool' => $name, 'summary' => $result['summary'] ?? ''];
-                $this->log($ws->id, $user?->id, $channel, $name, 'read', $result['ok'] ? 'ok' : 'error', $args, $result['summary'] ?? '', 'openai', $model, 0, $result);
+                $this->log($ws->id, $user?->id, $channel, $name, 'read', $result['ok'] ? 'ok' : 'error', $args, $result['summary'] ?? '', $asProvider, $model, 0, $result);
                 $messages[] = ['role' => 'tool', 'tool_call_id' => $call['id'] ?? '', 'content' => json_encode($result['data'] ?? $result)];
             }
         }
-        $this->meter($ws, 'openai', $model, $tokens);
-        return ['reply' => 'I gathered the data but ran out of steps — please ask again more specifically.', 'actions' => $actions, 'pending' => null, 'provider' => 'openai'];
+        $this->meter($ws, $asProvider, $model, $tokens);
+        return ['reply' => 'I gathered the data but ran out of steps — please ask again more specifically.', 'actions' => $actions, 'pending' => null, 'provider' => $asProvider];
     }
 
     private function runAnthropic(Workspace $ws, ?User $user, string $channel, string $key, string $model, string $system, array $history, string $message, CrmToolkit $toolkit): array
@@ -342,6 +344,7 @@ class AiCrmCopilotService
             'openai'    => 'gpt-4o-mini',
             'anthropic' => 'claude-haiku-4-5-20251001',
             'gemini'    => 'gemini-1.5-flash',
+            'muse'      => 'muse-spark-1.3',
             default     => '',
         };
     }

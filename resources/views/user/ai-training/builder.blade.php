@@ -216,6 +216,7 @@
                                     <option value="openai">{{ __('OpenAI · GPT family') }}</option>
                                     <option value="anthropic">{{ __('Anthropic · Claude family') }}</option>
                                     <option value="gemini">{{ __('Google · Gemini family') }}</option>
+                                    <option value="muse">{{ __('Muse · Meta Spark') }}</option>
                                 </select>
                                 <div class="text-[10.5px] text-ink-500 mt-1">
                                     {{ __('Admin pre-configures the API keys — no key required from you.') }}</div>

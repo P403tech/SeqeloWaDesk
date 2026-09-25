@@ -38,6 +38,7 @@ class AiHelpersController extends Controller
             'anthropic' => 'Anthropic',
             'gemini'    => 'Google',
             'mistral'   => 'Mistral',
+            'muse'      => 'Muse',
         ];
 
         $models = [];
@@ -83,7 +84,7 @@ class AiHelpersController extends Controller
         $data = $request->validate([
             'text'     => 'required|string|max:4096',
             'context'  => 'nullable|string|max:120',
-            'provider' => 'nullable|string|in:openai,anthropic,gemini',
+            'provider' => 'nullable|string|in:openai,anthropic,gemini,mistral,muse',
             'model'    => 'nullable|string|max:120',
         ]);
 
@@ -110,7 +111,7 @@ class AiHelpersController extends Controller
                 'message' => 'Admin has not enabled any AI provider yet.',
             ], 422);
         }
-        if (!in_array($provider, ['openai', 'anthropic', 'gemini'], true)) {
+        if (!in_array($provider, ['openai', 'anthropic', 'gemini', 'mistral', 'muse'], true)) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'unsupported_provider',
