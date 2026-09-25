@@ -1,34 +1,33 @@
 <x-layouts.user :title="__('Smart Agent Builder')" nav-key="more" page="user-ai-training-builder">
 
     @php
+        $d = \App\Services\Ai\StarterSmartAgent::defaults();
         $a = $assistant;
         $defaults = [
             'id' => $a?->id ?? null,
             'name' => $a?->name ?? '',
-            'status' => $a?->status ?? 'active',
-            'greeting' => $a?->greeting ?? 'Hi! How can I help today?',
-            'system_prompt' =>
-                $a?->system_prompt ??
-                "You are a helpful website assistant. Be concise, friendly, and accurate. If you don't know something, say so and offer to connect a teammate.",
-            'tone' => $a?->tone ?? 'helpful',
-            'language' => $a?->language ?? 'en',
-            'ai_provider' => $a?->ai_provider ?? 'openai',
-            'ai_model' => $a?->ai_model ?? 'gpt-4o-mini',
-            'reply_max_tokens' => $a?->reply_max_tokens ?? 400,
-            'temperature' => $a ? (float) $a->temperature : 0.7,
-            'fallback_message' =>
-                $a?->fallback_message ?? 'A teammate will follow up shortly — thanks for your patience.',
-            'handoff_enabled' => (bool) ($a?->handoff_enabled ?? true),
-            'handoff_keyword' => $a?->handoff_keyword ?? 'talk to human',
-            'handoff_message' => $a?->handoff_message ?? 'Sure — pulling in a teammate now.',
-            'business_brief' => $a?->business_brief ?? '',
-            'channel_whatsapp' => (bool) ($a?->channel_whatsapp ?? true),
-            'channel_facebook' => (bool) ($a?->channel_facebook ?? false),
-            'channel_instagram' => (bool) ($a?->channel_instagram ?? false),
-            'channel_tiktok' => (bool) ($a?->channel_tiktok ?? false),
-            'shopify_tools' => (bool) ($a?->shopify_tools ?? false),
-            'channel_control' => \App\Services\Ai\AgentChannelControl::normalize($a?->channel_control ?? []),
+            'status' => $a?->status ?? $d['status'],
+            'greeting' => $a?->greeting ?? $d['greeting'],
+            'system_prompt' => $a?->system_prompt ?? $d['system_prompt'],
+            'tone' => $a?->tone ?? $d['tone'],
+            'language' => $a?->language ?? $d['language'],
+            'ai_provider' => $a?->ai_provider ?? $d['ai_provider'],
+            'ai_model' => $a?->ai_model ?? $d['ai_model'],
+            'reply_max_tokens' => $a?->reply_max_tokens ?? $d['reply_max_tokens'],
+            'temperature' => $a ? (float) $a->temperature : $d['temperature'],
+            'fallback_message' => $a?->fallback_message ?? $d['fallback_message'],
+            'handoff_enabled' => (bool) ($a?->handoff_enabled ?? $d['handoff_enabled']),
+            'handoff_keyword' => $a?->handoff_keyword ?? $d['handoff_keyword'],
+            'handoff_message' => $a?->handoff_message ?? $d['handoff_message'],
+            'business_brief' => $a?->business_brief ?? $d['business_brief'],
+            'channel_whatsapp' => (bool) ($a?->channel_whatsapp ?? $d['channel_whatsapp']),
+            'channel_facebook' => (bool) ($a?->channel_facebook ?? $d['channel_facebook']),
+            'channel_instagram' => (bool) ($a?->channel_instagram ?? $d['channel_instagram']),
+            'channel_tiktok' => (bool) ($a?->channel_tiktok ?? $d['channel_tiktok']),
+            'shopify_tools' => (bool) ($a?->shopify_tools ?? $d['shopify_tools']),
+            'channel_control' => \App\Services\Ai\AgentChannelControl::normalize($a?->channel_control ?? $d['channel_control']),
         ];
+        $isStarter = \App\Services\Ai\StarterSmartAgent::isStarter($a);
         $channelSetup = $channelSetup ?? [];
     @endphp
 
@@ -65,6 +64,12 @@
 
     <section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-6">
         <div id="ait-builder" data-mode="{{ $mode }}" data-defaults='@json($defaults)'>
+
+            @if ($isStarter ?? false)
+                <div class="mb-4 rounded-2xl border border-wa-green/30 bg-wa-mint/40 px-4 py-3 text-[13px] text-ink-800">
+                    {{ __('Seqelo built this Customer Support agent for you. Change any field — name, brief, brain, channels, knowledge. We will not overwrite your edits.') }}
+                </div>
+            @endif
 
             {{-- ============ MAIN CARD ============ --}}
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
@@ -206,11 +211,11 @@
                         <div>
                             <label
                                 class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Character brief (system instructions)') }}</label>
-                            <textarea data-field="system_prompt" rows="9"
-                                placeholder="You are the friendly support agent for Acme Inc, a 12-person hardware startup. Always answer in short sentences, never quote prices above $500 (escalate to a human instead), and politely refuse to discuss competitors."
+                            <textarea data-field="system_prompt" rows="16"
+                                placeholder="You are the friendly support agent for Acme Inc..."
                                 class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 font-mono"></textarea>
                             <div class="text-[10.5px] text-ink-500 mt-1">
-                                {{ __("Internal — never shown to visitors. Include do's, don'ts, escalation rules.") }}
+                                {{ __("Yours to edit. Internal — never shown to customers. Seqelo ships a starter brief; change anything to match your brand.") }}
                             </div>
                         </div>
                     </div>

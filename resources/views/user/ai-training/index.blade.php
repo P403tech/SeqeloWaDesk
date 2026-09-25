@@ -42,7 +42,7 @@
                         {{ __('AI') }} <span class="italic text-wa-deep">{{ __('Agents') }}</span>
                     </h1>
                     <p class="text-[14px] text-ink-600 mt-3 leading-relaxed">
-                        {{ __('One agent. Identity, persona, brain, safety — then on Knowledge connect the pipes and train what it may say.') }}
+                        {{ __('We already built a Customer Support agent for every workspace. Open it and edit the brief — or add another.') }}
                     </p>
                     <div class="flex flex-wrap gap-2 mt-4">
                         @foreach ([__('Identity'), __('Persona'), __('Brain'), __('Safety'), __('Knowledge')] as $i => $step)
@@ -192,6 +192,9 @@
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2 flex-wrap">
                                         <span class="font-semibold text-[15px] text-ink-900 truncate group-hover:text-wa-deep">{{ $a->name }}</span>
+                                        @if (\App\Services\Ai\StarterSmartAgent::isStarter($a))
+                                            <span class="inline-flex px-1.5 py-0.5 rounded-md font-mono text-[9.5px] uppercase tracking-[0.14em] bg-wa-mint text-wa-deep">{{ __('Starter') }}</span>
+                                        @endif
                                         <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[9.5px] uppercase tracking-[0.14em] {{ $status['bg'] }} {{ $status['text'] }}">
                                             <span class="w-1.5 h-1.5 rounded-full {{ $status['dot'] }}"></span>{{ $status['label'] }}
                                         </span>

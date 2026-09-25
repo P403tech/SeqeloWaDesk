@@ -26,6 +26,11 @@ class AiTrainingController extends Controller
     public function index(): View
     {
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
+        try {
+            \App\Services\Ai\StarterSmartAgent::ensureForWorkspace($wsId, (int) (Auth::id() ?? 0));
+        } catch (\Throwable $e) {
+            \Log::warning('[AI-TRAINING] starter agent seed failed: '.$e->getMessage());
+        }
 
         $assistants = AiChatAssistant::query()
             ->where('workspace_id', $wsId)

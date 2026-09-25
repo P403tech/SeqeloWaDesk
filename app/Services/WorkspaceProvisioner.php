@@ -57,6 +57,12 @@ class WorkspaceProvisioner
         $workspace->members()->attach($user->id, ['role' => 'owner', 'joined_at' => now()]);
         $user->switchWorkspace($workspace->id);
 
+        try {
+            \App\Services\Ai\StarterSmartAgent::ensureForWorkspace((int) $workspace->id, (int) $user->id);
+        } catch (\Throwable $e) {
+            \Log::warning('[PROVISION] starter agent seed failed: '.$e->getMessage());
+        }
+
         return $workspace;
     }
 }
