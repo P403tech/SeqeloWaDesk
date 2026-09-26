@@ -330,6 +330,40 @@ if (! function_exists('theme_css')) {
     }
 }
 
+if (! function_exists('auth_page_copy')) {
+    /**
+     * Default copy for login / register / forgot so a layout variant
+     * never renders an empty left panel when settings are blank.
+     *
+     * @return array<string, string>
+     */
+    function auth_page_copy(string $page): array
+    {
+        $all = [
+            'login' => [
+                'eyebrow' => 'Operator console for WhatsApp',
+                'heading' => 'One place for every',
+                'heading_accent' => 'conversation',
+                'subheading' => 'Broadcasts, flows, AI assist, shared inbox — all in one workspace your team will actually use.',
+            ],
+            'register' => [
+                'eyebrow' => 'Get started in minutes',
+                'heading' => 'Start your',
+                'heading_accent' => 'free trial',
+                'subheading' => 'Create your workspace and connect your first WhatsApp number in minutes.',
+            ],
+            'forgot' => [
+                'eyebrow' => 'Account recovery',
+                'heading' => 'Get back in,',
+                'heading_accent' => 'fast',
+                'subheading' => 'Enter your email and we will send you a secure link to reset your password.',
+            ],
+        ];
+
+        return $all[$page] ?? $all['login'];
+    }
+}
+
 if (! function_exists('auth_cfg')) {
     /**
      * Admin-editable content for the auth pages (login / register / forgot),
@@ -341,6 +375,9 @@ if (! function_exists('auth_cfg')) {
      */
     function auth_cfg(string $page, string $key, mixed $default = null): mixed
     {
+        if ($default === null || $default === '') {
+            $default = auth_page_copy($page)[$key] ?? $default;
+        }
         try {
             $val = \App\Models\SystemSetting::get('auth.' . $page . '.' . $key, null);
         } catch (\Throwable $e) {

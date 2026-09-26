@@ -50,6 +50,12 @@ class Maintenance
             return $next($request);
         }
 
+        // Never 503 the guest auth surface, even if path matching above missed
+        // a locale prefix or a trailing slash. Login must stay reachable.
+        if ($this->isGuestAuthRequest($request)) {
+            return $next($request);
+        }
+
         // JSON/API callers get a clean 503 they can handle.
         if ($request->expectsJson()) {
             return response()->json([
@@ -83,12 +89,28 @@ class Maintenance
     {
         return $request->is(
             'login',
+            'login/*',
             'logout',
+            'logout/*',
+            'register',
+            'register/*',
+            'forgot-password',
+            'forgot-password/*',
+            'reset-password',
+            'reset-password/*',
+            'password/*',
+            'email/*',
+            'two-factor',
+            'two-factor/*',
+            '2fa',
+            '2fa/*',
             'auth/*',           // social sign-in redirect + callback
             'csrf-token',
             'up',               // health check
             'build/*',          // Vite assets
             'css/*', 'js/*', 'images/*', 'fonts/*', 'storage/*',
+            'uploads/*',
+            'brand/*',
             'favicon.ico', 'robots.txt',
 
             // ── Machine-to-machine: never 503 these ──────────────────────────
@@ -101,5 +123,36 @@ class Maintenance
             'payment/callback/*',   // gateway returns the buyer here after paying
             'wd-sync',
         );
+    }
+
+    private function isGuestAuthRequest(Request $request): bool
+    {
+        try {
+            if ($request->routeIs(
+                'login',
+                'logout',
+                'register',
+                'register.*',
+                'password.*',
+                'verification.*',
+                'two-factor.*'
+            )) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        $path = strtolower(trim($request->path(), '/'));
+
+        foreach ([
+            'login', 'logout', 'register', 'forgot-password', 'reset-password',
+            'password', 'email', 'two-factor', '2fa', 'auth',
+        ] as $prefix) {
+            if ($path === $prefix || str_starts_with($path, $prefix.'/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

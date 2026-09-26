@@ -22,10 +22,11 @@
     $brandName = (string) brand_name();
     $brandLogo = \App\Support\Brand::logoUrl();
 
-    $eyebrow       = auth_cfg($page, 'eyebrow', '');
-    $heading       = auth_cfg($page, 'heading', '');
-    $headingAccent = auth_cfg($page, 'heading_accent', '');
-    $subheading    = auth_cfg($page, 'subheading', '');
+    $copy          = auth_page_copy($page);
+    $eyebrow       = auth_cfg($page, 'eyebrow', $copy['eyebrow']);
+    $heading       = auth_cfg($page, 'heading', $copy['heading']);
+    $headingAccent = auth_cfg($page, 'heading_accent', $copy['heading_accent']);
+    $subheading    = auth_cfg($page, 'subheading', $copy['subheading']);
     $accent        = auth_cfg($page, 'accent', '#1B4B3D');
     $mediaUrl      = auth_cfg($page, 'media_url', '');
     $mediaType     = auth_cfg($page, 'media_type', '');
@@ -111,9 +112,7 @@
 
                     <div class="relative z-10">{!! $brandMark !!}</div>
                     <div class="relative z-10">
-                        @if ($eyebrow)
-                            <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-paper-0/70 mb-4" data-fc="{{ $page }}.eyebrow">{{ $eyebrow }}</div>
-                        @endif
+                        <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-paper-0/70 mb-4" data-fc="{{ $page }}.eyebrow">{{ $eyebrow }}</div>
                         <h1 class="font-serif text-[46px] leading-[1.04] tracking-[-0.01em]">
                             <span data-fc="{{ $page }}.heading">{{ $heading }}</span>
                             <span class="italic text-paper-0/90" data-fc="{{ $page }}.heading_accent">{{ $headingAccent }}</span>.
