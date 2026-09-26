@@ -159,7 +159,7 @@
                                 <input data-field="language" type="text" placeholder="en"
                                     class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 font-mono">
                                 <div class="text-[10.5px] text-ink-500 mt-1">
-                                    {{ __("ISO 639-1 code. Auto-matches visitor's language if different.") }}</div>
+                                    {{ __("Fallback if a message has no readable language. The agent always replies in the language the customer wrote in.") }}</div>
                             </div>
                             <div>
                                 <label
@@ -370,7 +370,7 @@
                                 <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">{{ __('Live URL') }}
                                 </div>
                                 <div class="text-[11px] text-ink-500 leading-snug">
-                                    {{ __('Fetch a public page and store the text.') }}</div>
+                                    {{ __('Fetch a public page. The agent answers from it and can share the link.') }}</div>
                             </button>
                             <button type="button" data-add-source="text"
                                 class="rounded-lg border border-paper-200 hover:border-wa-deep bg-paper-50 p-3 text-left transition">

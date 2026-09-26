@@ -38,18 +38,15 @@ class AiChatService
         if ($context !== '') {
             $system .= "\n\n--- Knowledge base ---\n" . $context . "\n--- End knowledge base ---";
         }
+        $web = \App\Services\Ai\AgentWebsiteContext::promptBlock($assistant);
+        if ($web !== '') {
+            $system .= "\n\n--- Website pages to share ---\n".$web."\n--- End website pages ---";
+        }
 
-        // Real-time translation — detect the visitor's language and have the
-        // widget bot reply natively in it (best quality vs round-tripping).
-        // Gated on the plan feature + workspace toggle.
         try {
-            $cfg = app(\App\Services\Inbox\ConversationTranslationService::class)->config((int) $assistant->workspace_id);
-            if ($cfg['enabled']) {
-                $lang = strtolower(trim((string) \App\Services\Translator::detect(trim($visitorMessage))));
-                if ($lang !== '' && $lang !== $cfg['lang']) {
-                    $system .= "\n\nThe visitor is writing in language code \"{$lang}\". Reply ENTIRELY in that same language, naturally.";
-                }
-            }
+            $lang = \App\Services\Ai\CustomerLanguage::detectFromText(trim($visitorMessage));
+            $fallback = strtolower(trim((string) ($assistant->language ?? 'en'))) ?: 'en';
+            $system .= \App\Services\Ai\CustomerLanguage::promptBlock($lang, $fallback);
         } catch (\Throwable $e) { /* language hint is best-effort */ }
 
         // Last ~20 turns of history (capped on character budget so we
@@ -114,7 +111,9 @@ class AiChatService
         $lang = trim((string) $assistant->language) ?: 'en';
 
         $out  = $base . "\n";
-        $out .= "Speak in a $tone tone. Default language: $lang. Match the visitor's language if different.\n";
+        $out .= "Speak in a $tone tone.\n";
+        $out .= "Always reply in the same language the visitor is using. If they switch, switch with them. Never default to English unless they wrote in English. Fallback if their message has no readable language: $lang.\n";
+        $out .= "When Knowledge includes Live URL pages, answer from that page text and share the real URL. Never invent links.\n";
         $out .= "Keep replies short — chat-style, not essay-style. No role prefixes like \"Assistant:\".";
 
         if ($assistant->handoff_enabled && !empty($assistant->handoff_keyword)) {
@@ -146,7 +145,11 @@ class AiChatService
         foreach ($rows as $r) {
             $text = trim($r->renderedText());
             if ($text === '') continue;
-            $chunk = "[" . $r->label . "]\n" . $text;
+            $chunk = "[" . $r->label . "]";
+            if ($r->kind === 'url' && trim((string) $r->url) !== '') {
+                $chunk .= "\nURL: " . trim((string) $r->url);
+            }
+            $chunk .= "\n" . $text;
             $parts[] = mb_substr($chunk, 0, max(500, $budget));
             $budget -= mb_strlen($chunk);
             if ($budget <= 0) break;

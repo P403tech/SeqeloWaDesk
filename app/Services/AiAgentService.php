@@ -12,8 +12,10 @@ use App\Models\User;
 use App\Models\Workspace;
 use App\Services\WalletService;
 use App\Services\Ai\AgentChannelControl;
-use App\Services\Ai\ShopManagerRouter;
 use App\Services\Ai\AgentShopifyContext;
+use App\Services\Ai\AgentWebsiteContext;
+use App\Services\Ai\CustomerLanguage;
+use App\Services\Ai\ShopManagerRouter;
 use App\Services\InboxDispatcher;
 use App\Services\PlanLimitGuard;
 use Illuminate\Support\Facades\Http;
@@ -440,20 +442,15 @@ class AiAgentService
             : "You are a helpful WhatsApp business assistant. " . $toneHint
               . "\n\nImportant: Reply only with the message text. Do NOT prefix with 'Agent:' or your name. Keep responses concise and natural for WhatsApp.";
 
-        // Real-time translation — when the conversation's customer language is
-        // pinned (and translation is on for the workspace), tell the model to
-        // reply natively in that language. This is higher quality than
-        // round-tripping an English reply, and the outbound translator then
-        // correctly no-ops (the reply is already in the customer's language).
         try {
-            $custLang = strtolower(trim((string) ($convo->customer_language ?? '')));
-            if ($custLang !== '') {
-                $cfg = app(\App\Services\Inbox\ConversationTranslationService::class)->config($convo->workspace_id);
-                if ($cfg['enabled'] && $custLang !== $cfg['lang']) {
-                    $systemPrompt .= "\n\nThe customer is writing in language code \"{$custLang}\". Reply ENTIRELY in that same language, naturally.";
-                }
-            }
-        } catch (\Throwable $e) { /* language hint is best-effort */ }
+            $latestIn = $history->last(fn ($m) => $m->direction === 'in');
+            $sample = trim((string) ($latestIn->body ?? ''));
+            $detected = CustomerLanguage::resolve($convo, $sample);
+            $fallback = CustomerLanguage::fallbackForAgent($agent);
+            $systemPrompt .= CustomerLanguage::promptBlock($detected, $fallback);
+        } catch (\Throwable $e) {
+            $systemPrompt .= CustomerLanguage::promptBlock(null, 'en');
+        }
 
         // Inject the workspace's saved replies into the system prompt
         // when the agent opted in. Caps at 15 (by used_count desc) so
@@ -477,6 +474,10 @@ class AiAgentService
                     if (trim($ctx) !== '') {
                         $systemPrompt .= "\n\n--- Knowledge base ---\n" . $ctx . "\n--- End knowledge base ---"
                             . "\n\nAnswer using the knowledge base above when it is relevant. If the answer isn't there, say so rather than inventing details.";
+                    }
+                    $web = AgentWebsiteContext::promptBlock($assistant);
+                    if ($web !== '') {
+                        $systemPrompt .= "\n\n--- Website pages to share ---\n".$web."\n--- End website pages ---";
                     }
                 }
             } catch (\Throwable $e) {

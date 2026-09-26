@@ -124,6 +124,20 @@ class FacebookComposerAiController extends Controller
         return ['ok' => true, 'text' => trim($text)];
     }
 
+    private function websiteGrounding(): string
+    {
+        try {
+            $assistant = \App\Models\AiChatAssistant::query()
+                ->where('workspace_id', $this->wsId())
+                ->orderByDesc('id')
+                ->first();
+
+            return \App\Services\Ai\AgentWebsiteContext::promptBlock($assistant);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
     /* ================= 1. AI Caption ================= */
     public function caption(Request $request): JsonResponse
     {
@@ -150,9 +164,20 @@ class FacebookComposerAiController extends Controller
             $system .= ' Tone: ' . $tone . '.';
         }
 
+        $web = $this->websiteGrounding();
+        if ($web !== '') {
+            $system .= ' Ground the post in this website content. Include a real URL from the list when it helps. Never invent a page or offer that is not listed.';
+        }
+
         $user = $notes !== ''
             ? "Topic / notes for the post:\n" . $notes
-            : 'Write an engaging general post suitable for a friendly business Page. Invent a plausible, upbeat topic.';
+            : ($web !== ''
+                ? "Write an engaging post from this website content (pick the most timely or useful page):\n".$web
+                : 'Write an engaging general post suitable for a friendly business Page. Invent a plausible, upbeat topic.');
+
+        if ($notes !== '' && $web !== '') {
+            $user .= "\n\nWebsite pages you may use:\n".$web;
+        }
 
         return response()->json($this->generate($system, $user, 320, 0.8));
     }
