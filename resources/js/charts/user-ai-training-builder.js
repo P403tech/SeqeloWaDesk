@@ -457,10 +457,10 @@ export default function init() {
         <input data-src-label placeholder="Label (e.g. Product handbook)" class="w-full bg-paper-0 border border-paper-200 rounded-md px-2.5 py-1.5 text-[12.5px]">
         <label class="flex flex-col gap-1.5 cursor-pointer">
           <span class="text-[12px] font-semibold text-ink-800">Choose a file</span>
-          <input data-src-file type="file" name="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,.html,.htm,.log,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/html" class="block w-full text-[12.5px]">
+          <input data-src-file type="file" name="file" accept=".xlsx,.xlsm,.csv,.pdf,.docx,.txt,.md,.markdown,.html,.htm,.log,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/csv,text/plain,text/html" class="block w-full text-[12.5px]">
         </label>
         <p data-src-filename class="text-[12px] text-ink-700 hidden"></p>
-        <p class="text-[11px] text-ink-500">PDF, DOCX, TXT, Markdown, CSV or HTML — up to 10 MB. Text is extracted automatically.</p>
+        <p class="text-[11px] text-ink-500">Excel (.xlsx), CSV, PDF, DOCX, TXT — up to 10 MB. Old .xls must be saved as .xlsx. The agent reads the extracted text.</p>
         <p data-src-error class="hidden text-[12px] text-accent-coral"></p>
         <div class="flex gap-2">
           <button type="button" data-src-cancel class="px-3 py-1.5 rounded-md border border-paper-200 text-[12px] font-semibold text-ink-700">Cancel</button>

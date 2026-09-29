@@ -420,10 +420,10 @@
                                     <path d="M4 2h6l2 2v10H4z" />
                                     <path d="M10 2v3h2" />
                                 </svg>
-                                <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">PDF, DOCX, TXT &amp; more
+                                <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">Excel, PDF, DOCX &amp; more
                                 </div>
                                 <div class="text-[11px] text-ink-500 leading-snug">
-                                    {{ __('Upload a file — text is extracted automatically.') }}</div>
+                                    {{ __('Upload a spreadsheet or file — the agent reads the extracted text.') }}</div>
                             </button>
                         </div>
 

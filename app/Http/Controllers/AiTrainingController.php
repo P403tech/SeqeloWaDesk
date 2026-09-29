@@ -423,17 +423,19 @@ class AiTrainingController extends Controller
 
         $file = $request->file('file');
         if (! $file || ! $file->isValid()) {
-            $why = $file?->getErrorMessage() ?: 'The file did not arrive. Pick the file again (PDF, DOCX, TXT, Markdown, CSV or HTML, under 10 MB).';
+            $why = $file?->getErrorMessage() ?: 'The file did not arrive. Pick the file again (Excel, PDF, DOCX, CSV or TXT, under 10 MB).';
             return response()->json(['ok' => false, 'error' => $why], 422);
         }
         $ext = strtolower($file->getClientOriginalExtension());
-        $allowed = ['txt', 'md', 'markdown', 'text', 'csv', 'log', 'html', 'htm', 'pdf', 'docx'];
+        $allowed = ['txt', 'md', 'markdown', 'text', 'csv', 'log', 'html', 'htm', 'pdf', 'docx', 'xlsx', 'xlsm'];
         if (!in_array($ext, $allowed, true)) {
             return response()->json([
                 'ok' => false,
-                'error' => $ext === 'doc'
-                    ? 'Legacy .doc files aren\'t supported — re-save as .docx (or export to .pdf) and upload again.'
-                    : 'Accepted file types: TXT, Markdown, CSV, HTML, PDF, DOCX. For anything else, paste the text into a Text source.',
+                'error' => match ($ext) {
+                    'doc' => 'Legacy .doc files aren\'t supported — re-save as .docx (or export to .pdf) and upload again.',
+                    'xls' => 'Old .xls Excel files aren\'t supported — in Excel use Save As → Excel Workbook (.xlsx) and upload that.',
+                    default => 'Accepted file types: Excel (.xlsx), CSV, PDF, DOCX, TXT, Markdown, HTML. Save .xls as .xlsx first.',
+                },
             ], 422);
         }
 
@@ -554,6 +556,10 @@ class AiTrainingController extends Controller
                 case 'docx':
                     return [$this->docxToText($path), null];
 
+                case 'xlsx':
+                case 'xlsm':
+                    return [$this->xlsxToText($path), null];
+
                 case 'html':
                 case 'htm':
                     $raw = (string) file_get_contents($path);
@@ -598,6 +604,122 @@ class AiTrainingController extends Controller
         // Collapse the runs of blank lines docx XML tends to leave behind.
         $text = preg_replace("/\n{3,}/", "\n\n", $text) ?? $text;
         return trim($text);
+    }
+
+    /**
+     * Spreadsheet → tab-separated text so the agent can quote rows
+     * (SKU, price, stock, etc.). .xlsx is a ZIP of XML; no extra package.
+     */
+    private function xlsxToText(string $path): string
+    {
+        if (! class_exists(\ZipArchive::class)) {
+            throw new \RuntimeException('zip extension unavailable');
+        }
+        $zip = new \ZipArchive();
+        if ($zip->open($path) !== true) {
+            throw new \RuntimeException('not a valid Excel workbook');
+        }
+
+        $shared = [];
+        $ss = $zip->getFromName('xl/sharedStrings.xml');
+        if (is_string($ss) && $ss !== '') {
+            if (preg_match_all('#<si>(.*?)</si>#s', $ss, $sis)) {
+                foreach ($sis[1] as $si) {
+                    if (preg_match_all('#<t[^>]*>(.*?)</t>#s', $si, $ts)) {
+                        $shared[] = html_entity_decode(implode('', $ts[1]), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                    } else {
+                        $shared[] = '';
+                    }
+                }
+            }
+        }
+
+        $sheetFiles = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string) $zip->getNameIndex($i);
+            if (preg_match('#^xl/worksheets/sheet(\d+)\.xml$#', $name, $m)) {
+                $sheetFiles[(int) $m[1]] = $name;
+            }
+        }
+        ksort($sheetFiles);
+
+        $out = [];
+        foreach ($sheetFiles as $n => $name) {
+            $xml = $zip->getFromName($name);
+            if (! is_string($xml) || $xml === '') {
+                continue;
+            }
+            $body = $this->xlsxSheetToTsv($xml, $shared);
+            if ($body === '') {
+                continue;
+            }
+            $out[] = '## Sheet '.$n."\n".$body;
+        }
+        $zip->close();
+
+        return trim(implode("\n\n", $out));
+    }
+
+    /**
+     * @param  list<string>  $shared
+     */
+    private function xlsxSheetToTsv(string $xml, array $shared): string
+    {
+        $xml = preg_replace('/xmlns[^=]*="[^"]*"/', '', $xml) ?? $xml;
+        $sx = @simplexml_load_string($xml);
+        if ($sx === false || ! isset($sx->sheetData)) {
+            return '';
+        }
+        $lines = [];
+        foreach ($sx->sheetData->row as $row) {
+            $cells = [];
+            $maxCol = -1;
+            foreach ($row->c as $c) {
+                $col = $this->xlsxColIndex((string) $c['r']);
+                $type = (string) $c['t'];
+                $val = '';
+                if ($type === 's') {
+                    $idx = (int) (string) $c->v;
+                    $val = $shared[$idx] ?? '';
+                } elseif ($type === 'inlineStr') {
+                    $val = html_entity_decode(strip_tags((string) $c->is->asXML()), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                } elseif ($type === 'b') {
+                    $val = ((string) $c->v) === '1' ? 'TRUE' : 'FALSE';
+                } else {
+                    $val = (string) $c->v;
+                }
+                $cells[$col] = str_replace(["\t", "\r", "\n"], ' ', $val);
+                $maxCol = max($maxCol, $col);
+            }
+            if ($maxCol < 0) {
+                continue;
+            }
+            $line = [];
+            for ($i = 0; $i <= $maxCol; $i++) {
+                $line[] = $cells[$i] ?? '';
+            }
+            $joined = implode("\t", $line);
+            if (trim($joined) !== '') {
+                $lines[] = $joined;
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function xlsxColIndex(string $ref): int
+    {
+        if (! preg_match('/^([A-Za-z]+)/', $ref, $m)) {
+            return 0;
+        }
+        $s = strtoupper($m[1]);
+        $n = 0;
+        $len = strlen($s);
+        for ($i = 0; $i < $len; $i++) {
+            $n = $n * 26 + (ord($s[$i]) - 64);
+        }
+
+        return max(0, $n - 1);
     }
 
     /* ----------------------------- URL fetch ----------------------------- */

@@ -126,8 +126,8 @@ class AiChatService
     /**
      * Concatenated training material for this assistant. Pulls every
      * `ready` source either scoped to this assistant or workspace-wide
-     * (assistant_id NULL). Hard-capped at 12k characters so we never
-     * blow the context window — first-in-row order wins.
+     * (assistant_id NULL). Newest first so a just-uploaded catalog is
+     * not crowded out by old FAQs. Hard-capped at 48k characters.
      */
     public function contextFor(AiChatAssistant $assistant): string
     {
@@ -137,11 +137,11 @@ class AiChatService
                 $q->whereNull('assistant_id')->orWhere('assistant_id', $assistant->id);
             })
             ->where('status', 'ready')
-            ->orderBy('id')
+            ->orderByDesc('id')
             ->get();
 
         $parts = [];
-        $budget = 12000;
+        $budget = 48000;
         foreach ($rows as $r) {
             $text = trim($r->renderedText());
             if ($text === '') continue;
@@ -150,7 +150,7 @@ class AiChatService
                 $chunk .= "\nURL: " . trim((string) $r->url);
             }
             $chunk .= "\n" . $text;
-            $parts[] = mb_substr($chunk, 0, max(500, $budget));
+            $parts[] = mb_substr($chunk, 0, max(800, $budget));
             $budget -= mb_strlen($chunk);
             if ($budget <= 0) break;
         }
