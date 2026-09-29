@@ -188,7 +188,7 @@ class AiTrainingController extends Controller
      * visible, but stop auto-replying in inbox (WhatsApp / Facebook /
      * Instagram / TikTok). Distinct from flow pause.
      */
-    public function setStatus(Request $request, int $id): JsonResponse
+    public function setStatus(Request $request, int $id): \Illuminate\Http\RedirectResponse|JsonResponse
     {
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
         $assistant = AiChatAssistant::where('workspace_id', $wsId)->findOrFail($id);
@@ -198,17 +198,24 @@ class AiTrainingController extends Controller
         }
         $assistant->status = $wanted;
         $assistant->save();
+        $assistant = $assistant->fresh();
         try {
-            \App\Services\Ai\InboxAgentBridge::syncFromAssistant($assistant->fresh());
+            \App\Services\Ai\InboxAgentBridge::applyAssistantLiveState($assistant);
         } catch (\Throwable $e) {
             \Log::warning('[AI-TRAINING] pause sync failed: '.$e->getMessage());
         }
 
-        return response()->json([
-            'ok' => true,
-            'id' => $assistant->id,
-            'status' => $assistant->status,
-        ]);
+        if ($request->expectsJson()) {
+            return response()->json([
+                'ok' => true,
+                'id' => $assistant->id,
+                'status' => $assistant->status,
+            ]);
+        }
+
+        return back()->with('status', $assistant->status === 'paused'
+            ? __('Agent paused. It will not auto-reply until you resume it.')
+            : __('Agent resumed. It will auto-reply on connected channels.'));
     }
 
     /* ----------------------------- Assistants ----------------------------- */
@@ -288,7 +295,7 @@ class AiTrainingController extends Controller
         $assistant->save();
 
         try {
-            \App\Services\Ai\InboxAgentBridge::syncFromAssistant($assistant->fresh());
+            \App\Services\Ai\InboxAgentBridge::applyAssistantLiveState($assistant->fresh());
         } catch (\Throwable $e) {
             \Log::warning('[AI-TRAINING] inbox agent sync failed: '.$e->getMessage());
         }

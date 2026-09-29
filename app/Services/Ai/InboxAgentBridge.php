@@ -131,12 +131,40 @@ TXT;
 
     public static function deactivateLinked(AiChatAssistant $assistant): void
     {
-        $id = (int) ($assistant->inbox_agent_id ?? 0);
-        if ($id <= 0) {
+        self::muteInboxAgents($assistant);
+    }
+
+    /**
+     * Pause or resume every inbox bot row tied to this assistant.
+     * Pause must mute even when inbox_agent_id is missing.
+     */
+    public static function applyAssistantLiveState(AiChatAssistant $assistant): void
+    {
+        self::syncFromAssistant($assistant);
+        if ($assistant->status === 'active') {
             return;
         }
-        AiAgent::where('workspace_id', $assistant->workspace_id)
-            ->whereKey($id)
+        self::muteInboxAgents($assistant);
+    }
+
+    private static function muteInboxAgents(AiChatAssistant $assistant): void
+    {
+        $wsId = (int) $assistant->workspace_id;
+        $id = (int) ($assistant->inbox_agent_id ?? 0);
+        $hasKnow = Schema::hasColumn('ai_agents', 'knowledge_assistant_id');
+        if ($wsId <= 0 || ($id <= 0 && ! $hasKnow)) {
+            return;
+        }
+        AiAgent::query()
+            ->where('workspace_id', $wsId)
+            ->where(function ($q) use ($assistant, $id, $hasKnow) {
+                if ($id > 0) {
+                    $q->where('id', $id);
+                }
+                if ($hasKnow) {
+                    $q->orWhere('knowledge_assistant_id', $assistant->id);
+                }
+            })
             ->update(['is_active' => false, 'auto_respond' => false]);
     }
 

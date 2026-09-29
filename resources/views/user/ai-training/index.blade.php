@@ -247,11 +247,21 @@
                             </div>
 
                             <div class="flex items-center gap-1 lg:justify-end">
-                                <button type="button" data-pause data-id="{{ $a->id }}" data-name="{{ $a->name }}"
-                                    data-status="{{ $a->status }}"
-                                    class="px-3 h-9 rounded-full text-[12px] font-semibold border {{ $a->status === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 text-ink-800 hover:bg-paper-50' }}">
-                                    {{ $a->status === 'paused' ? __('Resume') : __('Pause') }}
-                                </button>
+                                <form method="POST" action="{{ url('/ai-training/' . $a->id . '/status') }}"
+                                    class="inline"
+                                    data-confirm-form
+                                    data-confirm-title="{{ $a->status === 'paused' ? __('Resume this agent?') : __('Pause this agent?') }}"
+                                    data-confirm-message="{{ $a->status === 'paused' ? __('The agent will auto-reply again on WhatsApp, Facebook, Instagram, and TikTok.') : __('The agent will stop auto-replying. Channels stay connected and humans can still reply in the inbox.') }}"
+                                    data-confirm-accept="{{ $a->status === 'paused' ? __('Resume') : __('Pause') }}"
+                                    data-confirm-cancel="{{ __('Keep as is') }}"
+                                    data-confirm-tone="{{ $a->status === 'paused' ? 'default' : 'danger' }}">
+                                    @csrf
+                                    <input type="hidden" name="status" value="{{ $a->status === 'paused' ? 'active' : 'paused' }}">
+                                    <button type="submit"
+                                        class="px-3 h-9 rounded-full text-[12px] font-semibold border {{ $a->status === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 text-ink-800 hover:bg-paper-50' }}">
+                                        {{ $a->status === 'paused' ? __('Resume') : __('Pause') }}
+                                    </button>
+                                </form>
                                 <a href="{{ url('/ai-training/' . $a->id . '/edit') }}"
                                     class="w-9 h-9 rounded-full hover:bg-wa-mint text-wa-deep inline-flex items-center justify-center"
                                     title="{{ __('Edit agent') }}">

@@ -56,10 +56,23 @@
                     class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-paper-50 text-ink-700 font-mono">
                     {{ $mode === 'edit' ? 'Saved' : 'Draft / unsaved' }}
                 </span>
-                <button id="ait-pause" type="button"
-                    class="px-3.5 py-1.5 rounded-full text-[12px] font-semibold border {{ ($defaults['status'] ?? 'active') === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 hover:bg-paper-50 text-ink-800' }} {{ empty($defaults['id']) ? 'hidden' : '' }}">
-                    {{ ($defaults['status'] ?? 'active') === 'paused' ? __('Resume agent') : __('Pause agent') }}
-                </button>
+                @if (! empty($defaults['id']))
+                    <form method="POST" action="{{ url('/ai-training/' . $defaults['id'] . '/status') }}"
+                        class="inline"
+                        data-confirm-form
+                        data-confirm-title="{{ ($defaults['status'] ?? 'active') === 'paused' ? __('Resume this agent?') : __('Pause this agent?') }}"
+                        data-confirm-message="{{ ($defaults['status'] ?? 'active') === 'paused' ? __('The agent will auto-reply again on connected channels.') : __('Inbox auto-replies stop. Channels stay connected. Humans can still reply.') }}"
+                        data-confirm-accept="{{ ($defaults['status'] ?? 'active') === 'paused' ? __('Resume') : __('Pause') }}"
+                        data-confirm-cancel="{{ __('Keep as is') }}"
+                        data-confirm-tone="{{ ($defaults['status'] ?? 'active') === 'paused' ? 'default' : 'danger' }}">
+                        @csrf
+                        <input type="hidden" name="status" value="{{ ($defaults['status'] ?? 'active') === 'paused' ? 'active' : 'paused' }}">
+                        <button type="submit"
+                            class="px-3.5 py-1.5 rounded-full text-[12px] font-semibold border {{ ($defaults['status'] ?? 'active') === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 hover:bg-paper-50 text-ink-800' }}">
+                            {{ ($defaults['status'] ?? 'active') === 'paused' ? __('Resume agent') : __('Pause agent') }}
+                        </button>
+                    </form>
+                @endif
                 <button id="ait-save" type="button"
                     class="px-3.5 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('Save draft') }}</button>
             </div>
