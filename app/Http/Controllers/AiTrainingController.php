@@ -415,13 +415,17 @@ class AiTrainingController extends Controller
         $wsId = (int) ($user?->current_workspace_id ?? 0);
         if (!$wsId) return response()->json(['ok' => false, 'error' => 'no_workspace'], 400);
 
-        $request->validate([
+        $data = $request->validate([
             'file'         => 'required|file|max:10240',  // 10 MB — PDFs/DOCX run larger than plain text
             'label'        => 'required|string|max:200',
             'assistant_id' => 'nullable|integer',
         ]);
 
         $file = $request->file('file');
+        if (! $file || ! $file->isValid()) {
+            $why = $file?->getErrorMessage() ?: 'The file did not arrive. Pick the file again (PDF, DOCX, TXT, Markdown, CSV or HTML, under 10 MB).';
+            return response()->json(['ok' => false, 'error' => $why], 422);
+        }
         $ext = strtolower($file->getClientOriginalExtension());
         $allowed = ['txt', 'md', 'markdown', 'text', 'csv', 'log', 'html', 'htm', 'pdf', 'docx'];
         if (!in_array($ext, $allowed, true)) {
@@ -445,7 +449,7 @@ class AiTrainingController extends Controller
         // Extract plain text per file type. PDFs use smalot/pdfparser;
         // DOCX is unzipped + tag-stripped with zero dependencies; HTML
         // is tag-stripped; the rest are read verbatim.
-        [$content, $extractErr] = $this->extractFileText($file->getRealPath(), $ext);
+        [$content, $extractErr] = $this->extractFileText((string) $file->getRealPath(), $ext);
         if ($extractErr !== null) {
             return response()->json(['ok' => false, 'error' => $extractErr], 422);
         }
@@ -532,8 +536,11 @@ class AiTrainingController extends Controller
      * [text|'', error|null]. Never throws — extraction failures come
      * back as a friendly error string so the upload endpoint can 422.
      */
-    private function extractFileText(string $path, string $ext): array
+    private function extractFileText(?string $path, string $ext): array
     {
+        if ($path === null || $path === '' || ! is_file($path)) {
+            return ['', 'The upload did not land on the server. Try a smaller file (under 10 MB) or another format.'];
+        }
         try {
             switch ($ext) {
                 case 'pdf':

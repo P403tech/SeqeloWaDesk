@@ -10,7 +10,7 @@ if [ -n "$MYSQLHOST" ]; then
   export DB_PASSWORD="$MYSQLPASSWORD"
 fi
 
-mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache
+mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache storage/app/training
 php artisan storage:link --force >/dev/null 2>&1 || true
 php artisan view:clear >/dev/null 2>&1 || true
 

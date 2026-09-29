@@ -36,7 +36,17 @@ export default function init() {
       body: opts.body instanceof FormData ? opts.body : (opts.body ? JSON.stringify(opts.body) : undefined),
     });
     const json = await res.json().catch(() => ({}));
-    return { ok: res.ok && json.ok !== false, json };
+    return { ok: res.ok && json.ok !== false, json, status: res.status };
+  }
+  function apiError(json, fallback) {
+    if (json?.error && typeof json.error === 'string') return json.error;
+    if (json?.message && typeof json.message === 'string') return json.message;
+    const bag = json?.errors;
+    if (bag && typeof bag === 'object') {
+      const first = Object.values(bag).flat().find(Boolean);
+      if (first) return String(first);
+    }
+    return fallback;
   }
   function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -445,8 +455,13 @@ export default function init() {
       html = `
         <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">Upload knowledge file</div>
         <input data-src-label placeholder="Label (e.g. Product handbook)" class="w-full bg-paper-0 border border-paper-200 rounded-md px-2.5 py-1.5 text-[12.5px]">
-        <input data-src-file type="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,.html,.htm,.log" class="block w-full text-[12.5px]">
+        <label class="flex flex-col gap-1.5 cursor-pointer">
+          <span class="text-[12px] font-semibold text-ink-800">Choose a file</span>
+          <input data-src-file type="file" name="file" accept=".pdf,.docx,.txt,.md,.markdown,.csv,.html,.htm,.log,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/html" class="block w-full text-[12.5px]">
+        </label>
+        <p data-src-filename class="text-[12px] text-ink-700 hidden"></p>
         <p class="text-[11px] text-ink-500">PDF, DOCX, TXT, Markdown, CSV or HTML — up to 10 MB. Text is extracted automatically.</p>
+        <p data-src-error class="hidden text-[12px] text-accent-coral"></p>
         <div class="flex gap-2">
           <button type="button" data-src-cancel class="px-3 py-1.5 rounded-md border border-paper-200 text-[12px] font-semibold text-ink-700">Cancel</button>
           <button type="button" data-src-go class="px-3 py-1.5 rounded-md bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">Upload</button>
@@ -459,31 +474,59 @@ export default function init() {
       addPanel.classList.add('hidden'); addPanel.innerHTML = '';
     });
     addPanel.querySelector('[data-src-go]')?.addEventListener('click', () => submitAdd(kind));
+    if (kind === 'file') {
+      const fileEl = addPanel.querySelector('[data-src-file]');
+      const nameEl = addPanel.querySelector('[data-src-filename]');
+      fileEl?.addEventListener('change', () => {
+        const f = fileEl.files?.[0];
+        if (nameEl) {
+          nameEl.textContent = f ? `Selected: ${f.name}` : '';
+          nameEl.classList.toggle('hidden', !f);
+        }
+        addPanel.querySelector('[data-src-error]')?.classList.add('hidden');
+      });
+      setTimeout(() => fileEl?.click(), 50);
+    }
+  }
+
+  function showAddError(msg) {
+    const el = addPanel?.querySelector('[data-src-error]');
+    if (el) {
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+    toast(msg, 'error');
   }
 
   async function submitAdd(kind) {
-    if (!state.id) { toast('Save the agent first.', 'info'); return; }
+    if (!state.id) { toast('Save the agent first (Save draft), then upload knowledge.', 'error'); return; }
     const get = (sel) => addPanel.querySelector(sel)?.value ?? '';
     const label = get('[data-src-label]');
-    if (!label.trim()) { toast('Add a label so you can find this entry later.', 'error'); return; }
+    if (!label.trim()) { showAddError('Add a label so you can find this entry later.'); return; }
 
     if (kind === 'file') {
       const fileEl = addPanel.querySelector('[data-src-file]');
       const file = fileEl?.files?.[0];
-      if (!file) { toast('Pick a file (PDF, DOCX, TXT, Markdown, CSV or HTML).', 'error'); return; }
+      if (!file) { showAddError('Choose a file first — the chooser still says “No file chosen”.'); return; }
+      const go = addPanel.querySelector('[data-src-go]');
+      if (go) { go.disabled = true; go.textContent = 'Uploading…'; }
       const fd = new FormData();
       fd.append('file', file);
       fd.append('label', label);
-      fd.append('assistant_id', state.id);
-      const { ok, json } = await api('/ai-training/api/source/file', { method: 'POST', body: fd });
-      if (!ok) { toast(json.error || 'Upload failed.', 'error'); return; }
+      fd.append('assistant_id', String(state.id));
+      const { ok, json, status } = await api('/ai-training/api/source/file', { method: 'POST', body: fd });
+      if (go) { go.disabled = false; go.textContent = 'Upload'; }
+      if (!ok) {
+        showAddError(apiError(json, status === 413 ? 'File is too large (max 10 MB).' : 'Upload failed.'));
+        return;
+      }
     } else {
       const body = { assistant_id: state.id, kind, label };
       if (kind === 'url')  body.url = get('[data-src-url]');
       if (kind === 'text') body.content = get('[data-src-content]');
       if (kind === 'qa')   { body.question = get('[data-src-question]'); body.answer = get('[data-src-answer]'); }
       const { ok, json } = await api('/ai-training/api/source', { method: 'POST', body });
-      if (!ok) { toast(json.error || 'Add failed.', 'error'); return; }
+      if (!ok) { toast(apiError(json, 'Add failed.'), 'error'); return; }
     }
     addPanel.classList.add('hidden');
     addPanel.innerHTML = '';

@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libzip-dev libonig-dev libicu-dev libxml2-dev \
  && docker-php-ext-configure gd --with-freetype --with-jpeg \
  && docker-php-ext-install -j$(nproc) pdo_mysql gd zip bcmath intl mbstring exif pcntl opcache \
+ && printf "upload_max_filesize=32M\npost_max_size=32M\n" > /usr/local/etc/php/conf.d/uploads.ini \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
