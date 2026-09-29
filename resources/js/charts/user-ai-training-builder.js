@@ -59,6 +59,7 @@ export default function init() {
     else if (el.type === 'radio') { if (el.checked) state[key] = el.value; }
     else state[key] = el.value;
     if (String(key || '').startsWith('channel_')) paintChannelControl();
+    if (key === 'status') paintPauseButton();
   }
 
   if (!state.channel_control || typeof state.channel_control !== 'object') state.channel_control = {};
@@ -276,9 +277,60 @@ export default function init() {
     if (!ok) { toast(json.error || 'Save failed — check the fields above.', 'error'); return false; }
     state.id = json.id;
     document.getElementById('ait-state-pill').textContent = 'Saved';
+    paintPauseButton();
     if (!silent) toast('Agent saved.', 'success');
     return true;
   }
+
+  function paintPauseButton() {
+    const btn = document.getElementById('ait-pause');
+    if (!btn) return;
+    const paused = (state.status || 'active') === 'paused';
+    btn.classList.toggle('hidden', !state.id);
+    btn.textContent = paused ? 'Resume agent' : 'Pause agent';
+    btn.classList.toggle('border-wa-deep', paused);
+    btn.classList.toggle('bg-wa-deep', paused);
+    btn.classList.toggle('text-paper-0', paused);
+    btn.classList.toggle('hover:bg-wa-teal', paused);
+    btn.classList.toggle('border-paper-200', !paused);
+    btn.classList.toggle('bg-paper-0', !paused);
+    btn.classList.toggle('hover:bg-paper-50', !paused);
+    btn.classList.toggle('text-ink-800', !paused);
+    const sel = root.querySelector('[data-field="status"]');
+    if (sel && sel.value !== state.status) sel.value = state.status || 'active';
+  }
+
+  document.getElementById('ait-pause')?.addEventListener('click', () => {
+    if (!state.id) {
+      toast('Save the agent first, then you can pause it.', 'error');
+      return;
+    }
+    const paused = (state.status || 'active') === 'paused';
+    const next = paused ? 'active' : 'paused';
+    confirmDialog({
+      eyebrow: paused ? 'Resume agent' : 'Pause agent',
+      title: paused ? 'Resume auto-replies?' : 'Pause this agent?',
+      message: paused
+        ? 'The agent will auto-reply again on its connected channels.'
+        : 'Inbox auto-replies stop immediately. Channels stay connected. Humans can still reply. Flows are not affected.',
+      confirmText: paused ? 'Resume' : 'Pause',
+      cancelText: 'Keep as is',
+      tone: paused ? 'default' : 'danger',
+      onConfirm: async () => {
+        const { ok, json } = await api(`/ai-training/${state.id}/status`, {
+          method: 'POST',
+          body: { status: next },
+        });
+        if (!ok) {
+          toast(json.error || 'Could not update agent.', 'error');
+          return;
+        }
+        state.status = json.status || next;
+        paintPauseButton();
+        toast(state.status === 'paused' ? 'Agent paused — auto-replies stopped.' : 'Agent is live again.', 'success');
+      },
+    });
+  });
 
   document.getElementById('ait-save')?.addEventListener('click', () => saveAssistant());
   document.getElementById('ait-finish')?.addEventListener('click', async () => {

@@ -183,6 +183,34 @@ class AiTrainingController extends Controller
         return redirect()->route('user.ai-training.edit', $copy->id);
     }
 
+    /**
+     * Pause or resume a smart agent. Paused agents stay connected and
+     * visible, but stop auto-replying in inbox (WhatsApp / Facebook /
+     * Instagram / TikTok). Distinct from flow pause.
+     */
+    public function setStatus(Request $request, int $id): JsonResponse
+    {
+        $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
+        $assistant = AiChatAssistant::where('workspace_id', $wsId)->findOrFail($id);
+        $wanted = $request->input('status');
+        if (! in_array($wanted, ['active', 'paused'], true)) {
+            $wanted = $assistant->status === 'active' ? 'paused' : 'active';
+        }
+        $assistant->status = $wanted;
+        $assistant->save();
+        try {
+            \App\Services\Ai\InboxAgentBridge::syncFromAssistant($assistant->fresh());
+        } catch (\Throwable $e) {
+            \Log::warning('[AI-TRAINING] pause sync failed: '.$e->getMessage());
+        }
+
+        return response()->json([
+            'ok' => true,
+            'id' => $assistant->id,
+            'status' => $assistant->status,
+        ]);
+    }
+
     /* ----------------------------- Assistants ----------------------------- */
 
     public function apiSaveAssistant(Request $request): JsonResponse

@@ -56,6 +56,10 @@
                     class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-paper-50 text-ink-700 font-mono">
                     {{ $mode === 'edit' ? 'Saved' : 'Draft / unsaved' }}
                 </span>
+                <button id="ait-pause" type="button"
+                    class="px-3.5 py-1.5 rounded-full text-[12px] font-semibold border {{ ($defaults['status'] ?? 'active') === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 hover:bg-paper-50 text-ink-800' }} {{ empty($defaults['id']) ? 'hidden' : '' }}">
+                    {{ ($defaults['status'] ?? 'active') === 'paused' ? __('Resume agent') : __('Pause agent') }}
+                </button>
                 <button id="ait-save" type="button"
                     class="px-3.5 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('Save draft') }}</button>
             </div>
@@ -140,14 +144,14 @@
                             </div>
                             <div>
                                 <label
-                                    class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Roll-out status') }}</label>
+                                    class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Agent replies') }}</label>
                                 <select data-field="status"
                                     class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="active">{{ __('Live — pick this agent in widgets') }}</option>
-                                    <option value="paused">{{ __('Paused — hide from pickers') }}</option>
+                                    <option value="active">{{ __('Live — auto-replies on connected channels') }}</option>
+                                    <option value="paused">{{ __('Paused — humans only, connections stay on') }}</option>
                                 </select>
                                 <div class="text-[10.5px] text-ink-500 mt-1">
-                                    {{ __("Paused agents stay in the list but can't be attached to new widgets.") }}
+                                    {{ __('Pause stops this agent in inbox. WhatsApp, Facebook, Instagram, and TikTok stay connected. Use Pause agent in the header for a one-click mute.') }}
                                 </div>
                             </div>
                         </div>

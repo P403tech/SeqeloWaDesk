@@ -1322,6 +1322,7 @@ Route::middleware('auth')->group(function () {
                 Route::get('/ai-training/create',                   [$aitc, 'create'])->name('ai-training.create');
                 Route::get('/ai-training/{id}/edit',                [$aitc, 'edit'])->whereNumber('id')->name('ai-training.edit');
                 Route::post('/ai-training/{id}/duplicate',          [$aitc, 'duplicate'])->whereNumber('id')->name('ai-training.duplicate');
+                Route::post('/ai-training/{id}/status',             [$aitc, 'setStatus'])->whereNumber('id')->name('ai-training.status');
                 Route::post('/ai-training/api/assistant',           [$aitc, 'apiSaveAssistant'])->name('ai-training.api.assistant.save');
                 Route::delete('/ai-training/api/assistant/{id}',    [$aitc, 'apiDeleteAssistant'])->whereNumber('id')->name('ai-training.api.assistant.delete');
                 Route::get('/ai-training/api/assistants',           [$aitc, 'apiListAssistants'])->name('ai-training.api.assistants.list');

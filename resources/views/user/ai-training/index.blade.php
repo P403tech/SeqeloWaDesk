@@ -195,7 +195,7 @@
                                         @if (\App\Services\Ai\StarterSmartAgent::isStarter($a))
                                             <span class="inline-flex px-1.5 py-0.5 rounded-md font-mono text-[9.5px] uppercase tracking-[0.14em] bg-wa-mint text-wa-deep">{{ __('Starter') }}</span>
                                         @endif
-                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[9.5px] uppercase tracking-[0.14em] {{ $status['bg'] }} {{ $status['text'] }}">
+                                        <span data-status-pill class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[9.5px] uppercase tracking-[0.14em] {{ $status['bg'] }} {{ $status['text'] }}">
                                             <span class="w-1.5 h-1.5 rounded-full {{ $status['dot'] }}"></span>{{ $status['label'] }}
                                         </span>
                                     </div>
@@ -247,6 +247,11 @@
                             </div>
 
                             <div class="flex items-center gap-1 lg:justify-end">
+                                <button type="button" data-pause data-id="{{ $a->id }}" data-name="{{ $a->name }}"
+                                    data-status="{{ $a->status }}"
+                                    class="px-3 h-9 rounded-full text-[12px] font-semibold border {{ $a->status === 'paused' ? 'border-wa-deep bg-wa-deep text-paper-0 hover:bg-wa-teal' : 'border-paper-200 bg-paper-0 text-ink-800 hover:bg-paper-50' }}">
+                                    {{ $a->status === 'paused' ? __('Resume') : __('Pause') }}
+                                </button>
                                 <a href="{{ url('/ai-training/' . $a->id . '/edit') }}"
                                     class="w-9 h-9 rounded-full hover:bg-wa-mint text-wa-deep inline-flex items-center justify-center"
                                     title="{{ __('Edit agent') }}">
