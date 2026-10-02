@@ -25,7 +25,7 @@ use Illuminate\Support\Str;
  */
 class WabaMediaFetcher
 {
-    public function downloadToDisk(int $workspaceId, string $mediaId, string $mimeHint = ''): ?string
+    public function downloadToDisk(int $workspaceId, string $mediaId, string $mimeHint = '', string $filename = ''): ?string
     {
         if ($workspaceId <= 0 || $mediaId === '') {
             return null;
@@ -85,7 +85,7 @@ class WabaMediaFetcher
                 return null;
             }
 
-            $path = 'chat-media/' . Str::random(24) . '.' . $this->extFor($mime);
+            $path = $this->buildMediaPath($filename, $this->extFor($mime));
             media_storage()->put($path, $bin);
 
             return $path;
@@ -116,11 +116,48 @@ class WabaMediaFetcher
             'video/mp4'               => 'mp4',
             'video/3gpp'              => '3gp',
             'application/pdf'         => 'pdf',
+            // Documents — previously ALL fell to the 'bin' default, so an
+            // inbound Excel/CSV/Word file was saved as a .bin the recipient
+            // couldn't open. Map the common office/text/archive types.
+            'text/plain'              => 'txt',
+            'text/csv', 'application/csv' => 'csv',
+            'application/vnd.ms-excel' => 'xls',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+            'application/msword'      => 'doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+            'application/vnd.ms-powerpoint' => 'ppt',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+            'application/zip', 'application/x-zip-compressed' => 'zip',
+            'application/json'        => 'json',
+            'application/xml', 'text/xml' => 'xml',
             default => (
                 str_starts_with($base, 'image/') ? 'jpg'
                 : (str_starts_with($base, 'audio/') ? 'ogg'
                 : (str_starts_with($base, 'video/') ? 'mp4' : 'bin'))
             ),
         };
+    }
+
+    /**
+     * Where to store the downloaded media. When WhatsApp gave us the sender's
+     * ORIGINAL filename (documents carry one), keep it — sanitised and prefixed
+     * with a short random token to avoid collisions — so the inbox shows
+     * "invoice.xlsx" and the file opens, instead of a random ".bin". Falls back
+     * to a random name + the mime-derived extension when there is no filename.
+     */
+    private function buildMediaPath(string $filename, string $ext): string
+    {
+        $filename = trim($filename);
+        if ($filename !== '') {
+            $clean = preg_replace('/[^A-Za-z0-9._-]+/', '_', basename($filename));
+            $clean = trim((string) $clean, '._') ?: 'file';
+            // Trust an extension the original name already has; else add ours.
+            if (! preg_match('/\.[A-Za-z0-9]{1,8}$/', $clean)) {
+                $clean .= '.' . $ext;
+            }
+            return 'chat-media/' . Str::random(12) . '__' . mb_substr($clean, 0, 120);
+        }
+
+        return 'chat-media/' . Str::random(24) . '.' . $ext;
     }
 }

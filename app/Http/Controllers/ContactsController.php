@@ -115,6 +115,9 @@ class ContactsController extends Controller
         if (!$already) {
             try { app(\App\Services\Flow\FlowEnrollmentService::class)->onTagAdded($contact, (int) $tag->id); }
             catch (\Throwable $e) { \Log::warning('[CONTACT-TAG] onTagAdded failed: ' . $e->getMessage()); }
+
+            try { app(\App\Services\Drip\DripRunner::class)->onTagAdded($contact, (int) $tag->id); }
+            catch (\Throwable $e) { \Log::warning('[CONTACT-TAG] drip onTagAdded failed: ' . $e->getMessage()); }
         }
 
         return response()->json(['ok' => true, 'tag' => ['id' => $tag->id, 'name' => $tag->name, 'color' => $tag->color]]);
@@ -262,7 +265,16 @@ class ContactsController extends Controller
             : collect();
         $tagCounts = $allContacts->flatMap(fn ($c) => $c->tags->pluck('id'))->countBy();
 
-        return view('user.contacts.index', compact('contacts', 'groups', 'groupsWithCounts', 'groupCounts', 'stats', 'searchQ', 'groupSel', 'tags', 'tagCounts', 'tagSel', 'perPage', 'allowedPerPage'));
+        // Workspace custom attributes — rendered as per-contact fields in the
+        // add/edit modal so an operator can store a value (e.g. a Maps link)
+        // for each contact, which then fills {{key}} in templates/flows.
+        $attributes = \App\Models\Attribute::query()
+            ->forWorkspace($wsIdForTags)
+            ->where('status', true)
+            ->orderBy('attribute_name')
+            ->get(['attribute_key', 'attribute_name', 'description']);
+
+        return view('user.contacts.index', compact('contacts', 'groups', 'groupsWithCounts', 'groupCounts', 'stats', 'searchQ', 'groupSel', 'tags', 'tagCounts', 'tagSel', 'perPage', 'allowedPerPage', 'attributes'));
     }
 
     /**
@@ -307,6 +319,9 @@ class ContactsController extends Controller
             // Surfaced here so AJAX-rebuilt rows can prefill the edit modal.
             'status'       => (string) (is_array($contact->custom_attributes) ? ($contact->custom_attributes['status'] ?? '') : ''),
             'source'       => (string) (is_array($contact->custom_attributes) ? ($contact->custom_attributes['source'] ?? '') : ''),
+            // Full custom-attribute bag so the edit modal can prefill every
+            // workspace attribute field for this contact.
+            'custom_attributes' => is_array($contact->custom_attributes) ? $contact->custom_attributes : [],
         ];
     }
 
@@ -351,7 +366,7 @@ class ContactsController extends Controller
         }
 
         // Recent inbox messages, resolved by the contact's phone → conversation.
-        $phone = preg_replace('/\D+/', '', (string) ($contact->country_code . $contact->mobile));
+        $phone = Contact::canonicalizePhone($contact->country_code, $contact->mobile);
         if ($phone !== '' && Schema::hasTable('conversations') && Schema::hasTable('inbox_messages')) {
             $convIds = \App\Models\Conversation::where('workspace_id', $wsId)
                 ->where('raw_jid', 'like', '%' . $phone . '%')->limit(20)->pluck('id');
@@ -391,6 +406,24 @@ class ContactsController extends Controller
         ]);
     }
 
+    /**
+     * Active custom-attribute keys defined for this workspace at /attributes.
+     * Used to accept per-contact values from the add/edit contact form while
+     * ignoring any posted key that isn't a real attribute (so a forged field
+     * can't inject arbitrary custom_attributes entries).
+     *
+     * @return array<int, string>
+     */
+    private function workspaceAttributeKeys(int $wsId): array
+    {
+        if ($wsId <= 0) return [];
+        return \App\Models\Attribute::query()
+            ->forWorkspace($wsId)
+            ->where('status', true)
+            ->pluck('attribute_key')
+            ->all();
+    }
+
     public function store(Request $request)
     {
         // Plan limit — block adding contacts beyond the package cap.
@@ -422,6 +455,9 @@ class ContactsController extends Controller
             // same mapping the CSV import uses for its "apply to every row" knobs.
             'status'          => 'nullable|string|max:64',
             'source'          => 'nullable|string|max:128',
+            // Per-contact values for workspace custom attributes.
+            'attributes'      => 'nullable|array',
+            'attributes.*'    => 'nullable|string|max:1000',
         ]);
 
         $fullName = $request->input('name')
@@ -435,6 +471,17 @@ class ContactsController extends Controller
         $custom = [];
         if (($s = trim((string) $request->input('status', ''))) !== '')  $custom['status'] = $s;
         if (($v = trim((string) $request->input('source', ''))) !== '')  $custom['source'] = $v;
+        // Per-contact values for workspace custom attributes (defined at
+        // /attributes). Posted as attributes[<key>]. Only real attribute keys
+        // are honoured, so {{order_id}}, a Maps-link attribute, etc. can finally
+        // hold a per-contact value — without this the merge tag always resolved
+        // blank (or to the attribute's workspace default).
+        $postedAttrs = (array) $request->input('attributes', []);
+        foreach ($this->workspaceAttributeKeys($wsId) as $key) {
+            if (!array_key_exists($key, $postedAttrs)) continue;
+            $val = trim((string) $postedAttrs[$key]);
+            if ($val !== '') $custom[$key] = $val;
+        }
 
         $imagePath = null;
         if ($request->hasFile('image')) {
@@ -512,6 +559,8 @@ class ContactsController extends Controller
             'is_unsubscribed' => 'sometimes|boolean',
             'status'          => 'nullable|string|max:64',
             'source'          => 'nullable|string|max:128',
+            'attributes'      => 'nullable|array',
+            'attributes.*'    => 'nullable|string|max:1000',
         ]);
 
         $fullName = $request->input('name')
@@ -533,7 +582,11 @@ class ContactsController extends Controller
         $contact->name          = $fullName ?: $contact->name;
         $contact->language      = $request->language ?? $contact->language;
         $contact->address       = $request->address ?? $contact->address;
-        if ($request->has('contact_group')) {
+        // Groups: HTML omits unchecked checkboxes entirely, so unchecking the
+        // LAST group would make `contact_group` absent and silently keep the old
+        // membership. The edit form always posts a hidden `contact_group_submitted`
+        // marker, so an absent list here means "user cleared them all" → save empty.
+        if ($request->has('contact_group') || $request->boolean('contact_group_submitted')) {
             $contact->contact_group = array_map('strval', $request->input('contact_group', []));
         }
         $contact->email         = $request->email ?? $contact->email;
@@ -555,8 +608,27 @@ class ContactsController extends Controller
             if ($val === '') { unset($bag[$ca]); } else { $bag[$ca] = $val; }
             $contact->custom_attributes = $bag;
         }
+        // Per-contact custom-attribute values (see store()). Only touch keys
+        // that were actually submitted so a partial edit never wipes untouched
+        // ones; an empty submitted value clears that attribute for the contact.
+        $postedAttrs = (array) $request->input('attributes', []);
+        if ($postedAttrs) {
+            $updWsId = (int) ($request->user()?->current_workspace_id ?? 0);
+            $bag = is_array($contact->custom_attributes) ? $contact->custom_attributes : [];
+            foreach ($this->workspaceAttributeKeys($updWsId) as $key) {
+                if (!array_key_exists($key, $postedAttrs)) continue;
+                $val = trim((string) $postedAttrs[$key]);
+                if ($val === '') { unset($bag[$key]); } else { $bag[$key] = $val; }
+            }
+            $contact->custom_attributes = $bag;
+        }
         if ($request->has('is_unsubscribed')) {
             $contact->is_unsubscribed = $request->boolean('is_unsubscribed');
+            // Stamp the opt-out time (and clear it on re-subscribe) so the
+            // audit/date is accurate — only when the flag actually changed.
+            if ($contact->isDirty('is_unsubscribed')) {
+                $contact->unsubscribed_at = $contact->is_unsubscribed ? now() : null;
+            }
         }
         $optInChanged = $contact->isDirty('is_unsubscribed');
         $anyChange    = $contact->isDirty();
@@ -764,7 +836,8 @@ class ContactsController extends Controller
         $userId     = $request->user()?->id;
         $imported   = 0;
         $skipped    = 0;
-        $duplicates = 0;
+        $duplicates = 0;   // kept for the JSON contract; now == $updated
+        $updated    = 0;   // existing contacts refreshed from the CSV
         $headers    = null;
         $colMap     = [];
 
@@ -785,13 +858,16 @@ class ContactsController extends Controller
         $canon = fn (?string $cc, ?string $mobile): string => $this->canonPhone($cc, $mobile);
         // Existing-phone dedup set — chunked so a workspace that already has
         // hundreds of thousands of contacts doesn't load them all into memory.
+        // Store the existing contact's ID (not just a bool) so a re-import can
+        // UPDATE it in place instead of skipping — re-uploading the same number
+        // with a changed name/email must overwrite, not be dropped as a dup.
         $existingPhones = [];
         Contact::where('workspace_id', $wsId)
             ->select(['id', 'country_code', 'mobile'])
             ->chunkById(5000, function ($rows) use (&$existingPhones, $canon) {
                 foreach ($rows as $c) {
                     $key = $canon($c->country_code, $c->mobile);
-                    if ($key !== '') $existingPhones[$key] = true;
+                    if ($key !== '') $existingPhones[$key] = (int) $c->id;
                 }
             });
 
@@ -822,7 +898,7 @@ class ContactsController extends Controller
         // are committed in batches so 50k+ inserts don't run as 50k separate
         // autocommits (the other big slowdown).
         Contact::withoutEvents(function () use (
-            $handle, &$headers, &$colMap, &$imported, &$skipped, &$duplicates,
+            $handle, &$headers, &$colMap, &$imported, &$skipped, &$duplicates, &$updated,
             &$existingPhones, $resolveGroup, $globalGroupIds, $globalStatus,
             $globalSource, $userId, $wsId, $canon
         ) {
@@ -850,9 +926,28 @@ class ContactsController extends Controller
                 if ($name === '' || $mobile === '') { $skipped++; continue; }
 
                 // De-dup against the workspace + earlier rows in this file.
+                // A match now UPDATES the existing contact with the CSV's
+                // values (only the columns the file actually provided) instead
+                // of skipping it — so a re-upload that changes the name/email
+                // overwrites rather than being dropped as a duplicate.
                 $phoneKey = $canon($cc, $mobile);
-                if ($phoneKey !== '' && isset($existingPhones[$phoneKey])) { $duplicates++; continue; }
-                if ($phoneKey !== '') $existingPhones[$phoneKey] = true;
+                if ($phoneKey !== '' && isset($existingPhones[$phoneKey])) {
+                    $existingId = (int) $existingPhones[$phoneKey];
+                    if ($existingId > 0 && ($existing = Contact::find($existingId))) {
+                        // Backfill the queryable hash (the saving hook is
+                        // suppressed inside withoutEvents; old imports left it null).
+                        $existing->mobile_hash = Contact::hashPhone($cc, $mobile);
+                        if ($name !== '')     { $existing->name = $name; $existing->first_name = $name; }
+                        if ($lastName !== '') { $existing->last_name = $lastName; }
+                        if ($email !== null)  { $existing->email = $email; }
+                        if ($cc !== null)     { $existing->country_code = $cc; }
+                        if ($language !== null) { $existing->language = $language; }
+                        $existing->save();
+                        $updated++;
+                        $duplicates++;   // JSON back-compat: reported as duplicates
+                    }
+                    continue;
+                }
 
                 // Per-row groups via the O(1) cache (no DB hit unless a
                 // brand-new group name appears); global group merged in.
@@ -871,19 +966,26 @@ class ContactsController extends Controller
                 if ($globalStatus !== '') $custom['status'] = $globalStatus;
                 if ($globalSource !== '') $custom['source'] = $globalSource;
 
-                Contact::create([
+                // mobile_hash MUST be set explicitly: this loop runs inside
+                // Contact::withoutEvents(), which suppresses the saving hook
+                // that normally computes it — otherwise imported rows get a
+                // NULL hash and the inbound auto-capture (rememberPhone, dedup
+                // by mobile_hash) never matches them and saves the number twice.
+                $newContact = Contact::create([
                     'user_id'           => $userId,
                     'workspace_id'      => $wsId,
                     'name'              => $name,
                     'first_name'        => $name,
                     'last_name'         => $lastName ?: null,
                     'mobile'            => $mobile,
+                    'mobile_hash'       => Contact::hashPhone($cc, $mobile),
                     'email'             => $email,
                     'country_code'      => $cc,
                     'language'          => $language,
                     'contact_group'     => $groupIds,
                     'custom_attributes' => $custom ?: null,
                 ]);
+                if ($phoneKey !== '') $existingPhones[$phoneKey] = (int) $newContact->id;
                 $imported++;
 
                 if (++$batch >= 1000) { \DB::commit(); \DB::beginTransaction(); $batch = 0; }
@@ -894,7 +996,7 @@ class ContactsController extends Controller
 
         $message = "Imported {$imported} contacts";
         $notes = [];
-        if ($duplicates > 0) $notes[] = "{$duplicates} duplicate" . ($duplicates === 1 ? '' : 's') . " skipped";
+        if ($updated > 0)    $notes[] = "{$updated} existing " . ($updated === 1 ? 'contact' : 'contacts') . " updated";
         if ($skipped > 0)    $notes[] = "{$skipped} invalid row" . ($skipped === 1 ? '' : 's') . " skipped";
         if ($notes) $message .= ' (' . implode(', ', $notes) . ')';
         $message .= '.';
@@ -1096,6 +1198,9 @@ class ContactsController extends Controller
                 $changed++;
                 try { app(\App\Services\Flow\FlowEnrollmentService::class)->onTagAdded($c, (int) $tag->id); }
                 catch (\Throwable $e) { \Log::warning('[CONTACT-TAG] bulk onTagAdded failed: ' . $e->getMessage()); }
+
+                try { app(\App\Services\Drip\DripRunner::class)->onTagAdded($c, (int) $tag->id); }
+                catch (\Throwable $e) { \Log::warning('[CONTACT-TAG] bulk drip onTagAdded failed: ' . $e->getMessage()); }
             } else {
                 if (!$already) continue;
                 $c->tags()->detach($tag->id);
@@ -1261,6 +1366,21 @@ class ContactsController extends Controller
     public function groupIndex(): View
     {
         return $this->index(request());
+    }
+
+    /**
+     * JSON list of the workspace's contact groups — [{id, name}] — for pickers
+     * such as the flow builder's "Tag contact" node group action. `user_group`
+     * is the (encrypted) group name.
+     */
+    public function apiGroups(): \Illuminate\Http\JsonResponse
+    {
+        $groups = ContactGroup::query()->forCurrentWorkspace()
+            ->get(['id', 'user_group'])
+            ->map(fn ($g) => ['id' => (int) $g->id, 'name' => (string) $g->user_group])
+            ->values();
+
+        return response()->json($groups);
     }
 
     public function groupStore(Request $request)

@@ -8,7 +8,7 @@
             ? \App\Models\WaStorefront::where('workspace_id', $u->current_workspace_id)->first()
             : null;
     @endphp
-    <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7">
+    <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7 min-h-full">
         <div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
             @include('user.store._sidebar', ['current' => 'products', 'cfg' => $cfg, 'sf' => $sf])
             <section class="space-y-5 min-w-0">

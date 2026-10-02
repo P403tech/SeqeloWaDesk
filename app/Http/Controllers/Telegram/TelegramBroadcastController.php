@@ -327,15 +327,19 @@ class TelegramBroadcastController extends Controller
 
         foreach ($rows as $row) {
             $text = $this->personalise($body, $row);
+
+            // Claim OUT of PENDING BEFORE the network call — anti-spam guard
+            // (matches FacebookBroadcastController). Prevents a retry / overlapping
+            // tick / mid-batch failure from re-selecting and re-sending this row.
+            $row->forceFill(['status' => TelegramBroadcastRecipient::STATUS_SENT, 'sent_at' => now()])->save();
+
             $res  = $this->sendOne($client, $broadcast, $row, $text, $media);
 
             if ($res['ok'] ?? false) {
                 $messageId = (string) (data_get($res, 'result.message_id') ?? '');
 
                 $row->forceFill([
-                    'status'              => TelegramBroadcastRecipient::STATUS_SENT,
                     'provider_message_id' => $messageId,
-                    'sent_at'             => now(),
                     'error'               => null,
                 ])->save();
 
@@ -358,10 +362,11 @@ class TelegramBroadcastController extends Controller
             $gone  = TelegramBroadcastRecipient::isUnreachable($error);
 
             $row->forceFill([
-                'status' => $gone
+                'status'  => $gone
                     ? TelegramBroadcastRecipient::STATUS_BLOCKED
                     : TelegramBroadcastRecipient::STATUS_FAILED,
-                'error'  => mb_substr($error, 0, 255),
+                'sent_at' => null,
+                'error'   => mb_substr($error, 0, 255),
             ])->save();
 
             $broadcast->increment($gone ? 'blocked' : 'failed');

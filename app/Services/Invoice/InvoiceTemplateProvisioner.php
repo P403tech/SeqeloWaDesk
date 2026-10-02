@@ -22,7 +22,17 @@ use Illuminate\Support\Facades\Log;
  */
 class InvoiceTemplateProvisioner
 {
-    private const NAME = 'wadesk_invoice';
+    /**
+     * Meta template name — DERIVED from the brand, not hardcoded, so a
+     * white-labelled install ships e.g. "acme_invoice" instead of the literal
+     * "wadesk_invoice". Meta requires lowercase [a-z0-9_].
+     */
+    private function templateName(): string
+    {
+        $slug = \Illuminate\Support\Str::slug((string) brand_name(), '_');
+        $slug = preg_replace('/[^a-z0-9_]/', '', strtolower($slug));
+        return ($slug !== '' ? $slug : 'brand') . '_invoice';
+    }
 
     public function provision(int $wsId, string $sender): RedirectResponse
     {
@@ -69,9 +79,9 @@ class InvoiceTemplateProvisioner
         ];
 
         $tpl = WaTemplate::query()->where('workspace_id', $wsId)
-            ->get()->first(fn ($t) => (string) $t->template_name === self::NAME);
+            ->get()->first(fn ($t) => (string) $t->template_name === $this->templateName());
         $tpl ? $tpl->update($fields)
-             : $tpl = WaTemplate::create($fields + ['workspace_id' => $wsId, 'template_name' => self::NAME, 'status' => 'pending']);
+             : $tpl = WaTemplate::create($fields + ['workspace_id' => $wsId, 'template_name' => $this->templateName(), 'status' => 'pending']);
 
         try {
             $client  = new TemplateClient($cfg);

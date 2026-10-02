@@ -81,7 +81,81 @@ class ResolveAppWorkspace
             ], 422);
         }
 
-        $deviceId     = $inputDevice ?: $headerDevice;
+        // MULTI-ENGINE SELECTION. A bare id only ever addresses the `devices`
+        // table (Unofficial API). A WABA/Twilio number is a wa_provider_configs
+        // row, and the two tables' ids COLLIDE — so there was no way for the app
+        // to pin a send to a Meta number, and a header meant as "WABA #89" would
+        // silently resolve to Unofficial device #89 or be dropped without error.
+        // The composite `waba:89` form (what /get-devices now returns as
+        // `sender_key`) is unambiguous, so we resolve it against the provider
+        // table instead and stash it for the endpoints that read an account.
+        $rawKey = (string) ($request->input('sender_key')
+            ?: $request->header('X-Sender-Key')
+            ?: $request->header('X-Device-Id'));
+        $keyDevice = 0;
+        if (str_contains($rawKey, ':')) {
+            [$engine, $rawId] = explode(':', $rawKey, 2);
+            $rawId = trim($rawId);
+
+            // EVERY non-Unofficial channel, not just the WhatsApp family — a
+            // Telegram bot / LINE / WeChat / Viber / Instagram / Facebook / SMS
+            // account is selected the same way and must scope the same lists.
+            $channelEngines = array_values(array_diff(
+                \App\Services\WorkspaceEngine::allEngines(),
+                [\App\Services\WorkspaceEngine::ENGINE_BAILEYS]
+            ));
+
+            if (ctype_digit($rawId) && in_array($engine, $channelEngines, true)) {
+                // Same reasoning as the body/header mismatch guard above: an
+                // explicit device_id alongside a provider sender key means the
+                // request is pinned to two different numbers at once.
+                if ($inputDevice > 0) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'device_id conflicts with the selected sender (sender_key).',
+                    ], 422);
+                }
+
+                // Engine + id, always as a PAIR. Rows key their sender the same
+                // polymorphic way (device_id + provider), and ids collide across
+                // the per-channel tables, so an id on its own means nothing.
+                // No existence check here: every consumer already scopes by
+                // workspace, so an id from another tenant simply matches nothing.
+                $request->attributes->set('app_sender_engine', $engine);
+                $request->attributes->set('app_sender_id', (int) $rawId);
+                $request->attributes->set('app_sender_key', $engine . ':' . $rawId);
+
+                // app_provider_config_id keeps its narrower meaning — a real
+                // wa_provider_configs row — because WABA-only consumers
+                // (templates, contacts) resolve accounts against that table.
+                if (in_array($engine, ['waba', 'twilio'], true)) {
+                    $okCfg = \App\Models\WaProviderConfig::query()
+                        ->where('workspace_id', (int) $user->current_workspace_id)
+                        ->whereKey((int) $rawId)
+                        ->where('provider', $engine)
+                        ->exists();
+                    if ($okCfg) {
+                        $request->attributes->set('app_provider_config_id', (int) $rawId);
+                        if ($request->input('account_id') === null) {
+                            $request->merge(['account_id' => (int) $rawId]);
+                        }
+                    }
+                }
+
+                // A channel account id is never a devices.id — skip the device
+                // lookup below so we can't half-resolve against the wrong table.
+                return $next($request);
+            }
+
+            // `baileys:127` — the composite form of a plain device. Unwrap it
+            // so an app that echoes back the sender_key from /get-devices keeps
+            // selecting the device instead of silently selecting nothing.
+            if (ctype_digit($rawId) && $engine === 'baileys') {
+                $keyDevice = (int) $rawId;
+            }
+        }
+
+        $deviceId     = $inputDevice ?: $headerDevice ?: $keyDevice;
         if ($deviceId > 0) {
             // Only trust a device the resolved workspace actually owns.
             $ok = \App\Models\Device::query()
@@ -97,6 +171,43 @@ class ResolveAppWorkspace
                 // the web gets from its device picker. An explicit body value wins.
                 if ($inputDevice === 0) {
                     $request->merge(['device_id' => $deviceId]);
+                }
+            } else {
+                // Not a device in this workspace. Older app builds send the BARE
+                // id from /get-devices rather than the composite `sender_key`,
+                // and for a WABA / Telegram / LINE / … account that id belongs
+                // to a different table — so the selection resolved to nothing at
+                // all and every list silently came back UNSCOPED (all of the
+                // workspace's rules instead of the selected account's).
+                //
+                // Resolve it against the workspace's connected accounts. Only
+                // when EXACTLY ONE channel owns that id: ids collide across the
+                // per-channel tables, and pinning to the wrong number is worse
+                // than not pinning at all.
+                try {
+                    $hits = \App\Services\WorkspaceEngine::senders(
+                        (int) $user->current_workspace_id,
+                        \App\Services\WorkspaceEngine::allEngines()
+                    )->filter(fn ($s) => (int) ($s['id'] ?? 0) === $deviceId
+                        && ($s['engine'] ?? '') !== \App\Services\WorkspaceEngine::ENGINE_BAILEYS)
+                      ->values();
+
+                    if ($hits->count() === 1) {
+                        $hit = $hits->first();
+                        $request->attributes->set('app_sender_engine', (string) $hit['engine']);
+                        $request->attributes->set('app_sender_id', $deviceId);
+                        $request->attributes->set('app_sender_key', $hit['engine'] . ':' . $deviceId);
+
+                        if (in_array($hit['engine'], ['waba', 'twilio'], true)) {
+                            $request->attributes->set('app_provider_config_id', $deviceId);
+                            if ($request->input('account_id') === null) {
+                                $request->merge(['account_id' => $deviceId]);
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // Never let sender resolution break the request — an
+                    // unscoped list is degraded, not broken.
                 }
             }
         }

@@ -23,13 +23,17 @@ class WorkspaceIgAccount extends Model
         'name',
         'avatar',
         'status',
+        // Mirrored from the native account purely so /devices can warn before a
+        // token lapses. No token is ever stored here — only its expiry date.
+        'token_expires_at',
         'followers',
         'synced_at',
     ];
 
     protected $casts = [
-        'followers' => 'integer',
-        'synced_at' => 'datetime',
+        'followers'        => 'integer',
+        'synced_at'        => 'datetime',
+        'token_expires_at' => 'datetime',
     ];
 
     public function scopeForWorkspace($q, int $workspaceId)

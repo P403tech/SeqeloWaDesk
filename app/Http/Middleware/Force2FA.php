@@ -34,8 +34,16 @@ class Force2FA
         }
 
         // Don't bounce while user is mid-setup or signing out.
+        //
+        // /settings MUST be here: this middleware redirects to
+        // /settings?tab=security (below), and a guarded destination redirects
+        // to itself forever — ERR_TOO_MANY_REDIRECTS the moment a 2FA policy
+        // is switched on. The query string is invisible to $request->path()
+        // (which returns just "settings"), so the /2fa check never caught it
+        // either. The whole point of that page is to let the user enable 2FA,
+        // so it cannot require 2FA to reach.
         $path = '/' . ltrim($request->path(), '/');
-        $bypass = ['/login', '/logout', '/register', '/password', '/email'];
+        $bypass = ['/login', '/logout', '/register', '/password', '/email', '/settings'];
         foreach ($bypass as $p) {
             if (str_starts_with($path, $p)) return $next($request);
         }

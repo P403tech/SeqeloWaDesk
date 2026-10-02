@@ -405,6 +405,24 @@ if (! function_exists('brand_name')) {
     }
 }
 
+if (! function_exists('brand_token')) {
+    /**
+     * Brand name reduced to a bare alphabetic token, upper-cased — for places
+     * that need an identifier-shaped example rather than a display name
+     * (DLT sender ids, storage paths, project slugs). Hardcoding the product
+     * name in those examples breaks white-label installs, which is why they
+     * derive from the same setting as every other brand string.
+     */
+    function brand_token(int $length = 6): string
+    {
+        $letters = preg_replace('/[^A-Za-z]/', '', (string) brand_name());
+        if ($letters === '' || $letters === null) {
+            return 'SENDER';
+        }
+        return strtoupper(substr($letters, 0, max(1, $length)));
+    }
+}
+
 if (! function_exists('ig_brand_name')) {
     /**
      * Display name of the connected Instagram product (the standalone that
@@ -423,6 +441,28 @@ if (! function_exists('ig_brand_name')) {
             return $v !== '' ? $v : 'IgDesk';
         } catch (\Throwable $e) {
             return 'IgDesk';
+        }
+    }
+}
+
+if (! function_exists('mailtrixy_brand_name')) {
+    /**
+     * Display name of the connected email product (the standalone that holds
+     * the mailboxes + sending). Admin-configurable at /admin/extensions so
+     * every label re-brands from one setting instead of hard-coding
+     * "MailTrixy". Defaults to MailTrixy.
+     *
+     * This is a DISPLAY name only — the functional handshake keys
+     * (mailtrixy_url / mailtrixy_secret / X-Mailtrixy-Secret / service) stay
+     * literal and are never routed through here.
+     */
+    function mailtrixy_brand_name(): string
+    {
+        try {
+            $v = trim((string) \App\Models\SystemSetting::get('mailtrixy_brand', ''));
+            return $v !== '' ? $v : 'MailTrixy';
+        } catch (\Throwable $e) {
+            return 'MailTrixy';
         }
     }
 }
@@ -825,6 +865,30 @@ if (! function_exists('media_disk')) {
         } catch (\Throwable $e) {
             return \App\Services\CloudStorageManager::LOCAL_DISK;
         }
+    }
+}
+
+if (! function_exists('setup_hint')) {
+    /**
+     * Role-aware "needs configuration" message. An operator/admin who can
+     * actually fix it gets the actionable admin location ($adminMessage); every
+     * other user — end customers on the workspace portal, and unauthenticated
+     * visitors (registration) — gets a clean, support-only line that NEVER
+     * exposes an internal admin path or the product name. Pass a feature-specific
+     * $userMessage, or omit it for the generic fallback. Never throws — in a
+     * console/queue context with no auth it returns the user-facing line.
+     */
+    function setup_hint(string $adminMessage, ?string $userMessage = null): string
+    {
+        try {
+            $user = auth()->user();
+            if ($user && method_exists($user, 'isAdmin') && $user->isAdmin()) {
+                return $adminMessage;
+            }
+        } catch (\Throwable $e) {
+            // no auth context (console/queue) → fall through to the user line
+        }
+        return $userMessage ?: __('This feature is temporarily unavailable. Please contact support for assistance.');
     }
 }
 

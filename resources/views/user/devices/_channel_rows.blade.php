@@ -154,8 +154,23 @@
                                 @php
                                     $igHandle = '@' . ltrim((string) ($ig->username ?: $ig->name), '@');
                                     $igLive   = ($ig->status ?? 'connected') === 'connected';
+                                    // Instagram tokens live 60 days and CANNOT be
+                                    // refreshed once lapsed — a silent expiry means
+                                    // sends fail with no visible cause. Warn while
+                                    // there is still time to act. Null expiry (legacy
+                                    // rows, remote Instaflow) shows nothing.
+                                    // Whole CALENDAR days, not a fractional diff. floor() on
+                                    // a fraction got both edges wrong: a token 8.0 days out
+                                    // read as 7 (warned a day early), and one expiring TODAY
+                                    // came out -1 and showed nothing at all — the single case
+                                    // the warning exists for.
+                                    $igExpiresAt = $ig->token_expires_at ?? null;
+                                    $igDaysLeft  = $igExpiresAt
+                                        ? (int) now()->startOfDay()->diffInDays($igExpiresAt->copy()->startOfDay(), false)
+                                        : null;
+                                    $igExpiring  = $igDaysLeft !== null && $igDaysLeft >= 0 && $igDaysLeft <= 7;
                                 @endphp
-                                <div
+                                <div data-channel-row="instagram"
                                     class="min-w-[1160px] grid grid-cols-[40px_minmax(200px,1.4fr)_150px_140px_120px_90px_140px_220px] items-center gap-3 px-4 py-3 border-b border-paper-200 last:border-0 hover:bg-paper-50/60">
                                     <div class="px-1"></div>
                                     <div class="min-w-0 flex items-center gap-2.5">
@@ -196,6 +211,15 @@
                                         @if ($igLive)
                                             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-wa-mint text-wa-deep"><span
                                                     class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ __('Connected') }}</span>
+                                            {{-- Countdown only inside the last week. Earlier than that it is
+                                                 noise; later than that the account is already retired above. --}}
+                                            @if ($igExpiring)
+                                                <div class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-accent-amber/15 text-accent-amber"
+                                                    title="{{ __('Instagram access tokens last 60 days. This one renews automatically — reconnect only if it lapses.') }}">
+                                                    <span class="w-1.5 h-1.5 rounded-full bg-accent-amber"></span>
+                                                    {{ $igDaysLeft <= 0 ? __('expires today') : trans_choice('expires in :count day|expires in :count days', $igDaysLeft, ['count' => $igDaysLeft]) }}
+                                                </div>
+                                            @endif
                                         @else
                                             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-paper-100 text-ink-600"><span
                                                     class="w-1.5 h-1.5 rounded-full bg-paper-300"></span>{{ __('Needs re-auth') }}</span>
@@ -219,8 +243,11 @@
                                                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5v3h-3M2.5 12.5v-3h3" /><path d="M12.4 6a4.5 4.5 0 0 0-8.2-.8M3.6 10a4.5 4.5 0 0 0 8.2.8" /></svg>
                                                 </button>
                                             </form>
-                                            {{-- Disconnect — remove the local account. --}}
-                                            <form method="POST" action="{{ url('/instagram/' . $ig->id) }}"
+                                            {{-- Disconnect — remove the local account. Routes through the
+                                                 core unlink so BOTH the native row AND the dashboard mirror
+                                                 (workspace_ig_accounts) are cleared — otherwise the account
+                                                 kept showing on the dashboard with an empty @handle. --}}
+                                            <form method="POST" action="{{ url('/devices/instagram/' . $ig->id . '/unlink') }}"
                                                 class="inline" data-confirm="{{ __('Disconnect this Instagram account?') }}">
                                                 @csrf @method('DELETE')
                                                 <button type="submit"
@@ -394,6 +421,66 @@
                                         <form method="POST" action="{{ url('/sms/' . $sm->id) }}" class="inline" data-confirm="{{ __('Remove this SMS number?') }}">
                                             @csrf @method('DELETE')
                                             <button type="submit" class="w-8 h-8 rounded-lg grid place-items-center hover:bg-accent-coral/10 text-accent-coral transition" title="{{ __('Remove') }}">
+                                                <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6.5 4V2.5h3V4M5 4l.5 9h5l.5-9" /></svg>
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            @endforeach
+
+                            {{-- Linked email mailboxes (via the connected MailTrixy install).
+ Same table, own rows, like SMS/Facebook/Instagram/TikTok — the mailbox lives on
+ MailTrixy and this is the workspace's mirror row, so "Refresh" re-pulls its
+ details and "Unlink" only drops the mirror (the mailbox itself is untouched).
+ Needs: $emailAccounts (computed in index.blade.php). --}}
+                            @foreach (($emailAccounts ?? collect()) as $ea)
+                                @php
+                                    $eaLive  = strtolower((string) $ea->status) === 'connected';
+                                    $eaProv  = strtolower((string) $ea->provider);
+                                    $eaLabel = $eaProv === '' ? __('Email') : __('Email') . ' · ' . ucfirst($eaProv);
+                                @endphp
+                                <div
+                                    class="min-w-[1160px] grid grid-cols-[40px_minmax(200px,1.4fr)_150px_140px_120px_90px_140px_220px] items-center gap-3 px-4 py-3 border-b border-paper-200 last:border-0 hover:bg-paper-50/60">
+                                    <div class="px-1"></div>
+                                    <div class="min-w-0 flex items-center gap-2.5">
+                                        <span class="w-9 h-9 rounded-lg grid place-items-center shrink-0 bg-wa-deep text-paper-0">
+                                            <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z" /><path d="m2 4.5 6 4.5 6-4.5" /></svg>
+                                        </span>
+                                        <div class="min-w-0">
+                                            <div class="font-semibold text-ink-900 text-[12.5px] truncate">{{ $ea->name ?: $ea->email }}</div>
+                                            <div class="text-[10.5px] text-ink-500 font-mono truncate flex items-center gap-1">
+                                                <svg viewBox="0 0 16 16" class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v8H2z" /><path d="m2 4.5 6 4.5 6-4.5" /></svg>
+                                                {{ $eaLabel }}</div>
+                                        </div>
+                                    </div>
+                                    <div class="font-mono text-[11.5px] text-ink-700 truncate" title="{{ $ea->email }}">{{ $ea->email }}</div>
+                                    <div class="text-[12px] text-ink-500 truncate">—</div>
+                                    <div class="min-w-0"><div class="font-mono text-[11.5px] text-ink-500 truncate">{{ $ea->synced_at ? $ea->synced_at->diffForHumans() : __('live') }}</div></div>
+                                    <div class="font-mono text-[11.5px] text-ink-500">—</div>
+                                    <div>
+                                        @if ($eaLive)
+                                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-wa-mint text-wa-deep"><span class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ __('Connected') }}</span>
+                                        @else
+                                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-paper-100 text-ink-600"><span class="w-1.5 h-1.5 rounded-full bg-paper-300"></span>{{ __('Inactive') }}</span>
+                                        @endif
+                                    </div>
+                                    <div class="flex items-center gap-0.5 justify-end whitespace-nowrap">
+                                        {{-- Sync pulls this mailbox's mail from the email server. The
+                                             live push only announces NEW messages and gives up after 8s
+                                             with no retry, so this is how history arrives and how a
+                                             dropped message is recovered. Safe to press twice — import
+                                             dedupes on the remote message id. --}}
+                                        <form method="POST" action="{{ url('/devices/email/' . $ea->id . '/sync') }}" class="inline">
+                                            @csrf
+                                            <button type="submit" class="w-8 h-8 rounded-lg grid place-items-center hover:bg-paper-100 text-ink-500 transition"
+                                                title="{{ __('Sync — fetch mail for this account') }}">
+                                                <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 2.5V5H11" /></svg>
+                                            </button>
+                                        </form>
+                                        <form method="POST" action="{{ url('/devices/email/' . $ea->id . '/unlink') }}" class="inline"
+                                            data-confirm="{{ __('Unlink this email account from the workspace? Its messages stop arriving here. The mailbox itself is not deleted.') }}">
+                                            @csrf @method('DELETE')
+                                            <button type="submit" class="w-8 h-8 rounded-lg grid place-items-center hover:bg-accent-coral/10 text-accent-coral transition" title="{{ __('Unlink') }}">
                                                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6.5 4V2.5h3V4M5 4l.5 9h5l.5-9" /></svg>
                                             </button>
                                         </form>

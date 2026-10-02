@@ -28,9 +28,14 @@ class AttributeResolver
      * @param  string $body         The raw message text with placeholders.
      * @param  array  $variableMap  ["1" => "promo_key", "2" => "order_id"]
      * @param  int    $workspaceId
+     * @param  \App\Models\Contact|null $contact  When given, the recipient's OWN
+     *         fields ({{name}}, {{mobile}}, …) and per-contact custom_attributes
+     *         take precedence over the workspace-wide attribute default — so
+     *         placeholders personalize per recipient instead of resolving to the
+     *         same value (or blank) for everyone.
      * @return string               Body with placeholders resolved.
      */
-    public function resolve(string $body, array $variableMap, int $workspaceId): string
+    public function resolve(string $body, array $variableMap, int $workspaceId, ?\App\Models\Contact $contact = null): string
     {
         if ($body === '') return $body;
         if (!str_contains($body, '{{')) return $body; // fast path
@@ -63,6 +68,15 @@ class AttributeResolver
             ->mapWithKeys(fn ($a) => [$a->attribute_key => (string) $a->attribute_value])
             ->all();
 
+        // Per-contact overrides win over the workspace-wide default. Only
+        // non-empty values override, so a blank contact field falls back to the
+        // workspace attribute rather than wiping the placeholder.
+        if ($contact) {
+            foreach ($this->contactValues($contact) as $k => $v) {
+                if ($v !== '' && $v !== null) $values[$k] = (string) $v;
+            }
+        }
+
         // 1) Positional resolution — {{N}} → variableMap[N] → values[key]
         $body = preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/u', function ($m) use ($variableMap, $values) {
             $slot = $m[1];
@@ -78,6 +92,35 @@ class AttributeResolver
         }, $body);
 
         return $body;
+    }
+
+    /**
+     * The recipient's own field values, keyed so both {{name}} and a positional
+     * {{1}} mapped to "name" resolve to this contact. Built-in fields plus the
+     * contact's custom_attributes (where CSV-imported columns live).
+     *
+     * @return array<string,string>
+     */
+    private function contactValues(\App\Models\Contact $contact): array
+    {
+        $out = [
+            'name'         => (string) ($contact->name ?? ''),
+            'first_name'   => (string) ($contact->first_name ?? ''),
+            'last_name'    => (string) ($contact->last_name ?? ''),
+            'mobile'       => (string) ($contact->mobile ?? ''),
+            'phone'        => (string) ($contact->mobile ?? ''),
+            'email'        => (string) ($contact->email ?? ''),
+            'country_code' => (string) ($contact->country_code ?? ''),
+            'language'     => (string) ($contact->language ?? ''),
+        ];
+        if ($out['name'] === '') {
+            $out['name'] = trim($out['first_name'] . ' ' . $out['last_name']);
+        }
+        $custom = is_array($contact->custom_attributes ?? null) ? $contact->custom_attributes : [];
+        foreach ($custom as $k => $v) {
+            if (is_scalar($v)) $out[(string) $k] = (string) $v;
+        }
+        return $out;
     }
 
     /**

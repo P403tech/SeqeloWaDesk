@@ -43,6 +43,34 @@ class TemplateSender
     public const RC_MISSING_MEDIA   = 'missing_header_media';
 
     /**
+     * Resolve a Meta-hosted media id for a flow template's media header.
+     *
+     * The Node flow runtime sends template payloads directly to Graph. It must
+     * therefore not pass Meta's private template-sample CDN URL back to Meta as
+     * a header `link`: Graph fetches that URL without the browser credentials
+     * required by the CDN and later reports async error 131053 / HTTP 403.
+     * This exposes the existing download-and-upload pipeline so the flow can
+     * send the resulting stable Meta media id instead.
+     */
+    public function resolveHeaderMediaIdForConfig(WaTemplate $tpl, WaProviderConfig $cfg): ?string
+    {
+        if ($cfg->provider !== 'waba') return null;
+
+        $creds   = $cfg->creds();
+        $token   = (string) ($creds['access_token'] ?? '');
+        $phoneId = (string) (($cfg->meta_json['phone_number_id'] ?? null) ?: ($creds['phone_number_id'] ?? ''));
+        $headerType = strtoupper((string) ($tpl->attachment_type ?: 'TEXT'));
+
+        if ($token === '' || $phoneId === ''
+            || !in_array($headerType, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
+            return null;
+        }
+
+        $version = (string) SystemSetting::get('waba_graph_api_version', 'v23.0');
+        return $this->resolveHeaderMediaId($tpl, $phoneId, $token, $version);
+    }
+
+    /**
      * @param  array{header?:string,header_media_id?:string,header_media_url?:string,body?:array<int,string>,buttons?:array<int,array>,cards?:array<int,array>}  $vars
      * @return array{ok:bool,code:string,wamid?:?string,error?:?string,template_id:int}
      */
@@ -205,7 +233,10 @@ class TemplateSender
             $resp = Http::withToken($token)->acceptJson()->timeout(20)
                 ->post("{$base}/{$phoneId}/messages", $payload);
         } catch (\Throwable $e) {
-            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage());
+            // Timeout / connection reset — Meta may already have accepted the
+            // message, so this is AMBIGUOUS: flag it so the campaign records it
+            // terminal rather than auto-retrying (which would double-send).
+            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
         }
 
         // 132001 = "template name (...) does not exist in <lang>". The #1 cause
@@ -215,6 +246,9 @@ class TemplateSender
         // persist the corrected language so every future send skips this retry.
         if (!$resp->successful() && (int) ($resp->json('error.code') ?? 0) === 132001) {
             $sentLang = (string) ($payload['template']['language']['code'] ?? '');
+            $tplName  = (string) ($payload['template']['name'] ?? '');
+
+            // (1) REGION-SUFFIX strip: en_US → en, pt_BR → pt (the common gotcha).
             if (str_contains($sentLang, '_')) {
                 $baseLang = explode('_', $sentLang)[0];
                 $payload['template']['language']['code'] = $baseLang;
@@ -225,11 +259,35 @@ class TemplateSender
                     $resp = Http::withToken($token)->acceptJson()->timeout(20)
                         ->post("{$base}/{$phoneId}/messages", $payload);
                 } catch (\Throwable $e) {
-                    return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage());
+                    return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
                 }
                 if ($resp->successful()) {
-                    // Self-heal: store the language Meta actually accepts.
                     try { $tpl->forceFill(['language' => $baseLang])->save(); } catch (\Throwable $e) {}
+                }
+            }
+
+            // (2) STILL 132001 (e.g. a no-suffix language like `hi`, or the base
+            // strip missed) → ASK META which language THIS template is actually
+            // approved in on this WABA and retry with that. Fixes edited/renamed
+            // templates whose LOCAL language drifted from Meta's real code — the
+            // campaign path previously only stripped a suffix, so `hi` was stuck.
+            if (!$resp->successful() && (int) ($resp->json('error.code') ?? 0) === 132001 && $tplName !== '') {
+                $wabaId = (string) (($cfg->meta_json['waba_id'] ?? null) ?: ($creds['waba_id'] ?? ''));
+                $realLang = $wabaId !== '' ? $this->fetchApprovedTemplateLanguage($base, $wabaId, $token, $tplName) : null;
+                if ($realLang && $realLang !== (string) ($payload['template']['language']['code'] ?? '')) {
+                    Log::info('[WABA-template-send] 132001 → retry with Meta-confirmed language', [
+                        'tpl' => $tpl->id, 'name' => $tplName, 'to' => $realLang,
+                    ]);
+                    $payload['template']['language']['code'] = $realLang;
+                    try {
+                        $resp = Http::withToken($token)->acceptJson()->timeout(20)
+                            ->post("{$base}/{$phoneId}/messages", $payload);
+                    } catch (\Throwable $e) {
+                        return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
+                    }
+                    if ($resp->successful()) {
+                        try { $tpl->forceFill(['language' => $realLang])->save(); } catch (\Throwable $e) {}
+                    }
                 }
             }
         }
@@ -245,7 +303,9 @@ class TemplateSender
                 'tpl' => $tpl->id, 'to' => $toNumber, 'code' => $errCode, 'msg' => $real,
                 'body' => $resp->body(),   // Meta's full error response
             ]);
-            return $this->fail(self::RC_META_ERROR, $tpl, $real);
+            // Meta 5xx = ambiguous (may have queued before erroring) → no auto-retry;
+            // 4xx = definite rejection (never queued) → safe to retry.
+            return $this->fail(self::RC_META_ERROR, $tpl, $real) + ['ambiguous' => $resp->status() >= 500];
         }
 
         $wamid = (string) ($resp->json('messages.0.id') ?? '');
@@ -464,10 +524,13 @@ class TemplateSender
     private function interpretResponse(WaTemplate $tpl, string $toNumber, array $payload, $resp, string $token, string $base, string $phoneId): array
     {
         if ($resp instanceof \Throwable) {
-            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $resp->getMessage());
+            // Network / timeout exception: Meta MAY already have accepted the
+            // message, so this outcome is AMBIGUOUS. Flagged so the caller records
+            // it terminal instead of auto-retrying (a retry would double-send).
+            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $resp->getMessage()) + ['ambiguous' => true];
         }
         if ($resp === null) {
-            return $this->fail(self::RC_META_ERROR, $tpl, 'No response from Meta (pool miss).');
+            return $this->fail(self::RC_META_ERROR, $tpl, 'No response from Meta (pool miss).') + ['ambiguous' => true];
         }
 
         // 132001 region-suffix mismatch → retry ONCE with the base language.
@@ -483,7 +546,7 @@ class TemplateSender
                         try { $tpl->forceFill(['language' => $baseLang])->save(); } catch (\Throwable $e) {}
                     }
                 } catch (\Throwable $e) {
-                    return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage());
+                    return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
                 }
             }
         }
@@ -491,7 +554,11 @@ class TemplateSender
         if (!$resp->successful()) {
             $err  = (array) ($resp->json('error') ?? []);
             $real = MetaError::describe($err) ?: ('HTTP ' . $resp->status());
-            return $this->fail(self::RC_META_ERROR, $tpl, $real);
+            // A Meta 5xx is ambiguous like a timeout (the message may have been
+            // queued before Meta errored) so it must not auto-retry; a 4xx is a
+            // definite rejection (bad request / rate limit) — the send never
+            // queued, so it is safe to retry.
+            return $this->fail(self::RC_META_ERROR, $tpl, $real) + ['ambiguous' => $resp->status() >= 500];
         }
 
         return [
@@ -722,13 +789,41 @@ class TemplateSender
             // Cache::put below.
             $validated = ! str_starts_with($mime, 'image/');
             if (str_starts_with($mime, 'image/') && function_exists('imagecreatefromstring')) {
+                // Guard against OOM: Meta's approved-sample renditions can be huge
+                // in PIXEL dimensions — a tiny (171 KB) PNG can decode to ~9 MP,
+                // i.e. a ~37 MB raw bitmap (×2 for the flat copy). That blew the
+                // 128 M memory_limit and FATAL-ed the WHOLE send, leaving the
+                // campaign stuck in a resume→OOM loop. Read the size cheaply from
+                // the header FIRST, raise memory_limit just for this op sized to
+                // the bitmaps (capped at 512 M), then DOWNSCALE anything large to a
+                // sane header size below. Restored after the GD block.
+                $origMemLimit = ini_get('memory_limit');
+                $dims = @getimagesizefromstring($bytes);
+                if (! empty($dims[0]) && ! empty($dims[1])) {
+                    $needMb = (int) ceil((((int) $dims[0]) * ((int) $dims[1]) * 4 * 2 + 64 * 1024 * 1024) / (1024 * 1024));
+                    if ($needMb > 128) {
+                        @ini_set('memory_limit', min($needMb, 512) . 'M');
+                    }
+                }
                 $src = @imagecreatefromstring($bytes);
                 if ($src !== false) {
                     $validated = true;
                     $w = imagesx($src); $h = imagesy($src);
-                    $flat = imagecreatetruecolor($w, $h);
+                    // Downscale to a max 1600px long side so the flat bitmap + JPEG
+                    // stay small — a WhatsApp header never needs more than that.
+                    $tw = $w; $th = $h;
+                    if (max($w, $h) > 1600) {
+                        $scale = 1600 / max($w, $h);
+                        $tw = max(1, (int) round($w * $scale));
+                        $th = max(1, (int) round($h * $scale));
+                    }
+                    $flat = imagecreatetruecolor($tw, $th);
                     imagefill($flat, 0, 0, imagecolorallocate($flat, 255, 255, 255));
-                    imagecopy($flat, $src, 0, 0, 0, 0, $w, $h);
+                    if ($tw !== $w || $th !== $h) {
+                        imagecopyresampled($flat, $src, 0, 0, 0, 0, $tw, $th, $w, $h);
+                    } else {
+                        imagecopy($flat, $src, 0, 0, 0, 0, $w, $h);
+                    }
                     ob_start();
                     $encoded = imagejpeg($flat, null, 90);
                     $jpeg = (string) ob_get_clean();
@@ -761,6 +856,10 @@ class TemplateSender
                         'gd_version'  => $info['GD Version'] ?? null,
                     ]);
                 }
+            }
+            // Restore whatever memory_limit we may have raised for the GD re-encode.
+            if (isset($origMemLimit) && $origMemLimit !== false) {
+                @ini_set('memory_limit', $origMemLimit);
             }
 
             $ext = match (true) {
@@ -829,5 +928,30 @@ class TemplateSender
             'error'       => $error,
             'template_id' => $tpl->id,
         ];
+    }
+
+    /**
+     * On a 132001 that a base-language strip didn't fix, ask Meta which language
+     * THIS template name is actually approved in on the WABA, so we can retry
+     * with the real code instead of guessing. Returns null when the template
+     * isn't found on the WABA at all (a genuine wrong-WABA / missing template).
+     */
+    private function fetchApprovedTemplateLanguage(string $base, string $wabaId, string $token, string $name): ?string
+    {
+        try {
+            $r = Http::withToken($token)->acceptJson()->timeout(15)
+                ->get("{$base}/{$wabaId}/message_templates", ['name' => $name, 'limit' => 100]);
+            if (!$r->successful()) return null;
+            $rows  = (array) $r->json('data', []);
+            $exact = array_values(array_filter($rows, fn ($t) => (string) ($t['name'] ?? '') === $name));
+            if (!$exact) return null;
+            // Prefer an APPROVED row; else the first exact-name match.
+            $approved = array_values(array_filter($exact, fn ($t) => strtoupper((string) ($t['status'] ?? '')) === 'APPROVED'));
+            $pick     = $approved[0] ?? $exact[0];
+            $lang     = (string) ($pick['language'] ?? '');
+            return $lang !== '' ? $lang : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 }

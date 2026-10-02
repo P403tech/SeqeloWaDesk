@@ -51,7 +51,7 @@ class PaymentsController extends Controller
             'outstanding' => $outstanding,
             'aging'       => $this->ledger->aging($wsId),
             'collected30' => $collected30,
-            'currency'    => (string) (\App\Models\InvoiceSetting::forWorkspace($wsId)->currency ?? 'USD'),
+            'currency'    => strtoupper((string) (\App\Models\InvoiceSetting::forWorkspace($wsId)->currency ?: (\App\Models\Workspace::find($wsId)?->currency ?: 'USD'))),
         ]);
     }
 

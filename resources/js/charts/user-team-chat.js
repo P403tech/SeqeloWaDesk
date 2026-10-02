@@ -10,6 +10,8 @@
  *
  * Endpoints come from window.tcEndpoints (see team-chat.blade.php).
  */
+import { createPoller } from '../lib/poller.js';
+
 export default function init() {
     const $  = (sel, root = document) => root.querySelector(sel);
     const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -239,8 +241,13 @@ export default function init() {
     // Diff poll — only fetch messages newer than our highest server id.
     // Appends without re-rendering existing bubbles → no flicker, the
     // user's cursor / scroll position / selection stays put.
+    /**
+     * @returns {Promise<boolean>} true when new messages arrived. The shared
+     * poller reads this to decide whether to stay fast or widen the gap, so it
+     * must be honest — returning truthy on an empty poll would defeat backoff.
+     */
     async function pollNewMessages() {
-        if (!state.activeCh) return;
+        if (!state.activeCh) return false;
         // Find the highest *real* (non-temp) message id we have
         const sinceId = state.messages
             .filter(m => !m._temp && typeof m.id === 'number')
@@ -251,7 +258,7 @@ export default function init() {
             });
             const data = await r.json();
             const fresh = data.messages || [];
-            if (fresh.length === 0) return;
+            if (fresh.length === 0) return false;
 
             // Were we scrolled to bottom before? If yes, follow new messages.
             const stream = $('#tc-stream');
@@ -267,7 +274,11 @@ export default function init() {
 
             const lastId = fresh[fresh.length - 1]?.id || 0;
             if (lastId > 0) markRead(lastId);
-        } catch (e) { /* silent — next tick retries */ }
+
+            return true;
+        } catch (e) {
+            return false;   // silent — the poller retries on its own schedule
+        }
     }
 
     async function markRead(lastId) {
@@ -837,11 +848,18 @@ export default function init() {
             switchChannel(state.activeCh.id);
         }
         loadPending();
-        // Diff-poll every 3s — only fetches messages newer than what we
-        // have, so the existing stream stays put + no flicker. Channel
-        // sidebar refreshes every 15s (slower since it changes less).
-        setInterval(() => pollNewMessages(), 3000);
-        setInterval(() => loadChannels(), 15000);
+        // Diff-poll — only fetches messages newer than what we have, so the
+        // existing stream stays put + no flicker. Both loops run on the shared
+        // poller, which adds what a bare setInterval never had: no overlapping
+        // requests, no polling at all while the tab is in the background, and a
+        // widening gap when the channel is quiet (3s busy -> 24s idle) that
+        // snaps straight back the moment a message lands.
+        createPoller(async () => await pollNewMessages(), {
+            interval: 3000, maxInterval: 24000,
+        }).start();
+        createPoller(async () => { await loadChannels(); return false; }, {
+            interval: 15000, maxInterval: 60000,
+        }).start({ immediate: false });
     }
     start();
 }

@@ -14,8 +14,16 @@
     $wsInitials = \Illuminate\Support\Str::of($wsName)->trim()->limit(2, '')->upper()->__toString();
     $planLabel = $ws?->billingPackage()?->pname ?: __('Free');
     $walletMoney = \App\Support\FormatSettings::display((int) round(((int) ($u->wallet_credits ?? 0)) * \App\Services\MessageCreditRate::minorPerCredit()) / 100);
-    $allWorkspaces = $u ? $u->workspaces()->orderByDesc('last_active_at')->get() : collect();
-    $canCreateWorkspace = $u ? $u->canCreateWorkspace() : false;
+    // Per-workspace white-label logo wins over the platform logo — mirrors the
+    // header (header.blade.php), so a workspace's uploaded logo shows in the
+    // sidebar too, not just the header.
+    $logoUrl = ($ws && $ws->brand_logo_path)
+        ? asset('storage/' . $ws->brand_logo_path)
+        : \App\Support\Brand::logoUrl(\App\Support\Brand::activeTheme());
+    // White-label tenant domain: locked to one workspace — no switch targets/create.
+    $__lockWs = ($isTenantDomain ?? false);
+    $allWorkspaces = ($u && !$__lockWs) ? $u->workspaces()->orderByDesc('last_active_at')->get() : collect();
+    $canCreateWorkspace = ($u && !$__lockWs) ? $u->canCreateWorkspace() : false;
 
     // Admin-customisable rail colour + auto contrast. Legacy WaDesk dark
     // greens are treated as unset so Seqelo mint actually shows.
@@ -81,6 +89,20 @@
     $hasCustomBg = seqelo_sidebar_has_custom_bg();
     $styleVars = $hasCustomBg ? ('background:' . $railBg . ';') : ('background:' . seqelo_sidebar_mint() . ';');
     foreach ($vars as $k => $v) { $styleVars .= $k . ':' . $v . ';'; }
+    // the CSS below drives the background AND the text/panel colours per active
+    // theme, so the rail live-switches light↔dark like the admin sidebar (the app
+    // themes paper/bright/doodle are LIGHT, only `dark` is dark).
+    $hasCustomBg = trim((string) \App\Models\SystemSetting::get('user_sidebar_color', '')) !== '';
+    $applyInlineText = $hasCustomBg || ($textColor !== '' && preg_match('/^#[0-9A-Fa-f]{6}$/', $textColor));
+    $styleVars = $hasCustomBg ? ('background:' . $railBg . ';') : '';
+    foreach ($vars as $k => $v) {
+        // Accent (brand) always applies inline; text/panel vars only when a custom
+        // colour is configured — otherwise the theme CSS below owns them so the
+        // rail adapts to light/dark on its own.
+        if ($k === '--racc' || $k === '--racc-tint' || $applyInlineText) {
+            $styleVars .= $k . ':' . $v . ';';
+        }
+    }
 @endphp
 
 <style>
@@ -88,8 +110,25 @@
     .rail-link:hover { background:var(--rhover); color:var(--rfgs); }
     .rail-link.active { background:var(--racc); color:#fff; }
     .rail-link.active .rail-ic { color:#fff; }
+    .rail-link.active { background:var(--racc-tint); color:var(--rfgs); }
+    .rail-link.active::before { content:""; position:absolute; left:-13px; top:50%; transform:translateY(-50%); width:3px; height:20px; border-radius:0 3px 3px 0; background:var(--racc); }
+    /* Plan-locked: readable but clearly not active. Muted rather than hidden so
+       the product's shape stays visible; the lock sits at the row's end. */
+    .rail-link.locked { color:var(--rfgm); }
+    .rail-link.locked .rail-ic { opacity:.55; }
+    .rail-link.locked:hover { background:var(--rhover); color:var(--rfg); }
+    .rail-lock { width:13px; height:13px; margin-left:auto; flex:none; opacity:.6; }
     .rail-ic { width:18px; height:18px; flex-shrink:0; }
     .rail-cap { font-family:ui-monospace,'JetBrains Mono',monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.18em; color:var(--rcap); padding:0 13px; margin:16px 0 6px; }
+    {{-- Sidebar search --}}
+    .rail-search { background:var(--rpanel); border:1px solid var(--rpanelbd); color:var(--rfgs); transition:.15s; }
+    .rail-search::placeholder { color:var(--rcap); }
+    .rail-search:focus { border-color:var(--racc); background:var(--rhover); }
+    {{-- While searching, force every group open so matches inside a collapsed
+         group are visible, and hide the non-matching links / empty groups. --}}
+    .rail-searching .rail-group-items { max-height:none !important; }
+    .rail-searching .rail-cap-chev { opacity:0; }
+    .rail-link.rail-hidden, .rail-group.rail-hidden { display:none !important; }
     {{-- Collapsible section header (open/close) --}}
     .rail-cap-btn { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; background:none; border:0; cursor:pointer; text-align:left; }
     .rail-cap-btn:hover { color:var(--rfgm); }
@@ -110,6 +149,26 @@
     :root[data-theme="dark"]   .user-rail-root { background:#EFF9F6; }
     :root[data-theme="doodle"] .user-rail-root { background:#EFF9F6; }
     :root[data-theme="bright"] .user-rail-root { background:#EFF9F6; }
+    {{-- Theme-adaptive rail — active only when the admin has NOT set a custom
+         sidebar colour (a custom colour is inlined on the element and wins). The
+         app's paper/bright/doodle themes are LIGHT → light rail with dark text;
+         `dark` is the only dark theme → dark rail with light text. This is what
+         makes the user rail follow the theme like the admin sidebar. --}}
+    .user-rail-root {
+        --rfg:rgba(11,31,28,0.66); --rfgs:#0B1F1C; --rfgm:rgba(11,31,28,0.5);
+        --rcap:rgba(11,31,28,0.42); --rhover:rgba(0,0,0,0.05); --rpanel:rgba(0,0,0,0.04);
+        --rpanelbd:rgba(0,0,0,0.10); --rdot:rgba(0,0,0,0.05); --rscroll:rgba(0,0,0,0.18);
+        background:#FBFAF6; border-right:1px solid rgba(0,0,0,0.07);
+    }
+    :root[data-theme="bright"] .user-rail-root { background:#FFFFFF; }
+    {{-- doodle is a green-tinted light theme → match it with a soft green rail --}}
+    :root[data-theme="doodle"] .user-rail-root { background:#EDF6E7; border-right-color:rgba(11,31,28,0.08); }
+    :root[data-theme="dark"] .user-rail-root {
+        --rfg:rgba(255,255,255,0.62); --rfgs:#FBFAF6; --rfgm:rgba(255,255,255,0.45);
+        --rcap:rgba(255,255,255,0.32); --rhover:rgba(255,255,255,0.06); --rpanel:rgba(255,255,255,0.05);
+        --rpanelbd:rgba(255,255,255,0.10); --rdot:rgba(255,255,255,0.06); --rscroll:rgba(255,255,255,0.15);
+        background:#0A0F0E; border-right:1px solid rgba(255,255,255,0.06);
+    }
 </style>
 
 <div class="user-rail-root w-full h-full flex flex-col relative overflow-hidden" data-user-rail style="{{ $styleVars }}">
@@ -142,6 +201,7 @@
             </div>
             <svg class="w-3.5 h-3.5 rail-fgm" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5l3 3 3-3"/></svg>
         </button>
+        @unless ($__lockWs)
         <div data-ws-menu
             class="hidden absolute left-3.5 right-3.5 mt-2 bg-paper-0 border border-paper-200 rounded-2xl shadow-soft p-2 z-[60]">
             <div class="px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Your workspaces') }}</div>
@@ -172,6 +232,22 @@
                 </div>
             @endif
         </div>
+        @endunless
+    </div>
+
+    {{-- Sidebar search — live-filters the nav items below (JS in layouts/user.blade.php rail init) --}}
+    <div class="relative px-3.5 pt-2.5 shrink-0" data-rail-search-wrap>
+        <div class="relative">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rail-fgm pointer-events-none" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M13 13l-2.6-2.6"/></svg>
+            <input type="text" data-rail-search autocomplete="off" spellcheck="false"
+                placeholder="{{ __('Search menu…') }}" aria-label="{{ __('Search menu') }}"
+                class="rail-search w-full rounded-xl pl-9 pr-8 py-2 text-[12.5px] outline-none">
+            <button type="button" data-rail-search-clear aria-label="{{ __('Clear') }}"
+                class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded-md rail-fgm hover:rail-fg">
+                <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+            </button>
+        </div>
+        <div data-rail-search-empty class="hidden px-1 pt-3 text-[11.5px] rail-fgm">{{ __('No matches') }}</div>
     </div>
 
     {{-- Nav (min-h-0 so flex-1 + overflow-y-auto actually scrolls, not expands) --}}
@@ -180,12 +256,30 @@
         // Many pages set nav-key="more" (for the topbar's overflow menu), which
         // never matches a sidebar item key — so fall back to the URL so the right
         // item lights up in sidebar mode without touching every page's nav-key.
-        $curPath = '/' . trim(request()->path(), '/');
-        $isItemActive = function ($item) use ($active, $curPath) {
+        // Both sides must be compared in the SAME base. On a sub-folder install
+        // (app served from /public) the two disagree by that prefix:
+        //   url('/dashboard')   -> /public/dashboard   (URL::forceRootUrl adds it)
+        //   request()->path()   -> dashboard           (framework already stripped it)
+        // so no item ever matched and nothing highlighted. Strip the base off
+        // both and a root-domain install is unaffected (base is empty there).
+        $navBase = '/' . trim((string) wd_base(), '/');
+        if ($navBase === '/') {
+            $navBase = '';
+        }
+        $navStrip = function (string $p) use ($navBase) {
+            $p = '/' . trim($p, '/');
+            if ($navBase !== '' && ($p === $navBase || str_starts_with($p, $navBase . '/'))) {
+                $p = '/' . trim(substr($p, strlen($navBase)), '/');
+            }
+            return $p;
+        };
+
+        $curPath = $navStrip(request()->path());
+        $isItemActive = function ($item) use ($active, $curPath, $navStrip) {
             if ($active !== null && $active === ($item['key'] ?? null)) {
                 return true;
             }
-            $itemPath = '/' . trim((string) (parse_url((string) ($item['href'] ?? ''), PHP_URL_PATH) ?: ''), '/');
+            $itemPath = $navStrip((string) (parse_url((string) ($item['href'] ?? ''), PHP_URL_PATH) ?: ''));
             if ($itemPath === '/' ) {
                 return false;
             }
@@ -207,13 +301,27 @@
                 </button>
                 <div class="rail-group-items" data-rail-items>
                     @foreach ($group['items'] as $item)
-                        <a href="{{ $item['href'] }}"
-                            @class(['rail-link', 'active' => $isItemActive($item)])>
+                        @php $locked = ! empty($item['locked']); @endphp
+                        {{-- A locked item points at the plans page, NOT its own
+                             route: EnforcePlanFeature would only bounce them
+                             back with a warning, so send them where they can
+                             actually act on it. --}}
+                        <a href="{{ $locked ? url('/account/plans') : $item['href'] }}"
+                            @class(['rail-link', 'active' => ! $locked && $isItemActive($item), 'locked' => $locked])
+                            @if ($locked) title="{{ __('Not included in your plan — tap to upgrade') }}" @endif>
                             <svg class="rail-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor"
                                 stroke-width="{{ $item['sw'] ?? 1.5 }}" stroke-linecap="round" stroke-linejoin="round">
                                 {!! $item['icon'] !!}
                             </svg>
                             <span class="truncate">{{ $item['label'] }}</span>
+                            @if ($locked)
+                                <svg class="rail-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+                                    <path d="M5.75 7V5.25a2.25 2.25 0 0 1 4.5 0V7" />
+                                </svg>
+                                <span class="sr-only">{{ __('Upgrade required') }}</span>
+                            @endif
                         </a>
                     @endforeach
                 </div>
@@ -234,3 +342,41 @@
         </div>
     </div>
 </div>
+
+{{-- Sidebar search filter. Lives WITH the rail component (self-contained). While
+     a term is typed we force every group open (CSS .rail-searching) so matches in
+     a collapsed section still show, hide non-matching links + empty groups, and
+     surface a "No matches" note. Clearing restores the normal collapse state.
+     Scoped to this component's own root, so it works wherever the rail renders. --}}
+<script>
+    (function () {
+        var input = document.querySelector('[data-rail-search]');
+        if (!input || input.dataset.railSearchWired) return;
+        input.dataset.railSearchWired = '1';
+        var scope    = input.closest('.user-rail-root') || document;
+        var clearBtn = scope.querySelector('[data-rail-search-clear]');
+        var emptyMsg = scope.querySelector('[data-rail-search-empty]');
+        function apply() {
+            var term = (input.value || '').trim().toLowerCase();
+            var on = term.length > 0;
+            scope.classList.toggle('rail-searching', on);
+            if (clearBtn) clearBtn.classList.toggle('hidden', !on);
+            var anyVisible = false;
+            scope.querySelectorAll('[data-rail-group]').forEach(function (g) {
+                var groupHas = false;
+                g.querySelectorAll('.rail-link').forEach(function (a) {
+                    var lbl = ((a.querySelector('.truncate') || a).textContent || '').trim().toLowerCase();
+                    var match = !on || lbl.indexOf(term) !== -1;
+                    a.classList.toggle('rail-hidden', !match);
+                    if (match) groupHas = true;
+                });
+                g.classList.toggle('rail-hidden', on && !groupHas);
+                if (groupHas) anyVisible = true;
+            });
+            if (emptyMsg) emptyMsg.classList.toggle('hidden', !(on && !anyVisible));
+        }
+        input.addEventListener('input', apply);
+        input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; apply(); } });
+        if (clearBtn) clearBtn.addEventListener('click', function () { input.value = ''; apply(); input.focus(); });
+    })();
+</script>

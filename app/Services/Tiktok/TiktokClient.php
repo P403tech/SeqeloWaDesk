@@ -26,8 +26,38 @@ class TiktokClient
     private const AUTH_BASE  = 'https://www.tiktok.com/v2/auth/authorize/';
     private const API_BASE   = 'https://open.tiktokapis.com';
 
-    /** Scopes the MVP requests. user.info.basic is auto-granted; the rest need app approval. */
+    /** The FULL scope set (all products). user.info.basic is auto-granted. */
     public const SCOPES = ['user.info.basic', 'user.info.profile', 'user.info.stats', 'video.list', 'video.upload'];
+
+    /**
+     * Scopes that only the Login Kit product grants — safe to request the moment
+     * the app is created / in review. `video.list` (Display API) and
+     * `video.upload` (Content Posting API) are SEPARATE products that must be
+     * approved first; requesting them before approval makes TikTok reject the
+     * whole authorize with a misleading "client_key" error. So the DEFAULT stays
+     * within Login Kit and the admin opts into the video scopes only once those
+     * products are granted.
+     */
+    public const LOGIN_KIT_SCOPES = ['user.info.basic', 'user.info.profile', 'user.info.stats'];
+
+    /**
+     * The scopes to actually request, admin-configurable via the TikTok channel
+     * settings (`tiktok_scopes`, comma-separated). Defaults to the Login-Kit-safe
+     * set so login works while the app is in review; the admin adds
+     * `video.list` / `video.upload` after those products are approved.
+     *
+     * @return array<int,string>
+     */
+    public static function scopes(): array
+    {
+        $raw = trim((string) SystemSetting::get('tiktok_scopes', ''));
+        if ($raw === '') {
+            return self::LOGIN_KIT_SCOPES;
+        }
+        $list = array_values(array_filter(array_map('trim', explode(',', $raw))));
+
+        return $list ?: self::LOGIN_KIT_SCOPES;
+    }
 
     public string $lastError = '';
 
@@ -51,6 +81,23 @@ class TiktokClient
             && self::clientKey() !== '' && self::clientSecret() !== '';
     }
 
+    /**
+     * The OAuth redirect URI — MUST match a "Redirect URI" registered in the
+     * TikTok portal (Login Kit) exactly (scheme + host + path, no trailing-slash
+     * drift). TikTok requires https for web apps and rejects any mismatch with a
+     * "redirect_uri" error. Prefer the admin-set fixed value (Admin → Channel
+     * Settings → TikTok) so it is identical no matter how the app is reached
+     * (www vs apex, sub-path, proxy scheme); fall back to the dynamic route URL.
+     * Used identically by the authorize redirect AND the code exchange — they
+     * must send the same value or TikTok rejects the exchange.
+     */
+    public static function redirectUri(): string
+    {
+        $fixed = trim((string) SystemSetting::get('tiktok_redirect_uri', ''));
+
+        return $fixed !== '' ? $fixed : url('/tiktok/callback');
+    }
+
     // ── OAuth (static) ──────────────────────────────────────────────────────
 
     /** Build the consent-redirect URL. `state` is the CSRF token, validated on callback. */
@@ -58,7 +105,7 @@ class TiktokClient
     {
         $params = [
             'client_key'    => self::clientKey(),
-            'scope'         => implode(',', $scopes ?: self::SCOPES),
+            'scope'         => implode(',', $scopes ?: self::scopes()),
             'response_type' => 'code',
             'redirect_uri'  => $redirectUri,
             'state'         => $state,
@@ -119,6 +166,22 @@ class TiktokClient
             $r = Http::asForm()->acceptJson()->timeout(15)
                 ->post(self::API_BASE.'/v2/oauth/token/', $form);
             $j = (array) $r->json();
+
+            // Deep trace of the /oauth/token exchange. NEVER logs client_secret —
+            // only the grant, the redirect_uri (the value that must match the
+            // portal), the client_key TAIL, the HTTP status and TikTok's raw
+            // error + log_id (quote log_id in a TikTok support ticket).
+            \Illuminate\Support\Facades\Log::info('[TIKTOK-OAUTH] token exchange', [
+                'grant_type'        => (string) ($form['grant_type'] ?? ''),
+                'redirect_uri'      => (string) ($form['redirect_uri'] ?? '(none)'),
+                'client_key_tail'   => substr((string) ($form['client_key'] ?? ''), -6),
+                'http_status'       => $r->status(),
+                'ok'                => $r->successful() && ! empty($j['access_token']),
+                'error'             => (string) ($j['error'] ?? ''),
+                'error_description' => (string) ($j['error_description'] ?? ''),
+                'log_id'            => (string) ($j['log_id'] ?? ''),
+                'raw'               => mb_substr((string) json_encode($j), 0, 500),
+            ]);
 
             // v2 returns the fields at the TOP level on success; errors carry an
             // `error` string + `error_description` (also top-level in v2 OAuth).

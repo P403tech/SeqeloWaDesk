@@ -2,6 +2,7 @@
 
 namespace App\Services\Inbox;
 
+use App\Exceptions\AssignmentTargetException;
 use App\Models\AgentStatus;
 use App\Models\Conversation;
 use App\Models\ConversationEvent;
@@ -26,18 +27,50 @@ use App\Models\User;
  */
 class AssignmentService
 {
+    /**
+     * @throws AssignmentTargetException when the requested user/team does not
+     *         belong to the conversation's workspace, or the requested member
+     *         can no longer be resolved (removed, deactivated).
+     */
     public function assign(Conversation $conv, ?int $userId, ?int $teamId, string $strategy = 'manual', ?int $actorId = null): ?User
     {
         $previousUserId = $conv->assignee_user_id;
         $previousTeamId = $conv->assignee_team_id;
+        $wsId           = (int) $conv->workspace_id;
+
+        // TENANCY. This method is the only writer of assignee_user_id /
+        // assignee_team_id, so the workspace check belongs HERE and not at each
+        // of the five call sites (inbox assign, inbox bulk, routing rule
+        // assign_team / assign_user, flow "Assign" node). A foreign id used to
+        // park the thread on a member or team of another workspace: it dropped
+        // out of this workspace's unassigned queue and the foreign user still
+        // received the assignment notification.
+        // Re-affirming the team the conversation already carries is a no-op on
+        // that column, so it is not re-validated — otherwise a row written
+        // before this check existed (or a caller that just echoes the current
+        // team back, which the routing engine and the inbox UI both do) would
+        // dead-end forever. Only a CHANGE has to prove itself.
+        if ($teamId !== null && $teamId !== (int) $conv->assignee_team_id
+            && !Team::where('workspace_id', $wsId)->whereKey($teamId)->exists()) {
+            throw new AssignmentTargetException('team_not_in_workspace');
+        }
 
         $resolvedUser = match ($strategy) {
-            'manual'       => $userId ? User::find($userId) : null,
+            'manual'       => $userId ? $this->workspaceMember($userId, $wsId) : null,
             'round_robin'  => $teamId ? $this->pickRoundRobin($teamId)  : null,
             'least_loaded' => $teamId ? $this->pickLeastLoaded($teamId) : null,
             'sticky'       => $this->pickSticky($conv) ?? ($teamId ? $this->pickLeastLoaded($teamId) : null),
             default        => null,
         };
+
+        // A manual assign whose target could not be resolved must FAIL, not
+        // fall through: writing assignee_user_id = null here silently
+        // UNASSIGNED the conversation (wiping whoever held it) and still
+        // answered ok. Explicit unassign has its own path in unassign(), so a
+        // failed lookup never needs to mean "clear it".
+        if ($strategy === 'manual' && $userId && !$resolvedUser) {
+            throw new AssignmentTargetException('user_not_in_workspace');
+        }
 
         // When a human (agent or team) takes the conversation, stand the AI bot
         // down so it doesn't keep auto-replying over the operator. Mirrors
@@ -75,6 +108,20 @@ class AssignmentService
                 'reason'   => 'assigned_to_human',
                 'strategy' => $strategy,
             ], $actorId ? 'human' : 'flow');
+        }
+
+        // CRM flow trigger — "a lead was assigned to an agent". Only on a REAL
+        // change of holder: re-affirming the same assignee (which the routing
+        // engine and the inbox UI both do on every touch) must not re-fire.
+        // Best-effort, and deliberately last: a flow failure can never undo an
+        // assignment that has already been written and notified.
+        if ($resolvedUser?->id && (int) $resolvedUser->id !== (int) $previousUserId) {
+            try {
+                app(\App\Services\Flow\FlowEnrollmentService::class)
+                    ->onConversationAssigned($conv->fresh() ?: $conv, (int) $resolvedUser->id);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('[ASSIGN] flow-trigger failed: ' . $e->getMessage());
+            }
         }
 
         return $resolvedUser;
@@ -128,7 +175,10 @@ class AssignmentService
 
         if (!$lastAgentId) return null;
 
-        $agent  = User::find($lastAgentId);
+        // Membership matters: the last replier may have left the workspace
+        // since. Without this the ?? pickLeastLoaded fallback in assign() never
+        // fired and the chat was parked on an ex-member who cannot open it.
+        $agent  = $this->workspaceMember((int) $lastAgentId, (int) $conv->workspace_id);
         $status = AgentStatus::where('user_id', $lastAgentId)
             ->where('workspace_id', $conv->workspace_id)
             ->first();
@@ -136,6 +186,14 @@ class AssignmentService
         if (!$agent) return null;
         if ($status && $status->status === 'offline') return null;
         return $agent;
+    }
+
+    /** A user id resolved ONLY if it is a live member of that workspace. */
+    private function workspaceMember(int $userId, int $workspaceId): ?User
+    {
+        return User::whereKey($userId)
+            ->whereHas('workspaces', fn ($q) => $q->where('workspaces.id', $workspaceId))
+            ->first();
     }
 
     private function eligibleMembers(Team $team)

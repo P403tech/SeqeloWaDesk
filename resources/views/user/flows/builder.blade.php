@@ -127,6 +127,77 @@
                     $tgEnabled = $tgBotsForFlow->isNotEmpty();
                 } catch (\Throwable $e) { $tgBotsForFlow = collect(); $tgEnabled = false; }
             }
+
+            // LINE / WeChat / Viber — offered when a channel is connected. Each
+            // binds the flow to a specific channel row id (its token sends the
+            // reply), exactly like Telegram above. The flow runtime resolver
+            // matches on flow_type + trigger_device_id = this id.
+            $lineChansForFlow = collect(); $lineEnabled = false;
+            $wechatChansForFlow = collect(); $wechatEnabled = false;
+            $viberChansForFlow = collect(); $viberEnabled = false;
+            if ($wsIdForFlow) {
+                try {
+                    if (class_exists(\App\Models\LineChannel::class) && \Illuminate\Support\Facades\Schema::hasTable('line_channels')) {
+                        $lineChansForFlow = \App\Models\LineChannel::where('workspace_id', $wsIdForFlow)->where('active', true)->orderBy('display_name')->get()
+                            ->map(fn ($c) => ['key' => 'line:' . $c->id, 'id' => (int) $c->id, 'label' => (string) ($c->display_name ?: ($c->basic_id ?: ('LINE ' . $c->id)))])->values();
+                        $lineEnabled = $lineChansForFlow->isNotEmpty();
+                    }
+                } catch (\Throwable $e) { $lineChansForFlow = collect(); $lineEnabled = false; }
+                try {
+                    if (class_exists(\App\Models\WeChatChannel::class) && \Illuminate\Support\Facades\Schema::hasTable('wechat_channels')) {
+                        $wechatChansForFlow = \App\Models\WeChatChannel::where('workspace_id', $wsIdForFlow)->where('active', true)->orderBy('account_name')->get()
+                            ->map(fn ($c) => ['key' => 'wechat:' . $c->id, 'id' => (int) $c->id, 'label' => (string) ($c->account_name ?: ($c->wx_id ?: ('WeChat ' . $c->id)))])->values();
+                        $wechatEnabled = $wechatChansForFlow->isNotEmpty();
+                    }
+                } catch (\Throwable $e) { $wechatChansForFlow = collect(); $wechatEnabled = false; }
+                try {
+                    if (class_exists(\App\Models\ViberChannel::class) && \Illuminate\Support\Facades\Schema::hasTable('viber_channels')) {
+                        $viberChansForFlow = \App\Models\ViberChannel::where('workspace_id', $wsIdForFlow)->where('active', true)->orderBy('bot_name')->get()
+                            ->map(fn ($c) => ['key' => 'viber:' . $c->id, 'id' => (int) $c->id, 'label' => (string) ($c->bot_name ?: ($c->bot_uri ?: ('Viber ' . $c->id)))])->values();
+                        $viberEnabled = $viberChansForFlow->isNotEmpty();
+                    }
+                } catch (\Throwable $e) { $viberChansForFlow = collect(); $viberEnabled = false; }
+            }
+
+            // Email channel — the mailbox lives on the connected mail platform;
+            // this workspace links it as a mirror row (like Instagram). Offered
+            // only when the platform toggle is on AND this workspace has a
+            // CONNECTED mailbox, so the same "no dead channels" rule holds: an
+            // email flow with no mailbox would save, publish and never fire.
+            // Same {key:'email:<mirrorRowId>', id, label} shape /flows/api/picker
+            // returns; the key binds to the WorkspaceEmailAccount row id, which
+            // MailtrixyIngestService::resolveEmailKeywordFlow matches on
+            // trigger_device_id at runtime.
+            $emailAcctsForFlow = collect();
+            $emailEnabled = false;
+            if ($wsIdForFlow
+                && class_exists(\App\Models\WorkspaceEmailAccount::class)
+                && \Illuminate\Support\Facades\Schema::hasTable('workspace_email_accounts')) {
+                try {
+                    if ((bool) \App\Models\SystemSetting::get('email_enabled', false)
+                        && \App\Models\WorkspaceEmailAccount::hasConnected($wsIdForFlow)) {
+                        $emailAcctsForFlow = \App\Models\WorkspaceEmailAccount::forWorkspace($wsIdForFlow)
+                            ->connected()->orderBy('email')->get()
+                            ->map(fn ($a) => [
+                                'key'   => 'email:' . $a->id,
+                                'id'    => (int) $a->id,
+                                'label' => (string) ($a->name ?: ($a->email ?: ('Email ' . $a->id))),
+                            ])->values();
+                        $emailEnabled = $emailAcctsForFlow->isNotEmpty();
+                    }
+                } catch (\Throwable $e) { $emailAcctsForFlow = collect(); $emailEnabled = false; }
+            }
+
+            // Chat-widget channel. Same "no dead channels" rule: only offered
+            // when this workspace actually has an ACTIVE widget for the flow to
+            // run in, so the palette never shows a channel with nothing behind it.
+            $webchatEnabled = false;
+            if ($wsIdForFlow && \Illuminate\Support\Facades\Schema::hasTable('chatbot_widgets')) {
+                try {
+                    $webchatEnabled = \App\Models\ChatbotWidget::where('workspace_id', $wsIdForFlow)
+                        ->where('status', 'active')->exists();
+                } catch (\Throwable $e) { $webchatEnabled = false; }
+            }
         @endphp
         data-ext-instagram="{{ $igAvailable ? '1' : '0' }}"
         data-ig-accounts="{{ json_encode($igAccountsForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
@@ -136,6 +207,15 @@
         data-tt-accounts="{{ json_encode($ttAccountsForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
         data-tg="{{ $tgEnabled ? '1' : '0' }}"
         data-tg-bots="{{ json_encode($tgBotsForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
+        data-line="{{ $lineEnabled ? '1' : '0' }}"
+        data-line-channels="{{ json_encode($lineChansForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
+        data-wechat="{{ $wechatEnabled ? '1' : '0' }}"
+        data-wechat-channels="{{ json_encode($wechatChansForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
+        data-viber="{{ $viberEnabled ? '1' : '0' }}"
+        data-viber-channels="{{ json_encode($viberChansForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
+        data-email="{{ $emailEnabled ? '1' : '0' }}"
+        data-webchat="{{ $webchatEnabled ? '1' : '0' }}"
+        data-email-accounts="{{ json_encode($emailAcctsForFlow, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}"
         data-flow-json="{{ json_encode($flowJson, JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG) }}">
         <div class="h-screen w-screen grid place-items-center">
             <div class="text-center">

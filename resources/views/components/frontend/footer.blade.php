@@ -117,6 +117,9 @@
                 <li><a href="{{ fc('footer.col5_link2_url', legal_url('privacy')) }}"
                         data-fc="footer.col5_link2_label" data-fc-url="footer.col5_link2_url"
                         class="hover:text-wa-green">{{ fc('footer.col5_link2_label', __('Privacy Policy')) }}</a></li>
+                <li><a href="{{ fc('footer.col5_link6_url', legal_url('data-deletion')) }}"
+                        data-fc="footer.col5_link6_label" data-fc-url="footer.col5_link6_url"
+                        class="hover:text-wa-green">{{ fc('footer.col5_link6_label', __('User Data Deletion')) }}</a></li>
                 <li><a href="{{ fc('footer.col5_link3_url', url('/legal/refund')) }}"
                         data-fc="footer.col5_link3_label" data-fc-url="footer.col5_link3_url"
                         class="hover:text-wa-green">{{ fc('footer.col5_link3_label', __('Refund Policy')) }}</a></li>

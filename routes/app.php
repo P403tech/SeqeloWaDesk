@@ -59,15 +59,19 @@ Route::middleware('throttle:10,1')->group(function () {
     Route::post('/forgot',               [PasswordController::class, 'sendOtp']);
     Route::post('/verify-otp',           [PasswordController::class, 'verifyOtp']);
     Route::post('/reset',                [PasswordController::class, 'resetPassword']);
+    // Two-factor (WhatsApp OTP). enable/disable are password-gated; send/verify
+    // complete a login when two_factor:1 comes back. (Replaces the old PIN passcode.)
+    Route::post('/2fa/enable',           [TwoFactorController::class, 'enableTwoFactor']);
     Route::post('/2fa/send',             [TwoFactorController::class, 'sendOtp']);
     Route::post('/2fa/verify',           [TwoFactorController::class, 'verifyOtp']);
-    Route::post('/set-passcode',         [TwoFactorController::class, 'setPasscode']);
+    Route::post('/2fa/disable',          [TwoFactorController::class, 'disableTwoFactor']);
 });
 Route::get('/countries',             [ProfileController::class, 'countries']);
 
 // Marketing / CMS content (no login needed)
 Route::get('/pages',  [ContentController::class, 'pages']);
 Route::get('/blog',   [ContentController::class, 'blog']);
+Route::get('/blog/{key}', [ContentController::class, 'blogShow']);
 Route::get('/faq',    [ContentController::class, 'faq']);
 Route::get('/banner', [ContentController::class, 'banner']);
 
@@ -76,7 +80,7 @@ Route::get('/banner', [ContentController::class, 'banner']);
 // `app.workspace` runs after auth:sanctum: it resolves the X-Workspace-Id /
 // X-Device-Id headers into the request's current_workspace_id so every
 // workspace-scoped endpoint below is scoped to the workspace the app selected.
-Route::middleware(['auth:sanctum', 'app.workspace'])->group(function () {
+Route::middleware(['auth:sanctum', 'app.workspace', \App\Http\Middleware\EnsureTrialActiveApi::class])->group(function () {
 
     // Workspaces — after login the app lists the user's workspaces (each with
     // its plan + devices), then sends X-Workspace-Id on subsequent calls.
@@ -105,6 +109,8 @@ Route::middleware(['auth:sanctum', 'app.workspace'])->group(function () {
     // /devices/{id}/qr or /devices/{id}/pair-code while the QR or 8-digit
     // pairing code is on screen, and /device-status/{id} for live state.
     Route::post  ('/devices',                  [DeviceController::class, 'store']);
+    Route::post  ('/devices/connect-twilio',   [DeviceController::class, 'connectTwilio']);
+    Route::post  ('/devices/connect-waba',     [DeviceController::class, 'connectWaba']);
     Route::get   ('/devices/{id}/qr',          [DeviceController::class, 'qr'])->whereNumber('id');
     Route::get   ('/devices/{id}/pair-code',   [DeviceController::class, 'pairCode'])->whereNumber('id');
     Route::post  ('/devices/{id}/disconnect',  [DeviceController::class, 'disconnect'])->whereNumber('id');
@@ -196,6 +202,10 @@ Route::middleware(['auth:sanctum', 'app.workspace'])->group(function () {
 
     // AI Agents — the same AI agents the web Team Inbox manages (list / create /
     // update / delete), workspace-scoped via the X-Workspace-Id header.
+    // /models returns the providers + models this workspace can ACTUALLY use
+    // (admin-enabled keys + the workspace's own BYOK keys) so the app shows a
+    // picker instead of hardcoding model strings. Declared BEFORE /{id}.
+    Route::get   ('/ai-agents/models', [AiAgentController::class, 'models']);
     Route::get   ('/ai-agents',        [AiAgentController::class, 'index']);
     Route::post  ('/ai-agents',        [AiAgentController::class, 'store']);
     Route::patch ('/ai-agents/{id}',   [AiAgentController::class, 'update'])->whereNumber('id');
@@ -237,6 +247,7 @@ Route::middleware(['auth:sanctum', 'app.workspace'])->group(function () {
     // "archived" would skip it, but ordering keeps the intent obvious).
     Route::get   ('/chats/archived',                              [ChatController::class, 'archivedIndex']);
     Route::get   ('/chats/{id}',                                  [ChatController::class, 'show'])->whereNumber('id');
+    Route::patch ('/chats/{id}',                                  [ChatController::class, 'rename'])->whereNumber('id');
     // Polling delta (live chat). Throttled per user — 30/min = a poll every ~2s
     // ceiling; the app should poll every 3-5s. Protects the server from a
     // runaway client without limiting the normal cadence.

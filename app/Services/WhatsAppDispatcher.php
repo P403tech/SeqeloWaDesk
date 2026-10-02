@@ -97,11 +97,97 @@ class WhatsAppDispatcher
         if (!empty($params['provider'])) {
             $msg->provider = (string) $params['provider'];
         }
-        if (!empty($params['scheduled_at'])) {
-            $msg->scheduled_at = $params['scheduled_at'];
-            return $this->schedule($msg, $platform);
+        // ---- Persist + thread it ----------------------------------------
+        // These sends (commerce notifications, invoices, COD confirmations,
+        // stock alerts, concierge replies) used to go out WITHOUT ever being
+        // written to `messages`. The customer received them, but they existed
+        // nowhere in WaDesk: absent from the thread, so an agent opening the
+        // chat could not see what the system had already told the customer,
+        // and with no row there was nothing for a delivery receipt to update —
+        // the tick could never move because there was no bubble to move.
+        //
+        // ConversationResolver::findOrCreate is the canonical one-thread-per-
+        // number resolver, so this attaches to the customer's EXISTING thread
+        // rather than spawning a parallel one. Saving then fires the
+        // Message::created mirror, which puts the bubble in the team inbox,
+        // and dispatch() stamps the wamid on both rows once the send returns.
+        $wsId = (int) ($params['workspace_id'] ?? 0);
+        $to   = (string) ($params['to_number'] ?? '');
+        if ($wsId > 0 && $to !== '') {
+            try {
+                $convo = \App\Services\Inbox\ConversationResolver::findOrCreate($wsId, $to, [
+                    'user_id'  => $msg->user_id,
+                    'provider' => $msg->provider ?: null,
+                ]);
+                if ($convo) {
+                    $msg->conversation_id = $convo->id;
+                }
+                $msg->direction = 'out';
+                $msg->status    = empty($params['scheduled_at']) ? 'pending' : 'scheduled';
+                $msg->save();
+            } catch (\Throwable $e) {
+                // A threading/persistence failure must never block the send —
+                // the customer still gets the message, it just isn't mirrored.
+                Log::warning('[DISPATCH] sendRaw could not persist message', [
+                    'to'  => $to,
+                    'err' => $e->getMessage(),
+                ]);
+            }
         }
-        return $this->send($msg, $platform);
+
+        $isScheduled = !empty($params['scheduled_at']);
+        if ($isScheduled) {
+            $msg->scheduled_at = $params['scheduled_at'];
+        }
+
+        $result = $isScheduled
+            ? $this->schedule($msg, $platform)
+            : $this->send($msg, $platform);
+
+        // Settle the row we just created. dispatch() stamps the wamid but
+        // leaves status alone — every other send path sets it at its own call
+        // site, and these 18 callers have none. Without this the bubble would
+        // sit at "pending" forever even after a clean send.
+        if ($msg->exists) {
+            try {
+                $ok    = (bool) ($result['ok'] ?? false);
+                $patch = ['status' => $ok ? ($isScheduled ? 'scheduled' : 'sent') : 'failed'];
+
+                if ($ok && !$isScheduled) {
+                    $patch['sent_at'] = now();
+                }
+                if (!$ok && !empty($result['error'])) {
+                    $patch['failure_reason'] = mb_substr((string) $result['error'], 0, 191);
+                }
+
+                // Through the model: Message casts failure_reason as
+                // 'encrypted', so a query-builder update would store it in the
+                // clear. Safe to save() here — dispatch() has already restored
+                // the transient provider pin by this point.
+                $msg->forceFill($patch)->save();
+
+                // Keep the inbox bubble in step — it is a separate row and the
+                // team inbox is what the operator actually looks at.
+                //
+                // Saved through the MODEL, not a mass update: InboxMessage
+                // casts failure_reason with SafeEncrypted, and a query-builder
+                // update would write plaintext into an encrypted column.
+                \App\Models\InboxMessage::query()
+                    ->where(function ($q) use ($msg) {
+                        $q->where('meta->mirror_of', $msg->id)
+                          ->orWhere('meta->mirrored_from_message_id', $msg->id);
+                    })
+                    ->get()
+                    ->each(fn ($row) => $row->forceFill($patch)->save());
+            } catch (\Throwable $e) {
+                Log::warning('[DISPATCH] sendRaw could not settle message status', [
+                    'msg_id' => $msg->id,
+                    'err'    => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -442,6 +528,65 @@ class WhatsAppDispatcher
             // in finally so the restore holds even if a future dispatch refactor
             // lets an exception escape.
             $msg->provider = $providerBeforeDispatch;
+        }
+
+        // ---- Record the provider's message id on the row -----------------
+        // Delivery receipts are matched back by meta->wa_message_id — that is
+        // the ONLY link between "WhatsApp says delivered" and a message row.
+        //
+        // This used to be each caller's job, and only some callers did it.
+        // Team Inbox and /chat captured it, so their ticks moved. The REST API
+        // (QuickMessageController) and the commerce notifiers (WooCommerce /
+        // Shopify) did not, so their messages arrived on the customer's phone
+        // and sat at one tick forever — the receipt came in, matched nothing,
+        // and was dropped.
+        //
+        // Doing it here means every sender is covered, including any added
+        // later. Callers that already write it simply write the same value.
+        //
+        // Deliberately a targeted column update, NOT $msg->save(): the block
+        // above restores a transient provider pin, and a full save would
+        // persist that over the record's stored value.
+        $providerId = (string) ($result['provider_id'] ?? '');
+        if ($providerId !== '' && ($result['ok'] ?? false) && $msg->id) {
+            try {
+                $meta = is_array($msg->meta) ? $msg->meta : [];
+                if (($meta['wa_message_id'] ?? null) !== $providerId) {
+                    $meta['wa_message_id'] = $providerId;
+                    $msg->setAttribute('meta', $meta);          // keep the in-memory row current
+                    Message::whereKey($msg->id)->update(['meta' => json_encode($meta)]);
+                }
+
+                // The team inbox renders inbox_messages, NOT messages — the
+                // receipt handler updates both, each matched on
+                // meta->wa_message_id. The mirror row is written at
+                // Message::created, before this id exists, so without this
+                // stamp the inbox bubble keeps its single tick even once the
+                // messages row has gone to delivered.
+                //
+                // It also arms the echo de-dupe: captureOutboundEcho skips a
+                // bubble whose wamid is already present, so stamping here is
+                // what stops our own outbound echo becoming a second bubble.
+                \App\Models\InboxMessage::query()
+                    ->where(function ($q) use ($msg) {
+                        $q->where('meta->mirror_of', $msg->id)
+                          ->orWhere('meta->mirrored_from_message_id', $msg->id);
+                    })
+                    ->whereNull('meta->wa_message_id')
+                    ->get()
+                    ->each(function ($row) use ($providerId) {
+                        $m = is_array($row->meta) ? $row->meta : [];
+                        $m['wa_message_id'] = $providerId;
+                        \App\Models\InboxMessage::whereKey($row->id)
+                            ->update(['meta' => json_encode($m)]);
+                    });
+            } catch (\Throwable $e) {
+                // Never let bookkeeping fail a send that already went out.
+                Log::warning('[DISPATCH] could not store wa_message_id', [
+                    'msg_id' => $msg->id,
+                    'err'    => $e->getMessage(),
+                ]);
+            }
         }
 
         Log::info('[DISPATCH] result', [
@@ -1102,6 +1247,51 @@ class WhatsAppDispatcher
         ];
         if (! empty($meta['reply_to_wamid'])) {
             $envelope['context'] = ['message_id' => (string) $meta['reply_to_wamid']];
+        }
+
+        // ── Approved template ──────────────────────────────────────
+        // MUST come first: outside the 24-hour customer-service window Meta
+        // refuses free text, so anything scheduled days ahead (drip steps,
+        // commerce notifications, invoice reminders) has to go as a template
+        // or it simply will not deliver.
+        //
+        // Campaigns build this shape in Node (campaignService.js); this path
+        // sends direct from PHP and had no template branch at all, so a
+        // template_id set here was silently ignored and the row went out as
+        // plain text — fine inside the window, rejected outside it.
+        if ($msg->template_id) {
+            $tpl = \App\Models\WaTemplate::find($msg->template_id);
+
+            if ($tpl && ($tpl->template_name ?? '') !== '') {
+                $components = [];
+
+                // A caller that already built Meta's components array wins —
+                // it knows about headers, buttons and carousels.
+                if (! empty($meta['template_components']) && is_array($meta['template_components'])) {
+                    $components = $meta['template_components'];
+                } elseif (! empty($meta['template_params']) && is_array($meta['template_params'])) {
+                    // Positional {{1}}, {{2}}… body parameters.
+                    $components[] = [
+                        'type'       => 'body',
+                        'parameters' => array_map(
+                            fn ($v) => ['type' => 'text', 'text' => (string) $v],
+                            array_values($meta['template_params'])
+                        ),
+                    ];
+                }
+
+                $template = [
+                    'name'     => (string) $tpl->template_name,
+                    'language' => ['code' => (string) ($tpl->language ?: 'en_US')],
+                ];
+                // Meta rejects an empty components array — omit it entirely
+                // for a template that declares no variables.
+                if ($components) {
+                    $template['components'] = $components;
+                }
+
+                return $envelope + ['type' => 'template', 'template' => $template];
+            }
         }
 
         // ── Reaction ───────────────────────────────────────────────

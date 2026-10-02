@@ -65,7 +65,7 @@
                     <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-4">{{ __('Firebase credentials') }}</div>
 
                     <label class="block text-[12.5px] font-medium text-ink-800 mb-1.5">{{ __('FCM project id') }} <span class="text-ink-500 font-normal">({{ __('optional — auto-read from the JSON') }})</span></label>
-                    <input type="text" name="fcm_project_id" value="{{ old('fcm_project_id', $projectId) }}" placeholder="wadesk-media-city"
+                    <input type="text" name="fcm_project_id" value="{{ old('fcm_project_id', $projectId) }}" placeholder="my-firebase-project"
                         class="w-full rounded-lg border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep transition">
                 </div>
 

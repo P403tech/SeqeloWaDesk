@@ -163,7 +163,7 @@ class SocialPostsController extends Controller
     {
         $wsId = $this->wsId();
         $data = $request->validate([
-            'channel'      => 'required|in:instagram,facebook,tiktok',
+            'channel'      => 'required|in:instagram,facebook,tiktok,threads',
             'account_id'   => 'required|integer',
             'caption'      => 'nullable|string|max:4000',
             'scheduled_at' => 'nullable|date',
@@ -189,8 +189,12 @@ class SocialPostsController extends Controller
         if ($request->hasFile('media_video')) {
             $videoUrl = media_url($this->storeMedia($request->file('media_video'), $wsId));
         }
-        if (! $imageUrl && ! $videoUrl && $data['channel'] !== 'facebook') {
+        if (! $imageUrl && ! $videoUrl && ! in_array($data['channel'], ['facebook', 'threads'], true)) {
             return response()->json(['ok' => false, 'error' => 'Instagram and TikTok posts need an image or video.'], 422);
+        }
+        // Threads text posts need SOME content — media or a caption.
+        if ($data['channel'] === 'threads' && ! $imageUrl && ! $videoUrl && trim((string) ($data['caption'] ?? '')) === '') {
+            return response()->json(['ok' => false, 'error' => 'Write something or attach media.'], 422);
         }
 
         try {
@@ -198,6 +202,7 @@ class SocialPostsController extends Controller
                 'instagram' => $this->scheduleInstagram($wsId, (int) $data['account_id'], (string) ($data['caption'] ?? ''), $imageUrl, $videoUrl, $whenUtc),
                 'facebook'  => $this->scheduleFacebook($wsId, (int) $data['account_id'], (string) ($data['caption'] ?? ''), $imageUrl, $videoUrl, $whenUtc),
                 'tiktok'    => $this->scheduleTiktok($wsId, (int) $data['account_id'], (string) ($data['caption'] ?? ''), $videoUrl ?: $imageUrl, $whenUtc),
+                'threads'   => $this->scheduleThreads($wsId, (int) $data['account_id'], (string) ($data['caption'] ?? ''), $imageUrl, $videoUrl, $whenUtc),
             };
         } catch (\Throwable $e) {
             return response()->json(['ok' => false, 'error' => 'Could not schedule: '.$e->getMessage()], 500);
@@ -247,6 +252,20 @@ class SocialPostsController extends Controller
         return 'tiktok:'.$post->id;
     }
 
+    private function scheduleThreads(int $ws, int $accId, string $caption, ?string $img, ?string $vid, Carbon $whenUtc): string
+    {
+        abort_unless(\App\Models\ThreadsAccount::where('workspace_id', $ws)->whereKey($accId)->exists(), 422, 'Threads account not found.');
+        $post = \App\Models\ThreadsScheduledPost::create([
+            'workspace_id'       => $ws, 'threads_account_id' => $accId,
+            'media_type'         => $vid ? 'video' : ($img ? 'image' : 'text'),
+            'image_url'          => $img, 'video_url' => $vid,
+            'text'               => $caption, 'scheduled_at' => $whenUtc,
+            'status'             => 'scheduled',
+        ]);
+
+        return 'threads:'.$post->id;
+    }
+
     private function storeMedia(\Illuminate\Http\UploadedFile $file, int $ws): string
     {
         $ext = strtolower($file->getClientOriginalExtension() ?: 'bin');
@@ -273,6 +292,11 @@ class SocialPostsController extends Controller
                 $out[] = ['channel' => 'tiktok', 'id' => $a->id, 'label' => '@'.($a->username ?: $a->display_name ?: $a->id), 'avatar' => null];
             }
         }
+        if (\Schema::hasTable('threads_accounts')) {
+            foreach (\App\Models\ThreadsAccount::where('workspace_id', $wsId)->get() as $a) {
+                $out[] = ['channel' => 'threads', 'id' => $a->id, 'label' => '@'.($a->username ?: $a->name ?: $a->threads_user_id), 'avatar' => $a->profile_pic_url ?? null];
+            }
+        }
 
         return $out;
     }
@@ -289,6 +313,9 @@ class SocialPostsController extends Controller
         }
         if (\Schema::hasTable('tiktok_accounts') && \App\Models\TiktokAccount::where('workspace_id', $wsId)->exists()) {
             $out[] = ['key' => 'tiktok', 'label' => 'TikTok', 'create' => url('/tiktok/posts/create'), 'list' => url('/tiktok/posts')];
+        }
+        if (\Schema::hasTable('threads_accounts') && \App\Models\ThreadsAccount::where('workspace_id', $wsId)->exists()) {
+            $out[] = ['key' => 'threads', 'label' => 'Threads', 'create' => url('/threads/posts'), 'list' => url('/threads/posts')];
         }
 
         return $out;

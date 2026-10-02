@@ -5,7 +5,15 @@
      Height is EXACTLY 64px (h-16) so full-height pages using calc(100vh-64px)
      stay exact. --}}
 @php
-    $u = auth()->user();
+    // NEVER assume there is a user. This component renders inside the user
+    // layout, which also wraps error pages — so a request whose session has
+    // just expired (or an exception rendered after logout) reaches here with
+    // auth() empty. Reading ->name on null threw a ViewException that replaced
+    // the real page with a 500, hiding whatever the actual problem was. The
+    // sibling components already use `?->`; this one did not.
+    $u     = auth()->user();
+    $uName = trim((string) ($u?->name ?? ''));
+    $uIsAdmin = (bool) ($u?->isAdmin() ?? false);
 
     // Build the "jump to" index from the sidebar nav so search covers exactly
     // the pages this user can reach — plus a few always-there destinations.
@@ -49,7 +57,7 @@
     {{-- Centered greeting + live clock — fills the gap elegantly without clutter.
          Greeting text + clock are rendered client-side so they stay live and
          match the viewer's own local time. --}}
-    <div class="flex-1 hidden lg:flex items-center justify-center min-w-0 px-4" id="ts-greet-wrap" data-name="{{ \Illuminate\Support\Str::of($u->name)->trim()->explode(' ')->first() }}">
+    <div class="flex-1 hidden lg:flex items-center justify-center min-w-0 px-4" id="ts-greet-wrap" data-name="{{ \Illuminate\Support\Str::of($uName)->explode(' ')->first() }}">
         <div class="text-center leading-tight select-none">
             <div id="ts-greet" class="text-[12.5px] font-semibold text-ink-800"></div>
             <div id="ts-clock" class="text-[10.5px] font-mono uppercase tracking-[0.14em] text-ink-500 mt-0.5"></div>
@@ -97,10 +105,10 @@
     <div class="relative shrink-0">
         <button type="button" data-user-toggle
             class="flex items-center gap-2 hover:bg-paper-50 rounded-full pl-1 pr-2.5 py-1">
-            <span class="w-8 h-8 rounded-full bg-gradient-to-br from-wa-teal to-wa-deep text-paper-0 text-[11px] font-semibold grid place-items-center">{{ \Illuminate\Support\Str::of($u->name)->trim()->limit(2, '')->upper() }}</span>
+            <span class="w-8 h-8 rounded-full bg-gradient-to-br from-wa-teal to-wa-deep text-paper-0 text-[11px] font-semibold grid place-items-center">{{ \Illuminate\Support\Str::of($uName)->limit(2, '')->upper() }}</span>
             <span class="hidden sm:block text-left leading-tight">
-                <span class="block text-[12.5px] font-semibold text-ink-900">{{ \Illuminate\Support\Str::limit($u->name, 16) }}</span>
-                <span class="block text-[10.5px] text-ink-500">{{ $u->isAdmin() ? __('Admin') : __('Member') }}</span>
+                <span class="block text-[12.5px] font-semibold text-ink-900">{{ \Illuminate\Support\Str::limit($uName, 16) }}</span>
+                <span class="block text-[10.5px] text-ink-500">{{ $uIsAdmin ? __('Admin') : __('Member') }}</span>
             </span>
             <svg class="w-3 h-3 text-ink-500" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5l3 3 3-3"/></svg>
         </button>
@@ -109,7 +117,7 @@
             <a href="{{ url('/account') }}" class="block px-3 py-2 rounded-lg text-[13px] text-ink-800 hover:bg-paper-50">{{ __('Account') }}</a>
             <a href="{{ url('/settings') }}" class="block px-3 py-2 rounded-lg text-[13px] text-ink-800 hover:bg-paper-50">{{ __('Settings') }}</a>
             <a href="{{ url('/account?tab=wallet') }}" class="block px-3 py-2 rounded-lg text-[13px] text-ink-800 hover:bg-paper-50">{{ __('Wallet') }}</a>
-            @if ($u->isAdmin())
+            @if ($uIsAdmin)
                 <a href="{{ url('/admin') }}" class="block px-3 py-2 rounded-lg text-[13px] text-ink-800 hover:bg-paper-50">{{ __('Admin dashboard') }}</a>
             @endif
             <div class="my-1 border-t border-paper-100"></div>

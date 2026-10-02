@@ -53,12 +53,27 @@ class WorkspaceEngine
     // telegram:<TelegramBot row id> to match the flow builder + webhook resolver.
     public const ENGINE_TELEGRAM = 'telegram';
 
+    // LINE (Messaging API) — engine-agnostic like Telegram. Keyed line:<row id>.
+    public const ENGINE_LINE = 'line';
+    public const ENGINE_WECHAT = 'wechat';
+    public const ENGINE_VIBER = 'viber';
+
     // SMS (Twilio / MSG91). Like telegram/facebook it is a non-WhatsApp channel —
     // it is NOT auto-added to enginesFor()/availableFor() and only surfaces in
     // senders() when a caller explicitly includes 'sms' in $engines (gated on
     // sms_enabled + a connected provider='sms' row inside the branch). Keyed
     // sms:<WaProviderConfig row id>. Reuses the workspace's Twilio credentials.
     public const ENGINE_SMS = 'sms';
+
+    // Email, served via the linked MailTrixy install (WorkspaceEmailAccount
+    // mirror rows). Like the other side-channels it is NOT a WhatsApp send
+    // engine — never part of allowed_send_methods / enginesFor() /
+    // availableFor() — and only surfaces in senders() when a caller explicitly
+    // includes 'email' in $engines (gated on email_enabled +
+    // WorkspaceEmailAccount::hasConnected inside the branch). Keyed
+    // email:<WorkspaceEmailAccount row id> to match the flow builder + the
+    // ingest resolver (raw_jid 'email:<mirrorRowId>:<mtxConversationId>').
+    public const ENGINE_EMAIL = 'email';
 
     private static array $engineCache = [];   // workspace_id => engine (single, default)
     private static array $deviceCache = [];   // workspace_id => Collection of valid device IDs (single engine)
@@ -84,9 +99,9 @@ class WorkspaceEngine
         // the workspace really sends over the Unofficial API (Baileys) and
         // Twilio isn't enabled in admin. We constrain BOTH lookups to the
         // allowed set so a wrong-engine row can never leak through.
-        $allowed = SystemSetting::get('allowed_send_methods', [self::ENGINE_BAILEYS]);
-        $allowed = is_array($allowed) ? array_values(array_filter($allowed)) : [$allowed];
-        if (empty($allowed)) $allowed = [self::ENGINE_BAILEYS];
+        // Respect the platform gate (Unofficial filtered out unless the addon is on,
+        // WABA default) — same source every picker/badge uses.
+        $allowed = self::allowedMethods();
 
         // provider=meta_ads rows hold Click-to-WhatsApp ad credentials,
         // NOT a messaging send engine. They must never be resolved as
@@ -118,9 +133,14 @@ class WorkspaceEngine
     public static function platformDefault(): string
     {
         try {
-            return (string) (\App\Models\SystemSetting::get('default_send_method', self::ENGINE_BAILEYS) ?: self::ENGINE_BAILEYS);
+            $d = (string) (\App\Models\SystemSetting::get('default_send_method', self::ENGINE_WABA) ?: self::ENGINE_WABA);
+            // Never default to Unofficial while it's gated off (addon absent).
+            if ($d === self::ENGINE_BAILEYS && ! self::unofficialEnabled()) {
+                $d = self::ENGINE_WABA;
+            }
+            return $d;
         } catch (\Throwable $e) {
-            return self::ENGINE_BAILEYS;
+            return self::ENGINE_WABA;
         }
     }
 
@@ -187,7 +207,11 @@ class WorkspaceEngine
             self::ENGINE_INSTAGRAM => ['channel' => 'instagram',  'label' => 'Instagram',      'code' => 'I'],
             self::ENGINE_FACEBOOK  => ['channel' => 'facebook',   'label' => 'Facebook',       'code' => 'F'],
             self::ENGINE_TELEGRAM  => ['channel' => 'telegram',   'label' => 'Telegram',       'code' => 'T'],
+            self::ENGINE_LINE      => ['channel' => 'line',       'label' => 'LINE',           'code' => 'L'],
+            self::ENGINE_WECHAT    => ['channel' => 'wechat',     'label' => 'WeChat',         'code' => 'W'],
+            self::ENGINE_VIBER     => ['channel' => 'viber',      'label' => 'Viber',          'code' => 'V'],
             self::ENGINE_SMS       => ['channel' => 'sms',        'label' => 'SMS',            'code' => 'S'],
+            self::ENGINE_EMAIL     => ['channel' => 'email',      'label' => 'Email',          'code' => 'E'],
             default                => ['channel' => 'unofficial', 'label' => 'Unofficial API', 'code' => 'U'],
         };
     }
@@ -199,12 +223,52 @@ class WorkspaceEngine
     // until later phases adopt these. `for()` == the DEFAULT engine.
     // =================================================================
 
-    /** Platform-wide enabled engine set (allowed_send_methods), normalised + non-empty. */
+    /**
+     * Is the Unofficial API (Baileys) available on this platform? OFF by default —
+     * the shipped/core product does not offer Unofficial; the removable addon flips
+     * `unofficial_api_enabled` on when installed. This is the single master gate.
+     */
+    public static function unofficialEnabled(): bool
+    {
+        static $cached = null;
+        if ($cached !== null) return $cached;
+        try {
+            // (a) admin force-flag, OR (b) the removable "Unofficial API" ADDON is
+            // installed — its folder is present and not deactivated (.disabled),
+            // mirroring ModuleLoader's disk-addon detection. With no addon the
+            // engine is gated off everywhere (shipped/compliant default).
+            if ((bool) SystemSetting::get('unofficial_api_enabled', false)) {
+                return $cached = true;
+            }
+            $dir = base_path('addon/unofficial-api');
+            return $cached = (is_dir($dir) && ! is_file($dir . '/.disabled'));
+        } catch (\Throwable $e) {
+            return $cached = false;
+        }
+    }
+
+    /**
+     * Platform-wide enabled engine set (allowed_send_methods), normalised + non-empty.
+     * Unofficial (baileys) is filtered OUT unless `unofficial_api_enabled` is on — so a
+     * saved allowed_send_methods that still lists it stays dormant until the addon
+     * re-enables it (no destructive DB change needed). Default engine is WABA, never Baileys.
+     */
     private static function allowedMethods(): array
     {
-        $allowed = SystemSetting::get('allowed_send_methods', [self::ENGINE_BAILEYS]);
+        $allowed = SystemSetting::get('allowed_send_methods', [self::ENGINE_WABA]);
         $allowed = is_array($allowed) ? array_values(array_filter($allowed)) : [$allowed];
-        return empty($allowed) ? [self::ENGINE_BAILEYS] : $allowed;
+        if (self::unofficialEnabled()) {
+            // Addon installed → Unofficial is available regardless of the saved set
+            // (so a fresh install whose saved methods are just waba/twilio still gets
+            // it the moment the addon is dropped in).
+            if (! in_array(self::ENGINE_BAILEYS, $allowed, true)) {
+                $allowed[] = self::ENGINE_BAILEYS;
+            }
+        } else {
+            // Addon absent → Unofficial hidden even if the saved set still lists it.
+            $allowed = array_values(array_filter($allowed, fn ($m) => $m !== self::ENGINE_BAILEYS));
+        }
+        return empty($allowed) ? [self::ENGINE_WABA] : $allowed;
     }
 
     /** True when a specific engine ('waba'|'baileys'|'twilio') is admin-enabled. */
@@ -283,13 +347,18 @@ class WorkspaceEngine
             ->where('status', WaProviderConfig::STATUS_CONNECTED)
             ->pluck('provider')->map(fn ($p) => (string) $p)->unique()->values()->all();
 
-        // Baileys also counts as connected when the workspace has any Baileys
-        // device, even without a pointer config row (legacy installs).
+        // Baileys also counts as connected when the workspace OWNS a Baileys
+        // device, even without a pointer config row. A NULL-workspace (personal /
+        // orphan) device only enables baileys for a genuinely LEGACY install —
+        // one with no connected provider configs at all. Previously the
+        // unconditional `orWhereNull` leg let a stray orphan device from another
+        // context mark baileys "connected" here, which surfaced a phantom device
+        // on the dashboard that /devices didn't list (#14).
         if (!in_array(self::ENGINE_BAILEYS, $connected, true)) {
-            $hasDevice = Device::query()
-                ->where(fn ($q) => $q->where('workspace_id', $workspaceId)->orWhereNull('workspace_id'))
-                ->exists();
-            if ($hasDevice) $connected[] = self::ENGINE_BAILEYS;
+            $ownsDevice = Device::query()->where('workspace_id', $workspaceId)->exists();
+            $legacyOrphan = empty($connected)
+                && Device::query()->whereNull('workspace_id')->exists();
+            if ($ownsDevice || $legacyOrphan) $connected[] = self::ENGINE_BAILEYS;
         }
 
         $engines = array_values(array_filter($connected, function ($p) use ($allowed, $subset) {
@@ -319,6 +388,35 @@ class WorkspaceEngine
      * an engine you just enabled). Send pickers keep using enginesFor() (connected
      * only) because you can only send from a number that's actually connected.
      */
+    /**
+     * Every engine this platform knows about — the WhatsApp family AND the
+     * standalone channels. Deliberately UNGATED: it is the full vocabulary, not
+     * a permission answer. Pass it to senders() when a caller wants "all the
+     * accounts this workspace can send from" across every channel; each branch
+     * in senders() applies its own platform toggle + hasConnected() gate, so
+     * nothing leaks from a disabled or unconnected channel.
+     *
+     * Use availableFor() instead when you need the workspace's PERMITTED
+     * WhatsApp engines (plan + admin subset) — e.g. which connect panels to
+     * render on /devices.
+     */
+    public static function allEngines(): array
+    {
+        return [
+            self::ENGINE_BAILEYS,
+            self::ENGINE_WABA,
+            self::ENGINE_TWILIO,
+            self::ENGINE_INSTAGRAM,
+            self::ENGINE_FACEBOOK,
+            self::ENGINE_TELEGRAM,
+            self::ENGINE_LINE,
+            self::ENGINE_WECHAT,
+            self::ENGINE_VIBER,
+            self::ENGINE_SMS,
+            self::ENGINE_EMAIL,
+        ];
+    }
+
     public static function availableFor(?int $workspaceId): array
     {
         $allowed = self::allowedMethods();
@@ -489,6 +587,109 @@ class WorkspaceEngine
                             'is_default' => false,
                         ]);
                     });
+            } elseif ($engine === self::ENGINE_LINE) {
+                // Connected LINE channels. Keyed line:<LineChannel row id> — matches
+                // the webhook resolver (raw_jid 'line:<rowId>:<userId>'). Gated on the
+                // platform toggle (line_enabled) AND at least one connected channel.
+                if (!(bool) SystemSetting::get('line_enabled', false)
+                    || !\App\Models\LineChannel::hasConnected($workspaceId)) {
+                    continue;
+                }
+                \App\Models\LineChannel::query()
+                    ->where('workspace_id', $workspaceId)
+                    ->where('active', true)
+                    ->get(['id', 'display_name', 'basic_id'])
+                    ->each(function ($c) use (&$out, $engine, $desc) {
+                        $handle = $c->basic_id ? (string) $c->basic_id : '';
+                        $out->push([
+                            'key'        => $engine . ':' . $c->id,
+                            'engine'     => $engine,
+                            'id'         => (int) $c->id,
+                            'phone'      => $handle,
+                            'label'      => $c->display_name ?: ($handle ?: $desc['label'] . ' · #' . $c->id),
+                            'descriptor' => $desc,
+                            'is_default' => false,
+                        ]);
+                    });
+            } elseif ($engine === self::ENGINE_WECHAT) {
+                // Connected WeChat Official Accounts. Keyed wechat:<WeChatChannel row
+                // id> — matches the webhook resolver (raw_jid 'wechat:<rowId>:<openid>').
+                // Gated on the platform toggle (wechat_enabled) AND a connected channel.
+                if (!(bool) SystemSetting::get('wechat_enabled', false)
+                    || !\App\Models\WeChatChannel::hasConnected($workspaceId)) {
+                    continue;
+                }
+                \App\Models\WeChatChannel::query()
+                    ->where('workspace_id', $workspaceId)
+                    ->where('active', true)
+                    ->get(['id', 'account_name', 'wx_id'])
+                    ->each(function ($c) use (&$out, $engine, $desc) {
+                        $handle = $c->wx_id ? (string) $c->wx_id : '';
+                        $out->push([
+                            'key'        => $engine . ':' . $c->id,
+                            'engine'     => $engine,
+                            'id'         => (int) $c->id,
+                            'phone'      => $handle,
+                            'label'      => $c->account_name ?: ($handle ?: $desc['label'] . ' · #' . $c->id),
+                            'descriptor' => $desc,
+                            'is_default' => false,
+                        ]);
+                    });
+            } elseif ($engine === self::ENGINE_VIBER) {
+                // Connected Viber Public Accounts. Keyed viber:<ViberChannel row id>
+                // — matches the webhook resolver (raw_jid 'viber:<rowId>:<userId>').
+                // Gated on the platform toggle (viber_enabled) AND a connected channel.
+                if (!(bool) SystemSetting::get('viber_enabled', false)
+                    || !\App\Models\ViberChannel::hasConnected($workspaceId)) {
+                    continue;
+                }
+                \App\Models\ViberChannel::query()
+                    ->where('workspace_id', $workspaceId)
+                    ->where('active', true)
+                    ->get(['id', 'bot_name', 'bot_uri'])
+                    ->each(function ($c) use (&$out, $engine, $desc) {
+                        $handle = $c->bot_uri ? (string) $c->bot_uri : '';
+                        $out->push([
+                            'key'        => $engine . ':' . $c->id,
+                            'engine'     => $engine,
+                            'id'         => (int) $c->id,
+                            'phone'      => $handle,
+                            'label'      => $c->bot_name ?: ($handle ?: $desc['label'] . ' · #' . $c->id),
+                            'descriptor' => $desc,
+                            'is_default' => false,
+                        ]);
+                    });
+            } elseif ($engine === self::ENGINE_EMAIL) {
+                // Linked email mailboxes (WorkspaceEmailAccount mirror rows —
+                // the real account lives on the connected MailTrixy install).
+                // Keyed email:<mirror row id> — matches the flow builder + the
+                // ingest resolver (raw_jid 'email:<mirrorRowId>:<mtxConvId>').
+                // Only reached when a caller explicitly includes 'email' in
+                // $engines. Gated on the platform toggle (email_enabled), the
+                // PLAN flag (access_email — the same crown LINE/Viber/WeChat
+                // carry) AND hasConnected, which also checks the LIVE bridge, so
+                // stale mirror rows never surface after the admin disconnects it.
+                if (!(bool) SystemSetting::get('email_enabled', false)
+                    || !PlanLimitGuard::hasFeature(Workspace::find($workspaceId), 'access_email')
+                    || !\App\Models\WorkspaceEmailAccount::hasConnected($workspaceId)) {
+                    continue;
+                }
+                \App\Models\WorkspaceEmailAccount::query()
+                    ->forWorkspace($workspaceId)
+                    ->connected()
+                    ->get(['id', 'email', 'name'])
+                    ->each(function ($a) use (&$out, $engine, $desc) {
+                        $address = (string) $a->email;
+                        $out->push([
+                            'key'        => $engine . ':' . $a->id,
+                            'engine'     => $engine,
+                            'id'         => (int) $a->id,
+                            'phone'      => $address,
+                            'label'      => $a->name ?: ($address ?: $desc['label'] . ' · #' . $a->id),
+                            'descriptor' => $desc,
+                            'is_default' => false,
+                        ]);
+                    });
             } elseif ($engine === self::ENGINE_SMS) {
                 // Connected SMS numbers (Twilio / MSG91) — WaProviderConfig
                 // provider='sms'. Keyed sms:<config id>, matching the inbound
@@ -612,7 +813,7 @@ class WorkspaceEngine
             $engine = strtolower(trim($engine));
             $id = (int) trim($id);
             if ($id <= 0) return null;
-            if (!in_array($engine, [self::ENGINE_BAILEYS, self::ENGINE_WABA, self::ENGINE_TWILIO, self::ENGINE_INSTAGRAM, self::ENGINE_FACEBOOK, self::ENGINE_TELEGRAM, self::ENGINE_SMS], true)) return null;
+            if (!in_array($engine, [self::ENGINE_BAILEYS, self::ENGINE_WABA, self::ENGINE_TWILIO, self::ENGINE_INSTAGRAM, self::ENGINE_FACEBOOK, self::ENGINE_TELEGRAM, self::ENGINE_LINE, self::ENGINE_WECHAT, self::ENGINE_VIBER, self::ENGINE_SMS, self::ENGINE_EMAIL], true)) return null;
             return ['engine' => $engine, 'id' => $id];
         }
 

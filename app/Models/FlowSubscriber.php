@@ -28,14 +28,17 @@ class FlowSubscriber extends Model
         'enrolled_at', 'completed_at', 'failed_at',
         'failure_reason', 'status',
         'retry_count', 'last_retried_at',
+        // Drop-off funnel — the wait node the run is parked on right now.
+        'current_node_id', 'current_node_label', 'last_advanced_at',
     ];
 
     protected $casts = [
-        'enrolled_at'     => 'datetime',
-        'completed_at'    => 'datetime',
-        'failed_at'       => 'datetime',
-        'last_retried_at' => 'datetime',
-        'retry_count'     => 'int',
+        'enrolled_at'      => 'datetime',
+        'completed_at'     => 'datetime',
+        'failed_at'        => 'datetime',
+        'last_retried_at'  => 'datetime',
+        'last_advanced_at' => 'datetime',
+        'retry_count'      => 'int',
     ];
 
     public function flow(): BelongsTo    { return $this->belongsTo(Flow::class); }

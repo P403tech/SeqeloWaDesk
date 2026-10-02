@@ -13,6 +13,7 @@
 import { themeColor } from '../theme-colors.js';
 import initWaCallBridge from '../calling/incoming-call-bridge.js';
 import { mountPanel as mountTemplateMapping } from './template-live-mapping.js';
+import { createPoller } from '../lib/poller.js';
 import { mountMergeDuplicates } from './inbox-merge-duplicates.js';
 
 export default function init() {
@@ -179,7 +180,11 @@ export default function init() {
             const data = await r.json().catch(() => ({}));
             if (!r.ok) {
                 const msg = data?.message || data?.errors?.[Object.keys(data?.errors || {})[0]]?.[0] || `HTTP ${r.status}`;
-                throw new Error(msg);
+                // Carry the HTTP status on the error so callers can tell a
+                // permission refusal (403) apart from a validation failure
+                // (422) and say something useful instead of a generic
+                // "<action> failed". Several call sites already read e.status.
+                throw Object.assign(new Error(msg), { status: r.status });
             }
             return data;
         }).finally(() => {
@@ -193,14 +198,19 @@ export default function init() {
     const $  = (sel, root = document) => root.querySelector(sel);
     const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+    // `#toast` is hidden with `opacity:0` and only revealed by `#toast.show`
+    // (wadesk.css). This used to set `className = 'toast toast-<kind>'` +
+    // display:block -- which wipes any existing class and never adds `show`, so
+    // opacity stayed 0 and EVERY toast in the Team Inbox was invisible. The
+    // message was written to a correctly-positioned element nobody could see,
+    // which is why a failing AI Suggest just reset itself with no explanation.
     const toast = (msg, kind = 'info') => {
         const el = $('#toast');
         if (!el) { console.log(`[${kind}]`, msg); return; }
         el.textContent = msg;
-        el.className = `toast toast-${kind}`;
-        el.style.display = 'block';
+        el.className = `toast toast-${kind} show`;
         clearTimeout(el._t);
-        el._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+        el._t = setTimeout(() => { el.classList.remove('show'); }, 3500);
     };
 
     // Themed replacement for window.prompt() — same return shape
@@ -375,7 +385,7 @@ Limits:
         slaPolicies: [],
 
         queue: [],
-        counts: { mine: 0, unassigned: 0, all: 0, mentions: 0, sla_breach: 0 },
+        counts: { mine: 0, unassigned: 0, all: 0, mentions: 0, sla_breach: 0, by_channel: {} },
         activeId: null,
         active: null,
         thread: [],
@@ -435,6 +445,39 @@ Limits:
         threadLoadingOlder: false,
     };
 
+    // ── Permission gates ─────────────────────────────────────────────────
+    // /team-inbox/api/bootstrap ships EVERY workspace permission key as a
+    // boolean in `permissions` (the server maps the whole permission list to
+    // userCan()), so this reads server truth by name. A key that is MISSING
+    // resolves to "not granted" — we never render an action the server would
+    // 403, which is exactly how the Assign button used to lie to agents.
+    const can = (perm) => state.permissions?.[perm] === true;
+
+    // Two assignment models exist. `inbox.assign` is "hand this chat to anyone
+    // / any team"; `inbox.assign_self` is claim-only ("take this chat"), which
+    // is what the agent role carries. Both keys are real — WorkspacePermissions
+    // declares them and ConversationPolicy::assign enforces the distinction —
+    // so these read server truth, they do not guess.
+    const canAssignAnyone = () => can('inbox.assign');
+    const canAssignSelf   = () => canAssignAnyone() || can('inbox.assign_self');
+    const canAssignAtAll  = () => canAssignSelf();
+
+    /**
+     * Show/hide every assignment control to match what the server granted.
+     * Called once the bootstrap payload lands; before that state.permissions
+     * is {} and everything correctly resolves to hidden.
+     */
+    function applyPermissionGates() {
+        const showAssign = canAssignAtAll();
+        $('#assign-btn')?.classList.toggle('hidden', !showAssign);
+        $('#reassign-link')?.classList.toggle('hidden', !showAssign);
+        if (!showAssign) $('#assign-menu')?.classList.add('hidden');
+        // The bulk "Assign" button claims the selection for the current user.
+        // The /bulk endpoint authorizes on inbox.bulk alone, so mirror exactly
+        // that permission rather than the single-conversation assign one.
+        $('#bulk-assign')?.classList.toggle('hidden', !can('inbox.bulk'));
+    }
+
     // ── Bootstrap ────────────────────────────────────────────────────────
     async function bootstrap() {
         // PERF: fire the conversation list IMMEDIATELY, in parallel with the
@@ -467,6 +510,9 @@ Limits:
                 // UI elements render-guard with `state.devices.length > 1`.
                 devices: data.devices || [],
             });
+            // Permissions have landed — hide the actions this role can't do
+            // before the operator gets a chance to click one.
+            applyPermissionGates();
             renderAiAgentNav();
             renderTeamNav();
             renderMyProfile();
@@ -498,8 +544,8 @@ Limits:
     }
 
     function startPolling() {
-        clearInterval(state.polling.queue);
-        clearInterval(state.polling.active);
+        state.polling.queue?.stop?.();
+        state.polling.active?.stop?.();
         clearInterval(state.polling.gc);
         // Poll cadence adapts to real-time: when Pusher/Echo is active it delivers
         // new messages instantly, so the interval polls drop to a slow SAFETY NET
@@ -507,8 +553,35 @@ Limits:
         // sustained DB load of every open operator. Without realtime, keep the fast
         // 5s/3s cadence so the list and open thread still feel live.
         const realtimeOn = !!(window.Echo && window.__realtime?.enabled && window.__realtime.wsId);
-        state.polling.queue  = setInterval(() => loadQueue(true), realtimeOn ? 30000 : 5000);
-        state.polling.active = setInterval(() => state.activeId && loadActive(state.activeId, true), realtimeOn ? 20000 : 3000);
+
+        // Both loops move to the shared poller for the in-flight guard and the
+        // hidden-tab pause. Stacked requests actually SLOWED message delivery:
+        // a slow response left the next tick queued behind it, so the newest
+        // message waited on a stale request. One at a time is faster.
+        //
+        // DELIBERATELY NO BACKOFF ON THE OPEN THREAD. Idle backoff is right for
+        // a device list; it is wrong for a live conversation, because the gap
+        // would be widest exactly when a customer finally replies after a quiet
+        // spell — the worst possible moment to be slow. maxInterval === interval
+        // pins it. The queue list gets only a gentle widening (5s -> 10s) and
+        // any inbound event kicks it straight back to fast.
+        state.polling.queue = createPoller(async () => await loadQueue(true), {
+            interval:    realtimeOn ? 30000 : 5000,
+            maxInterval: realtimeOn ? 60000 : 10000,
+            idleAfter:   4,
+        }).start({ immediate: false });
+
+        state.polling.active = createPoller(
+            async () => {
+                if (!state.activeId) return false;
+                await loadActive(state.activeId, true);
+                return true;   // never allowed to back off — see above
+            },
+            {
+                interval:    realtimeOn ? 20000 : 3000,
+                maxInterval: realtimeOn ? 20000 : 3000,
+            },
+        ).start({ immediate: false });
         // Memory GC every 60s — drop resolved conversations from the
         // queue cache that haven't moved in > 1h. Keeps long-running
         // operator sessions from accumulating heap as conversations
@@ -533,6 +606,12 @@ Limits:
                         if (state.activeId && e && String(e.conversation_id) === String(state.activeId)) {
                             loadActive(state.activeId, true);
                         }
+                        // A real message just landed, so this workspace is busy:
+                        // reset both loops to their fast cadence. Without this a
+                        // queue poll that had widened during a quiet spell would
+                        // stay wide right as the conversation picks up.
+                        state.polling.queue?.kick?.();
+                        state.polling.active?.kick?.();
                     });
                 console.debug('[realtime] inbox subscribed to workspace channel');
             }
@@ -600,6 +679,9 @@ Limits:
         const svg = btn?.querySelector('svg');
         svg?.classList.add('animate-spin');
         try {
+            // A manual refresh must always re-fetch — drop the fingerprint so the
+            // server can't short-circuit to {unchanged}.
+            state._serverSig = '';
             await loadQueue();
             if (state.activeId) await loadActive(state.activeId);
         } finally {
@@ -625,23 +707,43 @@ Limits:
         // Captured here, re-checked right after the await.
         const seq = (state._queueSeq = (state._queueSeq || 0) + 1);
         try {
+            // When a specific channel tab is active, load the WHOLE channel in one
+            // request (server caps at 1000) so every Instagram/email/etc. thread
+            // appears immediately from the server — the operator never has to
+            // scroll to pull the rest of that channel's chats. The growing 30-row
+            // window still governs the mixed "All" view where recency paging matters.
+            const channelActive = state.channelFilter && state.channelFilter !== 'all';
             const params = new URLSearchParams({
                 tab:      state.tab,
                 // The whole visible window — grows by 30 as the operator scrolls
                 // (see the #conv-list scroll handler). The 5s poll re-requests
                 // the same window so it stays live. This is what lets a 322-chat
                 // inbox actually load instead of capping at the first page.
-                per_page: String(state.queueWindow || 30),
+                per_page: channelActive ? '1000' : String(state.queueWindow || 30),
             });
             if (state.teamFilter)   params.set('team_id',   state.teamFilter);
             if (state.deviceFilter) params.set('device_id', state.deviceFilter);
             if (state.search)       params.set('q',         state.search);
             if (state.archivedView) params.set('archived',  '1');
             if (state.labelFilter)  params.set('tag_id',    state.labelFilter);
+            // Dark-rail channel tab → SERVER-SIDE filter, so a channel whose
+            // threads sit below the recency window (old email/IG) loads on click
+            // instead of only appearing after scrolling the All list.
+            if (state.channelFilter && state.channelFilter !== 'all') params.set('channel', state.channelFilter);
+            // Echo back the server fingerprint from the last full payload. When the
+            // workspace's live set hasn't changed, the server returns {unchanged}
+            // immediately — no window query, no per-row decrypt, no serialisation —
+            // so an idle poll costs one aggregate instead of a full rebuild. The
+            // server folds the request's filter params into the sig, so a
+            // tab/device/search/window change never matches → we still get a full
+            // payload. Safe to always send.
+            if (state._serverSig) params.set('sig', state._serverSig);
             const data = await api(`/team-inbox/api/queue?${params}`);
             // A newer loadQueue superseded this one (tab switch / filter / poll)
             // — discard this stale payload so it can't repaint the wrong list.
             if (seq !== state._queueSeq) return;
+            // Nothing changed server-side — keep the current list/counts untouched.
+            if (data.unchanged) return;
             state.queueHasMore = !!data.has_more;
             const newItems  = data.items  || [];
             const newCounts = data.counts || state.counts;
@@ -651,6 +753,8 @@ Limits:
             state.queue        = newItems;
             state.counts       = newCounts;
             state._lastQueueSig = newSig;
+            // Store the server fingerprint to echo on the next poll (idle short-circuit).
+            state._serverSig    = data.sig || '';
 
             // WhatsApp-style list chrome — Archived row + label dropdown.
             state.archivedCount = Number(data.archived_count ?? state.archivedCount) || 0;
@@ -774,7 +878,53 @@ Limits:
             if (key) { if (seen.has(key)) continue; seen.add(key); }
             out.push(m);
         }
+        // Reconcile optimistic temp bubbles with their real server copy. When a
+        // poll or realtime echo delivers the REAL outbound row (numeric id)
+        // before the send POST returns to swap the temp in place, both would
+        // otherwise render — the "message shows twice on send, once on reload"
+        // bug. Drop the still-pending temp once a real outbound with the same
+        // text exists. Failed temps stay (they carry the retry button).
+        const realOutBodies = new Set();
+        for (const m of out) {
+            if (typeof m.id === 'number' && m.direction === 'out') {
+                realOutBodies.add((m.body || '').trim());
+            }
+        }
+        if (realOutBodies.size) {
+            return out.filter(m => !(
+                m && m.__tempId && m.direction === 'out'
+                && m.status !== 'failed'
+                && realOutBodies.has((m.body || '').trim())
+            ));
+        }
         return out;
+    }
+
+    // Patch {id,status,delivered_at,read_at,failure_reason} deltas from the poll
+    // fast-path onto the messages already in state.thread. Optimistic rows carry
+    // no numeric id, so they are never touched. Returns true when anything moved.
+    function applyStatusDeltas(list) {
+        if (!Array.isArray(list) || !list.length || !Array.isArray(state.thread)) return false;
+        const byId = new Map();
+        for (const m of state.thread) if (typeof m.id === 'number') byId.set(m.id, m);
+        let changed = false;
+        for (const s of list) {
+            const m = byId.get(s.id);
+            if (!m) continue;
+            // Normalize undefined/null so an unchanged row can't fake a diff and
+            // re-render the thread on every poll.
+            const same = (m.status || null) === (s.status || null)
+                && (m.delivered_at   || null) === (s.delivered_at   || null)
+                && (m.read_at        || null) === (s.read_at        || null)
+                && (m.failure_reason || null) === (s.failure_reason || null);
+            if (same) continue;
+            m.status         = s.status;
+            m.delivered_at   = s.delivered_at;
+            m.read_at        = s.read_at;
+            m.failure_reason = s.failure_reason;
+            changed = true;
+        }
+        return changed;
     }
 
     async function loadActive(id, silent = false) {
@@ -808,7 +958,16 @@ Limits:
                 const dd = await api(`/team-inbox/api/conversations/${id}?poll=1&since=${sinceId}`);
                 if (seq !== state._activeSeq) return;
                 const newMsgs = dd.messages || [];
-                if (newMsgs.length === 0) return; // nothing new → no re-render, no churn
+                // Delivery ticks on messages we ALREADY hold. The delta above is
+                // id-based and can never carry them, so patch the status columns
+                // onto the existing rows BEFORE the "nothing new" early return —
+                // otherwise a delivered/read receipt sat invisible until the 60s
+                // full re-sync lapsed.
+                const patched = applyStatusDeltas(dd.statuses);
+                if (newMsgs.length === 0) {
+                    if (patched) { cacheActiveThread(id); scheduleRenderActive(); }
+                    return; // nothing new → no re-render, no churn
+                }
                 // Ping when a NEW inbound lands in the OPEN chat.
                 try {
                     const inIds = newMsgs.filter(m => m.direction === 'in' && typeof m.id === 'number').map(m => m.id);
@@ -970,16 +1129,25 @@ Limits:
         }
     }
 
-    // Solo workspaces don't need the team triage tabs (Mine / Unassigned / @me) —
-    // there's nobody to assign to or mention. Show them only once the workspace
-    // actually has more than one member, so a single operator sees a clean
-    // "All · Unread" bar (the rest are pure noise for them).
+    // Solo workspaces don't need the Mine tab — there's nobody to assign to.
+    // Show it only once the workspace has more than one member, so a single
+    // operator sees a clean "All · Unread" bar.
+    //
+    // The bar is now three tabs (All / Mine / Unread); the Unassigned and @me
+    // buttons were removed from the markup. Their keys stay in this list so a
+    // stale cached bundle rendering the old five-tab markup still hides them
+    // correctly rather than leaving two orphan tabs visible — querySelector
+    // simply finds nothing once the new blade is live.
     function syncQueueTabsVisibility() {
         const multi = (state.members || []).length > 1;
         ['mine', 'unassigned', 'mentions'].forEach(k => {
             const btn = document.querySelector(`#queue-tabs [data-queue="${k}"]`);
             if (btn) btn.style.display = multi ? '' : 'none';
         });
+        // Solo workspace = only All + Unread visible → stretch them to fill the
+        // bar (each 50%) instead of the compact content-width the multi-tab bar
+        // uses. The multi case keeps the scrollable compact tabs.
+        document.getElementById('queue-tabs')?.classList.toggle('is-duo', !multi);
         positionSegThumb();   // widths changed → re-seat the sliding thumb
     }
 
@@ -1038,14 +1206,21 @@ Limits:
     function renderChannelTabs() {
         const wrap = $('#ti-channel-tabs');
         if (!wrap) return;
-        const counts = {};
-        (state.queue || []).forEach(c => { const k = channelKey(c.channel); counts[k] = (counts[k] || 0) + 1; });
-        const keys = Object.keys(counts);
+        // AUTHORITATIVE per-channel totals from the server (queueCounts.by_channel)
+        // — NOT a tally of the loaded scroll window, so a badge never creeps up as
+        // more chats stream in on scroll. Fall back to the loaded queue only if an
+        // older server response has no by_channel map.
+        let counts = (state.counts && state.counts.by_channel) || null;
+        if (!counts) {
+            counts = {};
+            (state.queue || []).forEach(c => { const k = channelKey(c.channel); counts[k] = (counts[k] || 0) + 1; });
+        }
+        const keys = Object.keys(counts).filter(k => counts[k] > 0);
         if (keys.length <= 1) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
         wrap.classList.remove('hidden');
         const active = state.channelFilter || 'all';
         const order = ['wa', 'ig', 'ms', 'tt', 'tg', 'em'].filter(k => counts[k]);
-        const total = (state.queue || []).length;
+        const total = (state.counts && Number(state.counts.all)) || 0;
         // Channel chips are ICON-ONLY (icon + count) — the platform is obvious
         // from its glyph, so the "WhatsApp"/"Instagram" text is redundant. The
         // name still shows on hover (title). "All" keeps its label since it's a
@@ -1058,7 +1233,14 @@ Limits:
             order.map(k => tab(k, '', `<span style="width:15px;height:15px;display:inline-flex;color:var(--ch-${k})">${CHANNEL_META[k].glyph}</span>`, counts[k], CHANNEL_META[k].name)).join('');
         wrap.querySelectorAll('[data-ch-filter]').forEach(b => b.addEventListener('click', () => {
             state.channelFilter = b.dataset.chFilter;
-            renderQueue();
+            // Reload from the server for this channel (reset the scroll window
+            // and drop the fingerprint so the poll can't short-circuit it), so
+            // ALL of the channel's threads come in — not just those already in
+            // the loaded window.
+            state.queueWindow = 30;
+            state._serverSig = '';
+            renderRailChannels();  // reflect the active tab immediately
+            loadQueue();
         }));
     }
 
@@ -1072,17 +1254,24 @@ Limits:
         // exact number the /more "open" card shows) — never client-side state
         // that could be stale after a workspace switch. An empty workspace is 0.
         const total = (state.counts && Number(state.counts.all)) || 0;
-        // Per-channel tally from the loaded queue. Guard on a real row id so a
-        // skeleton/placeholder can never be counted. When the workspace total is
-        // 0, force all per-channel counts to 0 too (no phantom from stale queue).
-        const counts = {};
+        // AUTHORITATIVE per-channel totals from the server (queueCounts.by_channel)
+        // — a stable count that does NOT grow as the user scrolls the list. When
+        // the workspace total is 0, force all per-channel counts to 0 (no phantom
+        // from a stale by_channel map). Falls back to a queue tally only if an
+        // older server response lacks by_channel.
+        let counts = {};
         if (total > 0) {
-            (state.queue || []).forEach(c => { if (c && c.id) { const k = channelKey(c.channel); counts[k] = (counts[k] || 0) + 1; } });
+            const bc = state.counts && state.counts.by_channel;
+            if (bc) {
+                counts = bc;
+            } else {
+                (state.queue || []).forEach(c => { if (c && c.id) { const k = channelKey(c.channel); counts[k] = (counts[k] || 0) + 1; } });
+            }
         }
         // Connected channels (from the blade) show a tab even with 0 chats, so
         // Instagram appears the moment an IG account is linked.
         const avail = (wrap.dataset.channels || 'wa').split(',').map(s => s.trim()).filter(Boolean);
-        const present = ['wa', 'ig', 'ms', 'tt', 'tg', 'sms', 'em'].filter(k => avail.includes(k) || counts[k]);
+        const present = ['wa', 'ig', 'ms', 'tt', 'tg', 'ln', 'wc', 'vb', 'sms', 'em'].filter(k => avail.includes(k) || counts[k]);
         if (!present.length) present.push('wa');
         const active = state.channelFilter || 'all';
         // Show the count badge ONLY when there's something to count — an empty
@@ -1097,7 +1286,14 @@ Limits:
             present.map(k => chBtn(k, CHANNEL_META[k].name, `<span style="color:var(--ch-${k});display:inline-flex;width:17px;height:17px">${CHANNEL_META[k].glyph}</span>`, counts[k] || 0)).join('');
         wrap.querySelectorAll('[data-ch-filter]').forEach(b => b.addEventListener('click', () => {
             state.channelFilter = b.dataset.chFilter;
-            renderQueue();
+            // Reload from the server for this channel (reset the scroll window
+            // and drop the fingerprint so the poll can't short-circuit it), so
+            // ALL of the channel's threads come in — not just those already in
+            // the loaded window.
+            state.queueWindow = 30;
+            state._serverSig = '';
+            renderRailChannels();  // reflect the active tab immediately
+            loadQueue();
         }));
     }
 
@@ -1163,6 +1359,10 @@ Limits:
         em: { key: 'em', name: 'Email', glyph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg>' },
         tt: { key: 'tt', name: 'TikTok', glyph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>' },
         sms: { key: 'sms', name: 'SMS', glyph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6.5h18v10h-9l-4.5 3.5V16.5H3z"/></svg>' },
+        ln: { key: 'ln', name: 'LINE', glyph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3C6.9 3 2.75 6.28 2.75 10.32c0 3.62 2.62 6.66 6.16 7.23.24.05.57.16.65.37.07.19.05.48.02.67l-.1.62c-.03.18-.15.72.63.39.78-.32 4.2-2.47 5.73-4.23 1.06-1.16 1.56-2.34 1.56-3.64C17.4 6.28 13 3 12 3Z" fill="none"/><path d="M12 3C6.9 3 2.75 6.4 2.75 10.6c0 3.76 3.35 6.87 7.83 7.46.31.04.72.13.83.37.1.22.06.57.03.79 0 0-.11.66-.13.8-.04.24-.19.93.82.51 1.01-.43 5.42-3.19 7.4-5.47 1.36-1.5 2.02-3.02 2.02-4.46C21.55 6.4 17.1 3 12 3Zm-3.4 9.5H6.9c-.2 0-.36-.16-.36-.36V9.06c0-.2.16-.36.36-.36.2 0 .36.16.36.36v2.72h1.34c.2 0 .36.16.36.36 0 .2-.16.36-.36.36Zm1.5-.36c0 .2-.16.36-.36.36-.2 0-.36-.16-.36-.36V9.06c0-.2.16-.36.36-.36.2 0 .36.16.36.36v3.08Zm3.6 0c0 .15-.1.29-.25.34a.37.37 0 0 1-.11.02.36.36 0 0 1-.29-.15l-1.56-2.12v1.91c0 .2-.16.36-.36.36-.2 0-.36-.16-.36-.36V9.06c0-.15.1-.29.25-.34a.36.36 0 0 1 .4.13l1.57 2.12V9.06c0-.2.16-.36.36-.36.2 0 .36.16.36.36v3.08Zm2.66-1.9c.2 0 .36.16.36.36 0 .2-.16.36-.36.36h-1.34v.82h1.34c.2 0 .36.16.36.36 0 .2-.16.36-.36.36h-1.7c-.2 0-.36-.16-.36-.36V9.06c0-.2.16-.36.36-.36h1.7c.2 0 .36.16.36.36 0 .2-.16.36-.36.36h-1.34v.82h1.34Z"/></svg>' },
+        wc: { key: 'wc', name: 'WeChat', glyph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 4C5.1 4 2 6.6 2 9.9c0 1.9 1 3.5 2.6 4.7L4 17l2.7-1.4c.7.2 1.5.3 2.3.3h.5a5 5 0 0 1-.2-1.4c0-3 2.9-5.4 6.5-5.4h.6C15.6 6 12.6 4 9 4Zm-2.4 4.3a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8Zm4.8 0a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8Z"/><path d="M22 14.4c0-2.7-2.6-4.9-5.9-4.9s-5.9 2.2-5.9 4.9 2.6 4.9 5.9 4.9c.7 0 1.4-.1 2-.3l1.9 1-.5-1.7c1.5-.9 2.5-2.3 2.5-3.9Zm-7.8-.8a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Zm3.8 0a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z"/></svg>' },
+        vb: { key: 'vb', name: 'Viber', glyph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C7 2 3 5.3 3 10c0 2.5 1.2 4.7 3.2 6.2v3.3l3-1.7c.6.1 1.2.15 1.8.15 5 0 9-3.3 9-8S17 2 12 2Zm4.6 11.6c-.2.5-1 .95-1.4 1-.4.06-.85.1-1.4-.1-.32-.1-.73-.24-1.26-.47-2.2-.95-3.6-3.16-3.7-3.3-.12-.15-.9-1.2-.9-2.28 0-1.08.56-1.6.77-1.82.2-.22.44-.28.58-.28h.42c.13 0 .32-.05.5.38.17.43.6 1.48.65 1.58.05.1.08.23.02.38-.06.15-.1.24-.2.37-.1.13-.22.28-.31.38-.1.1-.2.2-.09.4.12.2.53.85 1.13 1.38.78.68 1.42.9 1.63 1 .2.1.32.08.44-.05.13-.15.5-.6.64-.8.14-.2.28-.17.47-.1.2.07 1.3.6 1.52.72.22.1.37.16.42.25.06.1.06.55-.14 1.06Z"/></svg>' },
+        widget: { key: 'widget', name: 'Web widget', glyph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="12.5" rx="2.5"/><path d="M8 20.5l3.5-4M7.5 8.5h9M7.5 12h6"/></svg>' },
     };
     function channelKey(channel) {
         switch (String(channel || '').toLowerCase()) {
@@ -1170,9 +1370,14 @@ Limits:
             case 'messenger': return 'ms';
             case 'facebook':  return 'ms';
             case 'telegram':  return 'tg';
+            case 'line':      return 'ln';
+            case 'wechat':    return 'wc';
+            case 'viber':     return 'vb';
             case 'email':     return 'em';
             case 'tiktok':    return 'tt';
             case 'sms':       return 'sms';
+            case 'chatbot_widget':
+            case 'widget':    return 'widget';
             default:          return 'wa';
         }
     }
@@ -1244,8 +1449,23 @@ Limits:
         }
     }
 
+    // Human "time left" until a snoozed conversation re-opens (future time).
+    function snoozeLeft(until) {
+        const ms = new Date(until).getTime() - Date.now();
+        if (!isFinite(ms)) return '';
+        if (ms <= 0) return 'due';
+        const m = Math.round(ms / 60000);
+        if (m < 60) return `${m}m`;
+        const h = Math.round(m / 60);
+        if (h < 24) return `${h}h`;
+        return `${Math.round(h / 24)}d`;
+    }
+
     function convRow(c) {
         const initials = avatarInitials(c.title);
+        const snoozePill = (c.inbox_status === 'snoozed' && c.snoozed_until)
+            ? `<span class="px-1.5 py-0.5 rounded-full text-[9.5px] font-mono bg-accent-amber/20 text-[#7B5A14]" title="Un-snoozes ${escape(formatStamp(c.snoozed_until))}">Snoozed · ${escape(snoozeLeft(c.snoozed_until))}</span>`
+            : '';
         const tag = (n, c) => `<span class="px-1.5 py-0.5 rounded text-[9.5px] font-mono bg-paper-100 text-ink-700">${escape(n)}</span>`;
         const sla = c.sla_breached
             ? `<span class="px-1.5 py-0.5 rounded text-[9.5px] font-mono bg-accent-coral/20 text-accent-coral">SLA</span>`
@@ -1272,6 +1492,7 @@ Limits:
               </div>
               <div class="text-[11.5px] text-ink-500 truncate">${escape(c.preview || '')}</div>
               <div class="flex items-center gap-1 mt-1 flex-wrap">
+                ${snoozePill}
                 ${windowRowChip(c)}
                 ${(c.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded-full text-[9.5px] font-mono" style="background:${safeColor(t.color, themeColor('wa-deep'))}22;color:${safeColor(t.color, themeColor('wa-deep'))}">${escape(t.name)}</span>`).join('')}
                 ${c.wa_username ? `<span class="px-1.5 py-0.5 rounded-full text-[9.5px] font-mono bg-wa-mint/30 text-wa-deep">@${escape(c.wa_username)}</span>` : ''}
@@ -1409,7 +1630,7 @@ Limits:
         // P5 — reset the AI-suggest bar to idle when the OPEN conversation
         // changes (guarded so a 3s poll re-render never re-shows a bar the
         // operator dismissed, nor clobbers an in-progress suggestion).
-        if (aiSuggestConv !== state.activeId) { aiSuggestConv = state.activeId; aiSuggestReset(); }
+        if (aiSuggestConv !== state.activeId) { aiSuggestConv = state.activeId; aiSuggestDismissedConv = null; aiSuggestReset(); }
         $('#thread-empty')?.classList.add('hidden');
         $('#thread-getting-started')?.classList.add('hidden');
         $('#thread-skeleton')?.classList.add('hidden');
@@ -1569,8 +1790,13 @@ Limits:
             // status tick) or the operator opened a different conversation. An
             // idle poll now leaves the DOM — and any playing voice note —
             // untouched.
+            // Every field here MUST be one the serializer actually emits —
+            // `delivery_status` / `edited` never were, so they were constant
+            // undefined and a receipt or an edit could not move the signature.
+            // status + delivered_at + read_at + edited_at are the real columns
+            // (TeamInboxController::serializeMessage).
             const threadSig = items.map(m =>
-                `${m.kind}:${m.id || m.__tempId || ''}:${m.status || ''}:${m.delivery_status || ''}:${m.edited ? 1 : 0}:${m.media_type || ''}:${(m.body || '').length}`
+                `${m.kind}:${m.id || m.__tempId || ''}:${m.status || ''}:${m.delivered_at || ''}:${m.read_at || ''}:${m.edited_at || ''}:${m.media_type || ''}:${(m.body || '').length}`
             ).join('|') + `#${items.length}`;
             const threadChanged = isNewThread || thread.dataset.threadSig !== threadSig;
 
@@ -1996,6 +2222,38 @@ Limits:
     // Crash-proof wrapper: a single malformed message must NEVER throw and
     // blank the entire thread. Any render error falls back to a plain text
     // bubble and logs the cause, so the inbox stays alive no matter what.
+    // Channels whose OUTBOUND messages ever advance past 'sent': WhatsApp
+    // (Baileys node status callback / WABA webhook / Twilio status callback),
+    // SMS delivery receipts and Viber delivered+seen callbacks are the only
+    // writers of delivered_at / read_at on inbox_messages. Every other channel
+    // — Instagram, Messenger/Facebook, TikTok, email, Telegram, LINE, WeChat,
+    // web widget — stops at 'sent', so a permanent single grey tick would read
+    // as "stuck" to an operator. No tick there at all.
+    const TICK_CHANNELS = new Set(['wa', 'sms', 'vb']);
+
+    // WhatsApp-style delivery ticks, identical in shape and colour to /chat
+    // (user-chat-index.js::renderStatusTick) so both pages read the same:
+    //   pending / scheduled → grey clock
+    //   sent                → single grey check
+    //   delivered           → double grey checks
+    //   read                → double BLUE checks (#53BDEB)
+    // 'sending' and 'failed' are NOT handled here — they keep their existing
+    // pills (spinner, and the failed-with-retry button) in the caller.
+    function renderStatusTick(status, channel) {
+        if (!status || !TICK_CHANNELS.has(channelKey(channel))) return '';
+        if (status === 'pending' || status === 'scheduled') {
+            return `<span class="inline-flex items-center text-ink-500 ml-0.5" title="${escape(status)}">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.5v3.8l2.4 1.4"/></svg>
+            </span>`;
+        }
+        if (status !== 'sent' && status !== 'delivered' && status !== 'read') return '';
+        const colour = status === 'read' ? '#53BDEB' : '#7B8B86'; // WA blue for read, grey for sent/delivered
+        const svg = status === 'sent'
+            ? `<svg width="14" height="10" viewBox="0 0 18 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><polyline points="2 6.5 6.5 10.5 16 1.5"/></svg>`
+            : `<svg width="18" height="10" viewBox="0 0 24 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><polyline points="2 6.5 6 10 13 1.5"/><polyline points="9 6.5 13 10 22 1.5"/></svg>`;
+        return `<span class="inline-flex items-center ml-0.5" title="${escape(status)}" style="color:${colour}">${svg}</span>`;
+    }
+
     function renderThreadItem(m) {
         try {
             return renderThreadItemImpl(m);
@@ -2034,6 +2292,26 @@ Limits:
                 <div class="${bg} border border-paper-200 rounded-lg px-3 py-2 flex items-center gap-2.5">
                     <span class="grid place-items-center w-8 h-8 rounded-full ${ring}">${icon}</span>
                     <span class="text-[13px] font-medium leading-tight">${escape(label)}</span>
+                </div>
+                <div class="text-[9.5px] font-mono text-ink-500 mt-0.5 ${out ? 'text-right' : ''}">${t}</div>
+            </div>`;
+        }
+
+        // Email (bridge) message — a subject line above the body so the
+        // bubble reads like mail. Plain text only; no HTML-mail rendering.
+        if (m.email) {
+            const bg      = out ? 'bg-wa-bubble' : 'bg-paper-0';
+            const subject = String(m.email.subject || '').trim();
+            const subjectHtml = subject
+                ? `<div class="flex items-center gap-1.5 text-[12px] font-semibold leading-tight mb-1">
+                    <svg viewBox="0 0 24 24" class="w-3 h-3 text-ink-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg>
+                    <span class="truncate">${escape(subject)}</span>
+                  </div>`
+                : '';
+            return `<div class="${align} w-fit max-w-[70%] min-w-[120px]">
+                <div class="${bg} border border-paper-200 rounded-lg px-3 py-2 text-[13px]">
+                    ${subjectHtml}
+                    <div class="whitespace-pre-wrap break-words leading-snug">${escape(m.body || '')}</div>
                 </div>
                 <div class="text-[9.5px] font-mono text-ink-500 mt-0.5 ${out ? 'text-right' : ''}">${t}</div>
             </div>`;
@@ -2230,6 +2508,12 @@ Limits:
                 </button>
                 ${reason ? `<span class="text-[9px] text-accent-coral/80 max-w-[230px] text-right leading-tight">${escape(reason)}</span>` : ''}
             </span>`;
+        } else if (out) {
+            // Everything else on an outbound bubble is a real delivery state
+            // (pending → sent → delivered → read). Channel comes from the open
+            // conversation, the only place the serializer exposes it
+            // (serializeListItem 'channel'); serializeMessage carries none.
+            statusPill = renderStatusTick(m.status, state.active && state.active.channel);
         }
         // "Edited HH:MM" tag — WhatsApp shows this inline with the
         // timestamp on any message that's been edited. We mirror that.
@@ -2410,8 +2694,21 @@ Limits:
             if (state.activeId === convId && realMsg) {
                 const arr = mode === 'note' ? state.notes : state.thread;
                 const idx = arr.findIndex(m => m.__tempId === tempId);
-                if (idx >= 0) arr[idx] = { ...realMsg, __tempId: undefined };
-                else          arr.push({ ...realMsg, __tempId: undefined }); // temp already swept by a poll — re-add
+                if (idx >= 0) {
+                    arr[idx] = { ...realMsg, __tempId: undefined };
+                } else {
+                    // The temp bubble was already swept by a poll. But the poll
+                    // that swept it ALSO carried the real server row, so pushing
+                    // here blindly appended a SECOND copy of a message that was
+                    // already on screen — the "message shows twice until you
+                    // reload" bug. Reloading looked like a fix only because
+                    // loadActive() rebuilds the thread through dedupeThread().
+                    //
+                    // Re-add only when this id genuinely is not present yet.
+                    const already = typeof realMsg.id === 'number'
+                        && arr.some(m => typeof m.id === 'number' && m.id === realMsg.id);
+                    if (!already) arr.push({ ...realMsg, __tempId: undefined });
+                }
                 // Invalidate any loadActive poll that started before this send
                 // committed: its payload predates the message and would hide the
                 // bubble for a few seconds. Bumping the token makes loadActive
@@ -2470,17 +2767,33 @@ Limits:
         } catch (e) { toast(t('Snooze failed') + ': ' + e.message, 'error'); }
     }
 
+    /**
+     * Turn a failed assign/unassign into something the operator can act on.
+     * A 403 means the role simply isn't allowed (the server's own wording is
+     * generic, so we say it plainly); a 422 already carries the field message
+     * the server wrote ("That member is not part of this workspace."), so we
+     * show that verbatim rather than burying it behind "Assign failed".
+     */
+    function assignErrorText(e, fallback) {
+        if (e?.status === 403) return t('You do not have permission to assign conversations.');
+        return e?.message || fallback;
+    }
+
     async function assign(userId, teamId, strategy = 'manual') {
         if (!state.activeId) return;
         try {
+            // strategy === null means "server decides" (the team's own
+            // assignment_strategy) — omit the key so the nullable rule passes.
+            const body = { user_id: userId, team_id: teamId };
+            if (strategy) body.strategy = strategy;
             await api(`/team-inbox/api/conversations/${state.activeId}/assign`, {
                 method: 'POST',
-                body: { user_id: userId, team_id: teamId, strategy },
+                body,
             });
             toast(t('Assigned.'), 'success');
             await loadActive(state.activeId);
             await loadQueue(true);
-        } catch (e) { toast(t('Assign failed') + ': ' + e.message, 'error'); }
+        } catch (e) { toast(assignErrorText(e, t('Could not assign this chat.')), 'error'); }
     }
 
     async function untag(convId, tagId) {
@@ -3069,10 +3382,10 @@ Limits:
     // (baileys/waba/twilio) is the shared "whatsapp" bucket.
     function templateBucketFor(ch) {
         const k = channelKey(ch);
-        return k === 'ig' ? 'instagram' : k === 'ms' ? 'facebook' : k === 'tg' ? 'telegram' : k === 'sms' ? 'sms' : 'whatsapp';
+        return k === 'ig' ? 'instagram' : k === 'ms' ? 'facebook' : k === 'tg' ? 'telegram' : k === 'ln' ? 'line' : k === 'wc' ? 'wechat' : k === 'vb' ? 'viber' : k === 'sms' ? 'sms' : 'whatsapp';
     }
     function cardTemplateBucket(cc) {
-        return ['instagram', 'facebook', 'telegram', 'sms'].includes(cc) ? cc : 'whatsapp';
+        return ['instagram', 'facebook', 'telegram', 'line', 'wechat', 'viber', 'sms'].includes(cc) ? cc : 'whatsapp';
     }
     function applyTemplateFilter() {
         const ch = state.active?.channel || state.active?.provider || '';
@@ -4060,25 +4373,58 @@ Limits:
     $('#assign-btn')?.addEventListener('click', () => {
         const menu = $('#assign-menu');
         if (!menu) return;
+        // Re-check at click time: the CT panel's "Reassign" link forwards
+        // here, and the gates may not have run yet on a slow bootstrap.
+        if (!canAssignAtAll()) {
+            applyPermissionGates();
+            // Only say "not permitted" once bootstrap actually delivered the
+            // permission map — before that the inbox just hasn't loaded, and
+            // the load failure has already been toasted.
+            if (state.me) toast(t('You do not have permission to assign conversations.'), 'error');
+            return;
+        }
         menu.classList.toggle('hidden');
         if (menu.classList.contains('hidden')) return;
-        menu.innerHTML = `
+        const meId = state.me?.id;
+        if (canAssignAnyone()) {
+            menu.innerHTML = `
           <div class="menu-section">
-            <div class="font-mono text-[9.5px] uppercase tracking-wider text-ink-500 px-3 pt-2 pb-1">Teams</div>
-            ${state.teams.map(t => `<button data-assign-team="${t.id}" class="menu-item">${escape(t.name)} <span class="ml-auto text-[10px] text-ink-500">auto-assign</span></button>`).join('')}
-            <div class="font-mono text-[9.5px] uppercase tracking-wider text-ink-500 px-3 pt-2 pb-1 border-t border-paper-200">Members</div>
+            <div class="font-mono text-[9.5px] uppercase tracking-wider text-ink-500 px-3 pt-2 pb-1">${t('Teams')}</div>
+            ${state.teams.map(tm => `<button data-assign-team="${tm.id}" class="menu-item">${escape(tm.name)} <span class="ml-auto text-[10px] text-ink-500">${t('auto-assign')}</span></button>`).join('')}
+            <div class="font-mono text-[9.5px] uppercase tracking-wider text-ink-500 px-3 pt-2 pb-1 border-t border-paper-200">${t('Members')}</div>
             ${state.members.map(m => `<button data-assign-user="${m.id}" class="menu-item">${escape(m.name)} <span class="ml-auto text-[10px] text-ink-500">${escape(m.status || '')}</span></button>`).join('')}
             <div class="border-t border-paper-200"></div>
-            <button data-unassign class="menu-item text-accent-coral">Unassign</button>
+            <button data-unassign class="menu-item text-accent-coral">${t('Unassign')}</button>
           </div>`;
+        } else {
+            // Self-assign-only role: offer ONLY the action the server will
+            // accept. Picking a teammate here would 403, so it isn't offered.
+            const alreadyMine = meId && state.active?.assignee_user_id === meId;
+            menu.innerHTML = `
+          <div class="menu-section">
+            ${alreadyMine || !meId
+                ? `<div class="px-3 py-2 text-[11.5px] text-ink-500">${alreadyMine ? t('This chat is already assigned to you.') : t('Assignment is unavailable.')}</div>`
+                : `<button data-assign-user="${meId}" class="menu-item">${t('Assign to me')}</button>`}
+          </div>`;
+        }
         menu.querySelectorAll('[data-assign-team]').forEach(b => b.addEventListener('click', () => {
             const tid = parseInt(b.dataset.assignTeam, 10);
-            assign(null, tid, 'least_loaded');
+            // No strategy: the server applies the TEAM's configured
+            // assignment_strategy. Hardcoding least_loaded here is what made
+            // that setting (round_robin / sticky) unreachable from the UI.
+            assign(null, tid, null);
             menu.classList.add('hidden');
         }));
         menu.querySelectorAll('[data-assign-user]').forEach(b => b.addEventListener('click', () => {
             const uid = parseInt(b.dataset.assignUser, 10);
-            assign(uid, state.active?.assignee_team_id, 'manual');
+            // Echo the current team back ONLY when it is a live team of THIS
+            // workspace. A stale or foreign assignee_team_id (rows written
+            // before the endpoint validated its target) would otherwise fail
+            // the new tenancy rule and dead-end the reassign. Sending null is
+            // safe: AssignmentService keeps the existing team on null.
+            const curTeam  = state.active?.assignee_team_id ?? null;
+            const keepTeam = (state.teams || []).some(tm => tm.id === curTeam) ? curTeam : null;
+            assign(uid, keepTeam, 'manual');
             menu.classList.add('hidden');
         }));
         menu.querySelector('[data-unassign]')?.addEventListener('click', async () => {
@@ -4086,7 +4432,7 @@ Limits:
                 await api(`/team-inbox/api/conversations/${state.activeId}/unassign`, { method: 'POST' });
                 await loadActive(state.activeId);
                 await loadQueue(true);
-            } catch (e) { toast('Unassign failed: ' + e.message, 'error'); }
+            } catch (e) { toast(assignErrorText(e, t('Could not unassign this chat.')), 'error'); }
             menu.classList.add('hidden');
         });
     });
@@ -4167,15 +4513,60 @@ Limits:
             { v: 'gpt-4.1',                    l: 'GPT-4.1 (smartest)' },
         ],
         anthropic: [
-            { v: 'claude-haiku-4-5-20251001',  l: 'Claude Haiku 4.5 (fast)' },
-            { v: 'claude-sonnet-4-6',          l: 'Claude Sonnet 4.6 (smart)' },
-            { v: 'claude-opus-4-7',            l: 'Claude Opus 4.7 (smartest)' },
+            { v: 'claude-haiku-4-5',           l: 'Claude Haiku 4.5 (fast)' },
+            { v: 'claude-sonnet-5',            l: 'Claude Sonnet 5 (smart)' },
+            { v: 'claude-opus-5',              l: 'Claude Opus 5 (smartest)' },
+            { v: 'claude-opus-4-8',            l: 'Claude Opus 4.8' },
         ],
         gemini:    [
             { v: 'gemini-2.5-flash-lite',      l: 'Gemini 2.5 Flash-Lite (fast)' },
             { v: 'gemini-2.5-flash',           l: 'Gemini 2.5 Flash (balanced)' },
             { v: 'gemini-2.5-pro',             l: 'Gemini 2.5 Pro (smart)' },
         ],
+        mistral:   [
+            { v: 'mistral-small-latest',       l: 'Mistral Small (fast)' },
+            { v: 'mistral-large-latest',       l: 'Mistral Large (smart)' },
+            { v: 'codestral-latest',           l: 'Codestral (code)' },
+        ],
+        // OpenRouter — ONE key, 20 hand-picked models across every major lab.
+        openrouter: [
+            { v: 'anthropic/claude-opus-5',          l: 'Claude Opus 5 (Anthropic)' },
+            { v: 'anthropic/claude-sonnet-5',        l: 'Claude Sonnet 5 (Anthropic)' },
+            { v: 'anthropic/claude-haiku-4.5',       l: 'Claude Haiku 4.5 (Anthropic)' },
+            { v: 'openai/gpt-5.6',                   l: 'GPT-5.6 (OpenAI)' },
+            { v: 'openai/gpt-5.6-mini',              l: 'GPT-5.6 mini (OpenAI)' },
+            { v: 'openai/gpt-5.5',                   l: 'GPT-5.5 (OpenAI)' },
+            { v: 'openai/gpt-4.1',                   l: 'GPT-4.1 (OpenAI)' },
+            { v: 'openai/gpt-4o-mini',               l: 'GPT-4o mini (OpenAI)' },
+            { v: 'google/gemini-3.5-flash',          l: 'Gemini 3.5 Flash (Google)' },
+            { v: 'google/gemini-2.5-pro',            l: 'Gemini 2.5 Pro (Google)' },
+            { v: 'google/gemini-2.5-flash',          l: 'Gemini 2.5 Flash (Google)' },
+            { v: 'meta-llama/llama-4-maverick',      l: 'Llama 4 Maverick (Meta)' },
+            { v: 'meta-llama/llama-3.3-70b-instruct',l: 'Llama 3.3 70B (Meta)' },
+            { v: 'deepseek/deepseek-chat',           l: 'DeepSeek Chat' },
+            { v: 'deepseek/deepseek-r1',             l: 'DeepSeek R1 (reasoning)' },
+            { v: 'qwen/qwen-2.5-72b-instruct',       l: 'Qwen 2.5 72B' },
+            { v: 'mistralai/mistral-large',          l: 'Mistral Large' },
+            { v: 'mistralai/mistral-small',          l: 'Mistral Small' },
+            { v: 'x-ai/grok-4',                      l: 'Grok 4 (xAI)' },
+            { v: 'z-ai/glm-4.6',                     l: 'GLM 4.6 (Z.ai)' },
+        ],
+        // Native AI brands (OpenAI-compatible under the hood).
+        deepseek:   [{ v: 'deepseek-chat', l: 'DeepSeek Chat' }, { v: 'deepseek-reasoner', l: 'DeepSeek R1 (reasoning)' }],
+        xai:        [{ v: 'grok-4', l: 'Grok 4' }, { v: 'grok-4-fast', l: 'Grok 4 Fast' }, { v: 'grok-3', l: 'Grok 3' }],
+        perplexity: [{ v: 'sonar-pro', l: 'Sonar Pro' }, { v: 'sonar', l: 'Sonar' }, { v: 'sonar-reasoning-pro', l: 'Sonar Reasoning Pro' }],
+        groq:       [{ v: 'llama-3.3-70b-versatile', l: 'Llama 3.3 70B' }, { v: 'llama-4-maverick-17b-128e-instruct', l: 'Llama 4 Maverick' }, { v: 'moonshotai/kimi-k2-instruct', l: 'Kimi K2' }],
+        qwen:       [{ v: 'qwen-max', l: 'Qwen Max' }, { v: 'qwen-plus', l: 'Qwen Plus' }, { v: 'qwen-turbo', l: 'Qwen Turbo' }],
+        moonshot:   [{ v: 'kimi-k2-0905-preview', l: 'Kimi K2' }, { v: 'moonshot-v1-128k', l: 'Moonshot v1 128k' }, { v: 'moonshot-v1-32k', l: 'Moonshot v1 32k' }],
+        zai:        [{ v: 'glm-4.6', l: 'GLM 4.6' }, { v: 'glm-4.5', l: 'GLM 4.5' }, { v: 'glm-4.5-air', l: 'GLM 4.5 Air' }],
+        cohere:     [{ v: 'command-a-03-2025', l: 'Command A' }, { v: 'command-r-plus', l: 'Command R+' }, { v: 'command-r', l: 'Command R' }],
+        nvidia:     [{ v: 'meta/llama-3.3-70b-instruct', l: 'Llama 3.3 70B' }, { v: 'deepseek-ai/deepseek-r1', l: 'DeepSeek R1' }],
+        llama:      [{ v: 'Llama-4-Maverick-17B-128E-Instruct-FP8', l: 'Llama 4 Maverick' }, { v: 'Llama-3.3-70B-Instruct', l: 'Llama 3.3 70B' }],
+        huggingface:[{ v: 'meta-llama/Llama-3.3-70B-Instruct', l: 'Llama 3.3 70B' }, { v: 'deepseek-ai/DeepSeek-V3', l: 'DeepSeek V3' }],
+        baidu:      [{ v: 'ernie-4.5-turbo-128k', l: 'Ernie 4.5 Turbo' }, { v: 'ernie-4.5-8k', l: 'Ernie 4.5' }],
+        ai21:       [{ v: 'jamba-large', l: 'Jamba Large' }, { v: 'jamba-mini', l: 'Jamba Mini' }],
+        reka:       [{ v: 'reka-core', l: 'Reka Core' }, { v: 'reka-flash', l: 'Reka Flash' }],
+        yi:         [{ v: 'yi-lightning', l: 'Yi Lightning' }, { v: 'yi-large', l: 'Yi Large' }],
     };
 
     function renderAiAgentNav() {
@@ -4320,6 +4711,8 @@ Limits:
                 modelSel.value = want;
             }
             form.querySelector('[name="tone"]').value = agent.tone || 'professional';
+            const kbSel = form.querySelector('[name="knowledge_assistant_id"]');
+            if (kbSel) kbSel.value = agent.knowledge_assistant_id ? String(agent.knowledge_assistant_id) : '';
             form.querySelector('[name="system_prompt"]').value = agent.system_prompt || '';
             form.querySelector('[name="max_tokens"]').value = agent.max_tokens || 512;
             form.querySelector('[name="temperature"]').value = agent.temperature || 7;
@@ -4464,6 +4857,8 @@ Limits:
             name:          fd.get('name'),
             provider:      fd.get('provider'),
             model:         fd.get('model'),
+            // Link to a trained /ai-training assistant (blank = none).
+            knowledge_assistant_id: (fd.get('knowledge_assistant_id') || '') === '' ? null : parseInt(fd.get('knowledge_assistant_id'), 10),
             tone:          fd.get('tone'),
             system_prompt: fd.get('system_prompt'),
             max_tokens:    parseInt(fd.get('max_tokens') || '512', 10),
@@ -4539,6 +4934,14 @@ Limits:
             return;
         }
         const providerLabel = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', muse: 'Muse' };
+        const providerLabel = {
+            openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', mistral: 'Mistral',
+            deepseek: 'DeepSeek', xai: 'xAI (Grok)', perplexity: 'Perplexity', groq: 'Groq',
+            qwen: 'Alibaba Qwen', moonshot: 'Moonshot (Kimi)', zai: 'Z.ai (GLM)', cohere: 'Cohere',
+            nvidia: 'NVIDIA', llama: 'Meta Llama', huggingface: 'Hugging Face', baidu: 'Baidu (Ernie)',
+            ai21: 'AI21 (Jamba)', reka: 'Reka', yi: '01.AI (Yi)', openrouter: 'OpenRouter',
+            elevenlabs: 'ElevenLabs', deepgram: 'Deepgram',
+        };
         list.innerHTML = keys.map(k => `
             <div class="flex items-center gap-2 py-2 border-b border-paper-200 last:border-0">
                 <span class="font-mono text-[11.5px] text-ink-700 flex-1">${escape(providerLabel[k.provider] || k.provider)}</span>
@@ -4711,6 +5114,9 @@ Limits:
             if (Array.isArray(data)) state.tags = data;
             await loadActive(state.activeId);
             renderLabelPicker();
+            // Refresh the left queue so the new label's pill shows on the chat
+            // rows + in the label filter without a full-window refresh (#43).
+            loadQueue(true);
             toast(`Labeled "${name}".`, 'ok');
         } catch (err) {
             toast('Create failed: ' + err.message, 'error');
@@ -4763,6 +5169,7 @@ Limits:
                 state.active.tags = (state.active.tags || []).filter(t => t.id !== applied.id);
             }
             renderActive();   // redraw tag chips only — thread DOM stays put
+            loadQueue(true);  // refresh the left list's tag pills in the background (#43)
             toast(turningOn ? `Labeled "${name}".` : `Removed "${name}".`, 'success');
         } catch (err) {
             btn.classList.toggle('on', !turningOn);   // revert optimistic flip
@@ -4799,6 +5206,18 @@ Limits:
         add('Phone', p.mobile);
         add('Language', p.language);
         add('Address', p.address);
+
+        // Click-to-WhatsApp attribution — the ad that started this conversation.
+        // Thread-level first (conversation.ctwa, captured on the ad tap), falling
+        // back to the contact's own stored first-touch so an older customer still
+        // shows where they originally came from.
+        // This file has no module-level t(); it uses the window.t guard inline.
+        const tr = (str) => (window.t ? window.t(str) : str);
+        const ctwa = state.active?.ctwa || p.attribution?.first || null;
+        if (ctwa && (ctwa.source_id || ctwa.ctwa_clid)) {
+            add(tr('Came from'), ctwa.source_type === 'post' ? tr('Facebook post') : tr('Click-to-WhatsApp ad'));
+            add(tr('Ad'), ctwa.headline || ctwa.source_id);
+        }
         const ca = p.custom_attributes || {};
         Object.keys(ca).forEach(k => {
             const nice = k.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -4832,9 +5251,17 @@ Limits:
     // side, so all this code no-ops on plans without AI.
     let aiSuggestText = '';
     let aiSuggestConv = null;   // last conversation the bar was reset for
+    let aiSuggestDismissedConv = null;   // conversation whose AI bar the operator closed via ×
     function aiSuggestReset() {
         const bar = document.getElementById('ti-aibar');
         if (!bar) return;
+        // Respect a manual dismiss (×): never re-open the bar for a conversation
+        // the operator closed it on. Without this, the 3s poll's reset re-showed
+        // it, so the × looked like it did nothing.
+        if (aiSuggestDismissedConv !== null && aiSuggestDismissedConv === state.activeId) {
+            bar.classList.add('hidden');
+            return;
+        }
         aiSuggestText = '';
         bar.classList.remove('hidden');
         const t = document.getElementById('ti-aibar-text');
@@ -4870,10 +5297,20 @@ Limits:
                 $use()?.classList.remove('hidden');
             } catch (e) {
                 const msg = e.status === 403 ? 'AI agents are not in your plan.'
-                          : e.status === 422 ? 'No active AI agent to draft from.'
-                          : 'Could not generate a suggestion.';
+                          : e.status === 422 ? 'No active AI agent to draft from. Add one under AI Agents.'
+                          : e.status === 502 ? 'The AI provider did not return a reply — check the AI key for this agent.'
+                          : e.status ? `Could not generate a suggestion (error ${e.status}).`
+                          : 'Could not reach the server. Check your connection and retry.';
                 toast(msg, 'error');
+                // Also write the reason INTO the bar. The bar is always on
+                // screen next to the button the operator just pressed, so the
+                // failure can't be missed the way a corner toast can -- and
+                // aiSuggestReset() below would otherwise wipe it straight back
+                // to "Draft a reply for this conversation", which reads as
+                // "nothing happened" rather than "this failed".
                 aiSuggestReset();
+                const t = $text();
+                if (t) t.textContent = msg;
             } finally {
                 suggestBtn.disabled = false;
                 suggestBtn.textContent = label;
@@ -4894,7 +5331,7 @@ Limits:
                 $bar()?.classList.add('hidden');
                 return;
             }
-            if (e.target.closest('#ti-aibar-x')) { e.preventDefault(); $bar()?.classList.add('hidden'); return; }
+            if (e.target.closest('#ti-aibar-x')) { e.preventDefault(); aiSuggestDismissedConv = state.activeId; $bar()?.classList.add('hidden'); return; }
         });
 
     })();
@@ -5044,7 +5481,7 @@ Limits:
             } else if (data.existing_user) {
                 result.innerHTML = `
                   <div class="font-semibold mb-1">${escape(data.member.name)} added.</div>
-                  <div class="text-[11.5px]">This email already has a WaDesk account, so they sign in with their <strong>existing password</strong>. If they’ve forgotten it, use the <strong>Reset password</strong> action on their row.</div>
+                  <div class="text-[11.5px]">This email already has a ${(window.WADESK_BRAND && window.WADESK_BRAND.appName) || 'WaDesk'} account, so they sign in with their <strong>existing password</strong>. If they’ve forgotten it, use the <strong>Reset password</strong> action on their row.</div>
                   <div class="font-mono text-[11.5px] bg-paper-0 border border-paper-200 rounded px-2 py-1.5 mt-1.5 select-all">
                     Email: ${escape(data.member.email)}
                   </div>`;
@@ -5596,6 +6033,10 @@ Limits:
     ];
     const ACTION_TYPES = [
         { v: 'assign_team',    l: 'Assign to team' },
+        // The engine has handled assign_user since day one (RoutingEngine's
+        // action switch); the builder just never offered it, so the action
+        // was unauthorable from the UI.
+        { v: 'assign_user',    l: 'Assign to member' },
         { v: 'assign_agent',   l: 'Assign AI agent' },
         { v: 'set_priority',   l: 'Set priority' },
         { v: 'add_tag',        l: 'Add tag' },
@@ -5756,6 +6197,12 @@ Limits:
                 const opts = (state.teams||[]).map(t => `<option value="${t.id}" ${String(val)===String(t.id)?'selected':''}>${escape(t.name)}</option>`).join('');
                 return `<select class="act-value flex-1 min-w-[150px] px-2 py-1 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep"><option value="">— team —</option>${opts}</select>`;
             }
+            if (type === 'assign_user') {
+                // Same picker shape as assign_team, fed from the workspace
+                // member list bootstrap already ships.
+                const opts = (state.members||[]).map(m => `<option value="${m.id}" ${String(val)===String(m.id)?'selected':''}>${escape(m.name || m.email || ('#' + m.id))}</option>`).join('');
+                return `<select class="act-value flex-1 min-w-[150px] px-2 py-1 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep"><option value="">— member —</option>${opts}</select>`;
+            }
             if (type === 'assign_agent') {
                 const opts = (state.aiAgents||[]).map(ag => `<option value="${ag.id}" ${String(val)===String(ag.id)?'selected':''}>${escape(ag.name)}</option>`).join('');
                 return `<select class="act-value flex-1 min-w-[150px] px-2 py-1 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep"><option value="">— agent —</option>${opts}</select>`;
@@ -5812,7 +6259,7 @@ Limits:
         const isComposite = ['set_escalation', 'auto_reply', 'trigger_flow'].includes(initialType);
         const initialVal  = isComposite
             ? a
-            : (a.team_id || a.agent_id || a.value || a.name || '');
+            : (a.team_id || a.user_id || a.agent_id || a.value || a.name || '');
         row.innerHTML = `
             <select class="act-type px-2 py-1 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep flex-1 min-w-[150px]">${tOpts}</select>
             <div class="act-value-wrap flex-1 min-w-[150px]">${buildValInput(initialType, initialVal)}</div>
@@ -5997,6 +6444,7 @@ Limits:
             const val  = row.querySelector('.act-value')?.value;
             const a = { type };
             if (type === 'assign_team')  a.team_id  = parseInt(val, 10) || null;
+            else if (type === 'assign_user')  a.user_id  = parseInt(val, 10) || null;
             else if (type === 'assign_agent') a.agent_id = parseInt(val, 10) || null;
             else if (type === 'set_priority') a.value = val;
             else if (type === 'add_tag') a.name = val;
@@ -6022,6 +6470,7 @@ Limits:
         let invalidMsg = null;
         for (const a of actions) {
             if (a.type === 'assign_team'  && !a.team_id)  { invalidMsg = 'assign_team needs a team'; break; }
+            if (a.type === 'assign_user'  && !a.user_id)  { invalidMsg = 'assign_user needs a member'; break; }
             if (a.type === 'assign_agent' && !a.agent_id) { invalidMsg = 'assign_agent needs an AI agent'; break; }
             if (a.type === 'add_tag'      && !a.name)     { invalidMsg = 'add_tag needs a tag name'; break; }
             if (a.type === 'auto_reply'   && !a.template_id && !a.body) {
@@ -6038,8 +6487,12 @@ Limits:
             toast('Incomplete action: ' + invalidMsg + '.', 'error');
             return;
         }
-        if (conditions.length === 0) {
-            toast('Add at least one condition.', 'error');
+        // A fallback rule means "if nothing else matched", so it is allowed to
+        // carry zero conditions — requiring one made a true catch-all rule
+        // impossible to author. Every other rule still needs at least one.
+        const isFallback = form.querySelector('[name="is_fallback"]')?.checked ? 1 : 0;
+        if (conditions.length === 0 && !isFallback) {
+            toast('Add at least one condition, or mark this rule as the fallback.', 'error');
             return;
         }
         if (actions.length === 0) {
@@ -6052,7 +6505,7 @@ Limits:
             conditions,
             actions,
             stop_on_match: form.querySelector('[name="stop_on_match"]')?.checked ? 1 : 0,
-            is_fallback:   form.querySelector('[name="is_fallback"]')?.checked ? 1 : 0,
+            is_fallback:   isFallback,
             is_active:     form.querySelector('[name="is_active"]')?.checked ? 1 : 0,
         };
         const submit = $('#routing-form-submit');
@@ -7071,3 +7524,69 @@ function initTeamInboxPush() {
         }
     })();
 }
+
+// ── Rail feature overflow ────────────────────────────────────────────────
+// The dark rail stacks channel filters (top) + feature icons. As more channels
+// connect, the channel block grows; this keeps the feature icons that FIT
+// inline in the rail and moves the overflow into the Tools flyout
+// (#ti-rl-tools), recomputing on load, resize, and whenever the channel row
+// changes. So the rail never overflows, and features spill into Tools ONLY when
+// there isn't room — exactly as many as fit stay visible. We only re-parent the
+// SAME nodes between #ti-rl-nav and #ti-rl-nav-pop, so every id/handler survives.
+(function () {
+    const rail     = document.querySelector('.ti-rail-omni');
+    const nav      = document.getElementById('ti-rl-nav');
+    const pop      = document.getElementById('ti-rl-nav-pop');
+    const tools    = document.getElementById('ti-rl-tools');
+    const channels = document.getElementById('ti-rail-channels');
+    if (!rail || !nav || !pop || !tools) return;
+
+    // Feature nodes in their authored order — captured once (skip hidden stubs
+    // like the all-teams reset button so they never take a visible slot).
+    const ITEMS  = [...nav.children].filter(el => !el.classList.contains('hidden'));
+    const ITEM_H = 45;   // 40px button + 5px column gap
+
+    // Fixed height already claimed BELOW the feature nav (invite / back / …).
+    // The flex-filler spacer and display:none stubs are excluded — only real,
+    // visible bottom buttons count.
+    function bottomReserve() {
+        let h = 0;
+        for (let n = nav.nextElementSibling; n; n = n.nextElementSibling) {
+            if (n === tools || n.classList.contains('ti-rl-sp') || n.offsetParent === null) continue;
+            h += n.offsetHeight + 5;
+        }
+        return h;
+    }
+
+    function relayout() {
+        // Clean slate: pull everything back inline, close + hide Tools, measure.
+        ITEMS.forEach(el => nav.appendChild(el));
+        tools.hidden = true;
+        tools.removeAttribute('open');
+
+        const cs   = getComputedStyle(rail);
+        const pad  = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+        const chH  = channels ? channels.offsetHeight : 0;
+        const div  = rail.querySelector('.ti-rl-div');
+        const divH = div ? div.offsetHeight + 10 : 12;
+        const avail = rail.clientHeight - pad - chH - divH - bottomReserve();
+        if (avail <= 0) return;   // rail not laid out yet — a later pass will fix it
+
+        let fit = Math.floor(avail / ITEM_H);
+        if (fit >= ITEMS.length) return;                 // all fit → Tools stays hidden
+
+        // Overflow: the Tools button itself costs one slot.
+        fit = Math.max(1, Math.floor((avail - ITEM_H) / ITEM_H));
+        ITEMS.slice(fit).forEach(el => pop.appendChild(el));
+        tools.hidden = pop.children.length === 0;
+    }
+
+    let raf = 0;
+    const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(relayout); };
+
+    window.addEventListener('resize', schedule);
+    if (channels) new MutationObserver(schedule).observe(channels, { childList: true });
+    schedule();                       // first paint
+    setTimeout(relayout, 300);        // after channel icons render
+    setTimeout(relayout, 900);        // safety pass once fonts/layout settle
+})();

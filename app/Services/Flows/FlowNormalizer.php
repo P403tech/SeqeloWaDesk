@@ -62,6 +62,8 @@ class FlowNormalizer
         'subflow'          => 'SubFlow',
         'assign'           => 'AssignAgent',
         'tag'              => 'TagContact',
+        'task'             => 'Task',
+        'contact_update'   => 'ContactUpdate',
         // Commerce nodes — single dispatcher handles all three at runtime
         // (WABA conv → product_list / product native; Baileys → card stack
         // + checkout-link). The TYPE_MAP value tells the Node executor
@@ -101,6 +103,9 @@ class FlowNormalizer
      */
     public const PORT_MAP = [
         'condition' => ['yes' => 1, 'no' => 2],
+        // Wait node in "reply" mode: resume (they replied) = port 1 (the default
+        // continue path, same as duration mode's 'out'); timeout = port 2.
+        'delay'     => ['resume' => 1, 'timeout' => 2],
         'book_appointment' => ['booked' => 1, 'no_slots' => 2],
         // Commerce nodes — purchased port fires when the provider's
         // order.created webhook lands and pings Node; abandoned port
@@ -363,8 +368,31 @@ class FlowNormalizer
                 if ($name !== '') {
                     if ($tpl) {
                         $out['templateId']       = (int) $tpl->id;
+                        $out['templateName']     = (string) ($tpl->template_name ?? $name);
+                        // meta_template_id is Meta's registered id — the ONLY reliable
+                        // signal the template is Meta-APPROVED. The Node flow runtime
+                        // keys on this to send a proper `type:template` payload (which
+                        // delivers ANYTIME) instead of degrading to `interactive`
+                        // (which Meta only delivers inside the 24h window → the
+                        // "flow ran, marked sent, but recipient got nothing" bug).
+                        $out['templateMetaId']   = (string) ($tpl->meta_template_id ?? '');
                         $out['templateBody']     = (string) ($tpl->template_body ?? '');
                         $out['templateHeader']   = (string) ($tpl->header ?? '');
+                        // Header FORMAT + media so the flow send can include the
+                        // required `header` component (Meta rejects a header-bearing
+                        // template with #132012 "header component parameter should
+                        // not be empty" when it's omitted). TEXT header → text param;
+                        // IMAGE/VIDEO/DOCUMENT → media link from header_sample_url.
+                        // Mirrors what TemplatePayloadBuilder does for campaigns.
+                        $out['templateHeaderFormat']   = strtoupper((string) ($tpl->attachment_type ?: 'TEXT'));
+                        // Media header link — SAME source the campaign/broadcast path
+                        // uses (TemplatePayloadBuilder::buildHeader): the template's own
+                        // stored sample media (attachment_file → public media_url),
+                        // falling back to header_sample_url. A media header MUST carry
+                        // this or Meta rejects the send with #132012.
+                        $out['templateHeaderMediaUrl'] = !empty($tpl->attachment_file)
+                            ? (string) media_url($tpl->attachment_file)
+                            : (string) ($tpl->header_sample_url ?? '');
                         $out['templateFooter']   = (string) ($tpl->footer ?? '');
                         $out['templateLanguage'] = (string) ($tpl->language ?? 'en');
                         $out['templateCategory'] = (string) ($tpl->category ?? '');
@@ -436,6 +464,10 @@ class FlowNormalizer
                 // not the literal "{{name}}" key — else {{name}} downstream reads
                 // the seeded profile name and a Sheets column repeats it forever.
                 $out['variable'] = self::cleanVar($data['var'] ?? null, 'answer');
+                // Accept a media upload as the answer (Phase 3). flowService reads
+                // node.acceptMedia to capture the customer's file as a stored URL
+                // instead of treating a media-only reply as empty text.
+                $out['acceptMedia'] = (bool) ($data['acceptMedia'] ?? false);
                 // Expected answers (stored in `options[]` so the field
                 // shape matches buttons/list) — when set, the Node
                 // runtime should try to match the customer's reply
@@ -488,10 +520,28 @@ class FlowNormalizer
                     'sec', 'second', 'seconds' => 1,
                     'min', 'minute', 'minutes' => 60,
                     'hour', 'hours'            => 3600,
+                    'week', 'weeks'            => 604800,
+                    'month', 'months'          => 2592000,
+                    'year', 'years'            => 31536000,
                     'day', 'days'              => 86400,
                     default                    => 60,
                 };
                 $out['delaySeconds'] = $amt * $mult;
+                // Wait mode: 'duration' (default) or 'reply' (park until the
+                // customer replies, with an optional timeout → the 'timeout' port).
+                $out['eventType'] = ($data['eventType'] ?? 'duration') === 'reply' ? 'reply' : 'duration';
+                if ($out['eventType'] === 'reply') {
+                    $tUnit = (string) ($data['timeoutUnit'] ?? 'hour');
+                    $tAmt  = (int) ($data['timeoutAmount'] ?? 0);
+                    $tMult = match ($tUnit) {
+                        'sec', 'second', 'seconds' => 1,
+                        'min', 'minute', 'minutes' => 60,
+                        'hour', 'hours'            => 3600,
+                        'day', 'days'              => 86400,
+                        default                    => 3600,
+                    };
+                    $out['timeoutSeconds'] = max(0, $tAmt * $tMult);
+                }
                 break;
 
             case 'webhook':
@@ -560,6 +610,41 @@ class FlowNormalizer
                 $out['action'] = strtolower((string) ($data['action'] ?? 'add')) === 'remove' ? 'remove' : 'add';
                 $out['tagId']  = (string) ($data['tagId'] ?? '');
                 $out['tag']    = (string) ($data['tag']   ?? '');
+                break;
+
+            case 'task':
+                // "Create task" — follow-up work an agent actually sees, instead
+                // of a flow ending with a note nobody reads. Pairs with the
+                // `task_due` trigger, which fires when the date below arrives.
+                $out['title']       = (string) ($data['title'] ?? '');
+                $out['notes']       = (string) ($data['notes'] ?? '');
+                $out['assigneeId']  = (string) ($data['assigneeId'] ?? '');
+                $out['priority']    = in_array(($data['priority'] ?? 'medium'), ['low', 'medium', 'high'], true)
+                    ? (string) $data['priority'] : 'medium';
+                $out['relatedType'] = in_array(($data['relatedType'] ?? ''), ['contact', 'deal', 'company'], true)
+                    ? (string) $data['relatedType'] : '';
+                // Flatten the builder's {amount, unit} into ONE scalar here, so
+                // the Node executor never has to know the unit vocabulary — the
+                // same lesson the TimeDelay node learned when `delay` + `unit`
+                // both read as undefined at runtime and every wait became 0ms.
+                $amount = max(0, (int) ($data['dueInAmount'] ?? 0));
+                $unit   = strtolower((string) ($data['dueInUnit'] ?? 'days'));
+                $mult   = str_starts_with($unit, 'min') ? 60
+                    : (str_starts_with($unit, 'hour') ? 3600 : 86400);
+                $out['dueInSeconds'] = $amount > 0 ? $amount * $mult : null;
+                break;
+
+            case 'contact_update':
+                // "Update contact" — writes what the flow learned back onto the
+                // contact. Rows are {key, value}; value may carry {{vars}} and is
+                // substituted at runtime. Blank keys are dropped here so the Node
+                // executor never posts an empty field.
+                $rows = is_array($data['fields'] ?? null) ? $data['fields'] : [];
+                $out['fields'] = array_values(array_filter(array_map(function ($r) {
+                    $key = trim((string) ($r['key'] ?? ''));
+                    if ($key === '') return null;
+                    return ['key' => $key, 'value' => (string) ($r['value'] ?? '')];
+                }, $rows)));
                 break;
 
             case 'whatsapp_shop':
@@ -794,6 +879,16 @@ class FlowNormalizer
                 break;
         }
 
+        // Node-level keyword JUMP — hoisted for EVERY node type so a typed
+        // keyword can jump straight to this node mid-flow (matchKeywordJump in
+        // the runtime reads node.kwJump). Off by default → zero effect unless the
+        // operator enabled it on this node.
+        $out['kwJump'] = [
+            'enabled'  => (bool) ($data['kw_jump_enabled'] ?? false),
+            'keywords' => (string) ($data['kw_jump_keywords'] ?? ''),
+            'match'    => ($data['kw_jump_match'] ?? 'contains') === 'exact' ? 'exact' : 'contains',
+        ];
+
         return $out;
     }
 
@@ -807,6 +902,10 @@ class FlowNormalizer
     {
         $u = trim($u);
         if ($u === '') return '';
+        // A dynamic {{var}} URL (e.g. {{invoice_url}}) is resolved Node-side at
+        // send time — leave it untouched so url() doesn't URL-encode the braces
+        // into a dead "https://host/%7B%7Binvoice_url%7D%7D" path.
+        if (str_contains($u, '{{')) return $u;
         if (preg_match('#^https?://#i', $u)) return $u;
         return url($u);
     }

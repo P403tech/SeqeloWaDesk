@@ -18,8 +18,15 @@ class WpCampaignContact extends Model
 
     protected $table = 'wp_campaign_contacts';
 
+    /**
+     * How long a claim is trusted before another worker may take the row.
+     * Longer than any single send, short enough that a killed worker's
+     * recipients are retried in minutes rather than stranded.
+     */
+    public const CLAIM_TTL_SECONDS = 600;
+
     protected $fillable = [
-        'campaign_id', 'contact_id', 'variant', 'status',
+        'campaign_id', 'contact_id', 'variant', 'status', 'claimed_at',
         'send_attempts', 'next_attempt_at',
         'phone_number', 'recipient_name',
         'whatsapp_message_id', 'tracking_id',

@@ -243,21 +243,29 @@
                     $__walletMoney = \App\Support\FormatSettings::display(
                         (int) round(((int) ($walletCredits ?? 0)) * \App\Services\MessageCreditRate::minorPerCredit()) / 100
                     );
+                    // Shrink the balance to fit the card when the value is long
+                    // ("$199,999.00" overflowed the fixed-width card at 52px).
+                    $__wLen  = mb_strlen((string) $__walletMoney);
+                    $__wSize = $__wLen <= 9  ? 'text-[40px] md:text-[52px]'
+                             : ($__wLen <= 12 ? 'text-[28px] md:text-[38px]'
+                             : 'text-[22px] md:text-[28px]');
                 @endphp
                 <div class="relative">
                     <div class="flex items-start justify-between">
                         <span
                             class="mono font-mono text-[10px] uppercase tracking-widest text-paper-0/60">{{ __('Wallet balance') }}</span>
-                        <span
-                            class="pill inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-paper-0/15 text-paper-0">{{ __('pay per message') }}</span>
+                        @if (\App\Services\MessageBillingService::payPerMessageFor(auth()->user()?->currentWorkspace))
+                            <span
+                                class="pill inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-paper-0/15 text-paper-0">{{ __('pay per message') }}</span>
+                        @endif
                     </div>
-                    <div class="mt-4 flex items-baseline gap-2">
+                    <div class="mt-4 flex items-baseline gap-2 min-w-0">
                         <span
-                            class="serif font-serif font-normal tracking-[-0.01em] text-[40px] md:text-[52px] leading-none tabular tabular-nums">{{ $__walletMoney }}</span>
+                            class="serif font-serif font-normal tracking-[-0.01em] {{ $__wSize }} leading-none tabular tabular-nums whitespace-nowrap max-w-full">{{ $__walletMoney }}</span>
                     </div>
                     <div class="mt-3 flex items-center justify-end text-[11px] text-paper-0/70">
                         <a href="{{ url('/account?tab=affiliate') }}"
-                            class="hover:underline">{{ __('Earn via affiliate →') }}</a>
+                            class="hover:underline">{{ __('Refer & Earn →') }}</a>
                     </div>
                     <div class="mt-3 h-1 rounded-full bg-paper-0/15 overflow-hidden">
                         <div class="h-full bg-wa-green"

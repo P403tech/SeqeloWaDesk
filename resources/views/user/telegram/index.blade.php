@@ -156,7 +156,9 @@
                                 {{ __('Connect Account') }}
                                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
                             </button>
-                            <span class="text-[11px] text-ink-400 ml-3">{{ __('Optional — needs a Telegram API id/hash in Admin settings.') }}</span>
+                            @if (auth()->user()?->isAdmin())
+                                <span class="text-[11px] text-ink-400 ml-3">{{ __('Optional — needs a Telegram API id/hash in Admin → Channel Settings.') }}</span>
+                            @endif
                         </div>
                     @endif
                 </div>
@@ -392,9 +394,14 @@
                         </form>
                     </div>
                 </div>
-                <div class="mt-3 pt-3 border-t border-paper-100 text-[11px] text-ink-400">
-                    {{ __('Both need a Telegram API id/hash on the server (set in Admin → :brand Message, from my.telegram.org).', ['brand' => brand_name()]) }}
-                </div>
+                {{-- Setup hint is for the operator who configures the server, not the
+                     end user — gate it to admins so the workspace portal never exposes
+                     an internal admin path. --}}
+                @if (auth()->user()?->isAdmin())
+                    <div class="mt-3 pt-3 border-t border-paper-100 text-[11px] text-ink-400">
+                        {{ __('Both need a Telegram API id/hash on the server (set in Admin → Channel Settings, from my.telegram.org).') }}
+                    </div>
+                @endif
             </div>
         </div>
     </div>

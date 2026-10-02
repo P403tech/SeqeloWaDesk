@@ -7,6 +7,20 @@
             brand_name(),
             false,
         );
+
+        // Brand mark, in order of preference:
+        //   1. the admin's uploaded LOGO  → shown on its own (it already carries
+        //      the wordmark, so repeating the name beside it reads as a stutter)
+        //   2. the uploaded FAVICON       → icon + brand name
+        //   3. the bundled default mark   → icon + brand name
+        //
+        // Every lookup is wrapped: these settings live in the database, and this
+        // layout renders the 500 page that a DB outage itself produces. An
+        // unguarded SystemSetting::get() here would throw inside the error
+        // handler and turn a readable 500 into a blank white page.
+        $__brandLogo = rescue(fn() => \App\Support\Brand::logoUrl(), null, false);
+        $__brandIcon = rescue(fn() => \App\Support\Brand::faviconUrl(), null, false)
+            ?: asset('images/brand-mark.png');
     @endphp
 
     <div class="min-h-screen flex items-center justify-center px-6 py-10 relative overflow-hidden">
@@ -22,9 +36,14 @@
 
             {{-- Top brand --}}
             <a href="{{ url('/') }}" class="inline-flex items-center gap-2 mb-7">
-                <img src="{{ asset('images/brand-mark.png') }}" alt="{{ $__brandName }}"
-                    class="w-9 h-9 rounded-md object-contain" />
-                <span class="font-serif text-[24px] tracking-[-0.01em]">{{ $__brandName }}</span>
+                @if ($__brandLogo)
+                    <img src="{{ $__brandLogo }}" alt="{{ $__brandName }}"
+                        class="h-9 max-w-[220px] w-auto object-contain" />
+                @else
+                    <img src="{{ $__brandIcon }}" alt="{{ $__brandName }}"
+                        class="w-9 h-9 rounded-md object-contain" />
+                    <span class="font-serif text-[24px] tracking-[-0.01em]">{{ $__brandName }}</span>
+                @endif
             </a>
 
             {{-- Big error code --}}

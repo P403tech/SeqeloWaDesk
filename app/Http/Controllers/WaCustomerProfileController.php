@@ -68,8 +68,32 @@ class WaCustomerProfileController extends Controller
 
     public function destroy(int $id): RedirectResponse
     {
-        $wsId = (int) Auth::user()->current_workspace_id;
-        WaCustomerProfile::forWorkspace($wsId)->whereKey($id)->delete();
-        return back()->with('success', __('Customer removed.'));
+        $wsId    = (int) Auth::user()->current_workspace_id;
+        $profile = WaCustomerProfile::forWorkspace($wsId)->whereKey($id)->first();
+        if (!$profile) {
+            return back()->with('success', __('Customer removed.'));
+        }
+
+        // Cascade: remove this shopper's orders too, so the Orders list stops
+        // showing a customer we just deleted. Orders link to a customer only by
+        // phone (no FK). The profile stores digits-only, but WaOrder.customer_phone
+        // may carry formatting (+, spaces) — pre-filter on the trailing digits in
+        // SQL, then confirm an exact digits match in PHP before deleting. Order
+        // line items are removed automatically (wa_order_items.order_id cascade).
+        $digits = WaCustomerProfile::digits((string) $profile->phone);
+        if ($digits !== '') {
+            $tail = substr($digits, -9);
+            \App\Models\WaOrder::forWorkspace($wsId)
+                ->where('customer_phone', 'like', "%{$tail}")
+                ->get()
+                ->each(function (\App\Models\WaOrder $order) use ($digits) {
+                    if (WaCustomerProfile::digits((string) $order->customer_phone) === $digits) {
+                        $order->delete();
+                    }
+                });
+        }
+
+        $profile->delete();
+        return back()->with('success', __('Customer and their orders removed.'));
     }
 }

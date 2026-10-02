@@ -150,7 +150,7 @@ class FlowsController extends Controller
         // uses its stored flow_type.
         $flowType = $flow
             ? ($flow->flow_type ?: 'chat')
-            : (in_array($request->string('type')->toString(), ['call', 'instagram', 'facebook', 'tiktok', 'telegram'], true) ? $request->string('type')->toString() : 'chat');
+            : (in_array($request->string('type')->toString(), ['call', 'instagram', 'facebook', 'tiktok', 'telegram', 'line', 'wechat', 'viber', 'email', 'webchat'], true) ? $request->string('type')->toString() : 'chat');
         return view('user.flows.builder', [
             'flow'      => $flow,
             'flowType'  => $flowType,
@@ -263,7 +263,7 @@ class FlowsController extends Controller
             'workspace_id' => $wsId,
             'flow_name'    => ($meta['name'] ?: 'Imported flow') . ' (imported)',
             'flow_data'    => json_encode($flowData),
-            'flow_type'    => in_array($meta['flow_type'], ['chat', 'call', 'instagram', 'facebook', 'tiktok', 'telegram'], true) ? $meta['flow_type'] : 'chat',
+            'flow_type'    => in_array($meta['flow_type'], ['chat', 'call', 'instagram', 'facebook', 'tiktok', 'telegram', 'line', 'wechat', 'viber', 'email', 'webchat'], true) ? $meta['flow_type'] : 'chat',
             'category'     => $meta['category'],
             'is_published' => false,
             'is_active'    => true,
@@ -303,7 +303,7 @@ class FlowsController extends Controller
             'workspace_id' => $wsId,
             'flow_name'    => $tpl->name,
             'flow_data'    => json_encode($flowData),
-            'flow_type'    => in_array($tpl->flow_type, ['chat', 'call', 'instagram', 'facebook', 'tiktok', 'telegram'], true) ? $tpl->flow_type : 'chat',
+            'flow_type'    => in_array($tpl->flow_type, ['chat', 'call', 'instagram', 'facebook', 'tiktok', 'telegram', 'line', 'wechat', 'viber', 'email', 'webchat'], true) ? $tpl->flow_type : 'chat',
             'category'     => $tpl->category,
             'is_published' => false,
             'is_active'    => true,
@@ -515,7 +515,10 @@ class FlowsController extends Controller
             'flow_data' => 'required|array',
             'flow_id'   => 'nullable|integer',
             'category'  => 'nullable|string|max:64',
-            'flow_type' => 'nullable|in:chat,call,instagram,facebook,tiktok,telegram',
+            // line/wechat/viber were missing here (registration-lag bug): the
+            // builder posts the flow_type it was opened with, so a missing entry
+            // 422s the save for that whole channel. Keep IN SYNC with builder().
+            'flow_type' => 'nullable|in:chat,call,instagram,facebook,tiktok,telegram,line,wechat,viber,email,webchat',
         ]);
         if ($validator->fails()) {
             return response()->json([
@@ -537,13 +540,40 @@ class FlowsController extends Controller
                 if (!$flow) {
                     return response()->json(['success' => false, 'message' => 'Flow not found'], 404);
                 }
+                // If this flow is already PUBLISHED and the edit points its
+                // group_join trigger at a group another published flow owns,
+                // block it — one group triggers only one live flow.
+                if ($flow->is_published) {
+                    $clash = $this->groupTriggerClash(
+                        (int) $flow->workspace_id, (int) $flow->id,
+                        (string) ($triggerCols['trigger_kind'] ?? ''), $triggerCols['trigger_value'] ?? null,
+                    );
+                    if ($clash) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'This group already triggers the published flow "' . $clash->flow_name . '". A group can trigger only one flow at a time — unpublish that flow or pick a different group.',
+                        ], 422);
+                    }
+                }
                 $flow->fill([
                     'flow_name' => $request->string('flow_name')->toString(),
                     'flow_data' => json_encode($flowData),
                     'category'  => $request->string('category')->toString() ?: $flow->category,
                     'flow_type' => $request->string('flow_type')->toString() ?: ($flow->flow_type ?: 'chat'),
                 ] + $triggerCols)->save();
-                Log::info('Flow updated', ['flow_id' => $flow->id]);
+                $flow->refresh();
+                Log::info('[FLOW-SAVE] updated', [
+                    'flow_id'      => $flow->id,
+                    'flow_name'    => $flow->flow_name,
+                    'user_id'      => $flow->user_id,
+                    'workspace_id' => $flow->workspace_id,
+                    'flow_type'    => $flow->flow_type,
+                    'is_active'    => (bool) $flow->is_active,     // auto-reply picker needs TRUE
+                    'is_published' => (bool) $flow->is_published,
+                    // Auto-reply lists flows where is_active AND user_id ∈ workspace
+                    // members — log both so a missing flow is explainable.
+                    'appears_in_autoreply_if' => 'is_active=true AND user_id in workspace members',
+                ]);
             } else {
                 // Plan limit — create only, edits don't count toward the cap.
                 // Plan limit per-workspace, not aggregate per-user.
@@ -563,10 +593,24 @@ class FlowsController extends Controller
                     'is_published' => false,
                     'is_active'    => true,
                 ] + $triggerCols);
-                Log::info('Flow created', ['flow_id' => $flow->id, 'trigger' => $triggerCols]);
+                Log::info('[FLOW-SAVE] created', [
+                    'flow_id'      => $flow->id,
+                    'flow_name'    => $flow->flow_name,
+                    'user_id'      => $flow->user_id,
+                    'workspace_id' => $flow->workspace_id,
+                    'flow_type'    => $flow->flow_type,
+                    'is_active'    => (bool) $flow->is_active,     // created TRUE
+                    'is_published' => (bool) $flow->is_published,  // created FALSE (draft until published)
+                    'trigger'      => $triggerCols,
+                    'appears_in_autoreply_if' => 'is_active=true AND user_id in workspace members',
+                ]);
             }
 
             $filePath = $flow->saveFlowFile($flowData);
+
+            // Campaign-engagement trigger → keep the linked CampaignFollowup rule
+            // in sync (reuses the tested follow-up engine + drain to fire the flow).
+            $this->syncCampaignEngagementRule($flow->fresh(), $flowData);
 
             // P6/sync — an Instagram flow authored here is pushed to Instaflow,
             // which owns the IG flow runtime. Best-effort; never fails the save.
@@ -585,8 +629,36 @@ class FlowsController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('FLOW SAVE FAILED', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Error saving flow: ' . $e->getMessage()], 500);
+            // Surface the REAL reason to the builder (e.g. "Trigger keyword is
+            // too long…") as a 422 with a field error, so it renders as a clear
+            // inline message instead of a generic "Server Error" 500 the
+            // operator can't act on.
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'errors'  => ['flow_data' => [$e->getMessage()]],
+            ], 422);
         }
+    }
+
+    /**
+     * Another PUBLISHED group_join flow in the same workspace that already
+     * triggers on the same group id, or null. Used to enforce "one group → one
+     * live flow" so two flows never fire on the same group at once. Only
+     * group_join is exclusive; other trigger kinds may legitimately overlap.
+     */
+    private function groupTriggerClash(int $wsId, ?int $flowId, string $triggerKind, $triggerValue): ?Flow
+    {
+        if ($triggerKind !== 'group_join' || !$triggerValue) {
+            return null;
+        }
+        return Flow::query()
+            ->where('workspace_id', $wsId)
+            ->when($flowId, fn ($q) => $q->where('id', '!=', $flowId))
+            ->where('trigger_kind', 'group_join')
+            ->where('trigger_value', (int) $triggerValue)
+            ->where('is_published', true)
+            ->first();
     }
 
     public function apiPublish(Request $request): JsonResponse
@@ -596,6 +668,17 @@ class FlowsController extends Controller
             return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
         $flow = Flow::query()->forCurrentWorkspace()->findOrFail($request->integer('flow_id'));
+
+        // One group → one live flow. A group_join group may trigger only ONE
+        // published flow, so two flows can never both fire on the same group.
+        $clash = $this->groupTriggerClash((int) $flow->workspace_id, (int) $flow->id, (string) $flow->trigger_kind, $flow->trigger_value);
+        if ($clash) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This group already triggers the published flow "' . $clash->flow_name . '". A group can trigger only one flow at a time — unpublish that flow or pick a different group here.',
+            ], 422);
+        }
+
         $flow->update(['is_published' => true, 'published_at' => now()]);
         // Re-sync an IG flow so Instaflow flips it live (is_published) — that's
         // the state its keyword matcher requires before it will auto-fire.
@@ -748,19 +831,29 @@ class FlowsController extends Controller
             'gemini'    => 'Google',
             'mistral'   => 'Mistral',
             'muse'      => 'Muse',
+            'deepseek'  => 'DeepSeek',
+            'grok'      => 'Grok',
         ];
 
         $models = [];
         foreach ($rows as $r) {
             $label = $providerLabel[$r->provider] ?? ucfirst($r->provider);
             $default = (string) ($r->default_model ?? '');
+            // An active key with a blank default_model used to be dropped
+            // silently, so the provider disappeared from the picker with no
+            // hint why. Fall back to a current model id for that brand.
+            if ($default === '') $default = \App\Services\AiAgentService::fallbackModel($r->provider);
             if ($default === '') continue;
             $extra = json_decode((string) ($r->extra_config ?? '[]'), true) ?: [];
             // Admin can list extra model ids in extra_config.models — we
             // surface those too so e.g. they can offer gpt-4o + gpt-4o-mini
             // from the same provider key. Default model always comes first.
             $extraModels = is_array($extra['models'] ?? null) ? $extra['models'] : [];
-            $list = array_values(array_unique(array_merge([$default], $extraModels)));
+            // Show the FULL model catalog for this provider (the same list the
+            // admin AI-keys page offers), not just the single default — so every
+            // model the workspace has access to appears in the flow picker.
+            $catalogModels = \App\Http\Controllers\Admin\AdminAiKeyController::MODELS[$r->provider] ?? [];
+            $list = array_values(array_unique(array_merge([$default], $catalogModels, $extraModels)));
             foreach ($list as $m) {
                 $models[] = [
                     'value'    => $m,
@@ -782,24 +875,28 @@ class FlowsController extends Controller
             ? \App\Models\Workspace::find(Auth::user()->current_workspace_id)
             : null;
         if ($workspace) {
-            $byokDefaults = [
-                'openai'    => ['gpt-4o-mini', 'gpt-4o'],
-                'anthropic' => ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-                'gemini'    => ['gemini-2.0-flash', 'gemini-1.5-pro'],
-                'mistral'   => ['mistral-large-latest', 'mistral-small-latest'],
-                'muse'      => ['muse-spark-1.3', 'muse-spark-1.1'],
-            ];
+            // Voice-only providers never belong in a TEXT model picker.
+            $voiceOnly = ['elevenlabs', 'deepgram'];
             $own = \App\Models\AiProviderKey::query()
                 ->where('workspace_id', $workspace->id)
                 ->where('is_active', true)
                 ->pluck('provider')
                 ->all();
             foreach ($own as $prov) {
+                if (in_array($prov, $voiceOnly, true)) continue;
                 // Workspace has its OWN key for this provider → drop the admin's
                 // models for it so ONLY the user's key shows (not both).
                 $models = array_values(array_filter($models, fn ($mm) => $mm['provider'] !== $prov));
                 $label = $providerLabel[$prov] ?? ucfirst($prov);
-                foreach (($byokDefaults[$prov] ?? []) as $m) {
+                // FULL catalog for the brand (same list the admin AI-keys page
+                // offers) so ALL the provider's models show — not a hardcoded few.
+                // Falls back to the service's single model for an unlisted brand.
+                $list = \App\Http\Controllers\Admin\AdminAiKeyController::MODELS[$prov] ?? [];
+                if (empty($list)) {
+                    $fb = \App\Services\AiAgentService::fallbackModel($prov);
+                    if ($fb !== '') $list = [$fb];
+                }
+                foreach ($list as $m) {
                     $models[] = [
                         'value'    => $m,
                         'label'    => $label . ' (your key) · ' . $m,
@@ -878,10 +975,15 @@ class FlowsController extends Controller
             'model'     => 'required|string|max:120',
             // Only providers AiAgentService::callProvider() actually
             // implements — keep this in sync if a new branch lands.
-            'provider'  => 'required|string|in:openai,anthropic,gemini,mistral,muse',
+            // Built from the service's own list, NOT hardcoded — the model
+            // picker is data-driven off active admin keys, so a fixed list
+            // here made every other provider (Mistral, DeepSeek, Groq, …) a
+            // dead option that failed validation before any call was made.
+            'provider'  => ['required', 'string', \Illuminate\Validation\Rule::in(\App\Services\AiAgentService::supportedProviders())],
             // Which builder asked. A 'call' flow needs voice (cf_*) nodes,
             // not chat nodes. Defaults to chat for back-compat.
-            'flow_type' => 'nullable|string|in:chat,call,instagram,facebook,tiktok,telegram',
+            // Same registration-lag fix as apiSave: line/wechat/viber were missing.
+            'flow_type' => 'nullable|string|in:chat,call,instagram,facebook,tiktok,telegram,line,wechat,viber,email,webchat',
         ]);
 
         $user = Auth::user();
@@ -927,10 +1029,10 @@ Available node types and their data shapes:
   trigger:         { kind: "keyword"|"qr"|"start", keywords: "hi, hello" }
   message:         { text: "..." }
   sequence:        { replies: [{ type: "text"|"image"|"video"|"audio"|"document", text|url, caption?, filename? }] }
-  ask:             { prompt: "...", var: "name", validate?: "email"|"phone"|"number", options?: ["yes","no"] }
-  buttons:         { prompt: "...", options: ["A","B","C"], var: "choice"  } (max 3 options; ports p0,p1,p2)
-  list:            { prompt: "...", options: ["A","B",...], button: "View", var: "choice" } (up to 10)
-  condition:       { conditions: [{ variable: "{{name}}", operator: "equals"|"contains"|"not_equals"|"is_empty", value: "x" }], operators: ["AND"|"OR"] } (ports: yes / no)
+  ask:             { prompt: "...", var: "name", validate?: "email"|"phone"|"number", options?: ["yes","no"] } (when options are given they render as choices with ports p0,p1,... + "else"; wire an edge from EACH option port)
+  buttons:         { prompt: "...", options: ["A","B","C"], var: "choice"  } (max 3 options; ports p0,p1,p2 + "else")
+  list:            { prompt: "...", options: ["A","B",...], button: "View", var: "choice" } (up to 10; ports p0,p1,... + "else")
+  condition:       { conditions: [{ variable: "{{name}}", operator: "equals"|"not_equals"|"contains"|"not_contains"|"gt"|"lt"|"exists", value: "x" }], operators: ["AND"|"OR"] } (ports: yes / no)
   delay:           { unit: "sec"|"min"|"hour"|"day", amount: 5 }
   template:        { tpl: "<template_name>", preview: "..." }
   ai:              { model: "gpt-4o-mini", prompt: "system prompt", save: "reply" }
@@ -948,7 +1050,7 @@ Available node types and their data shapes:
 
 Edge handles (sourceHandle):
   - Default ports: "out"
-  - Multi-option (buttons/list/poll): "p0","p1","p2"...
+  - Multi-option (buttons/list/poll AND an "ask" node that has options): "p0","p1","p2"... one per option, plus "else" for no-match. Wire an edge from EVERY option port you define — do NOT collapse an options node to a single "out" edge.
   - Condition: "yes" or "no"
   - book_appointment: "booked" or "no_slots"
   - Commerce nodes: "purchased" or "abandoned"
@@ -1029,10 +1131,16 @@ SYS;
         );
 
         if (!$raw) {
+            // Say what the provider ACTUALLY reported. "check API key + model
+            // id" was a guess the code made because every failure — revoked
+            // key, retired model id, safety block, token exhaustion — came
+            // back as a bare null. The service now records the reason.
+            $why = $ai->lastProviderError();
+
             return response()->json([
                 'ok'      => false,
                 'error'   => 'provider_failed',
-                'message' => 'AI provider returned no content — check API key + model id.',
+                'message' => $why ?: 'AI provider returned no content — check API key + model id.',
             ], 502);
         }
 
@@ -1148,7 +1256,7 @@ SYS;
                 'id'             => $s->id,
                 'contact_id'     => $s->contact_id,
                 'contact_name'   => trim(($s->contact->first_name ?? '') . ' ' . ($s->contact->last_name ?? '')) ?: ('#' . $s->contact_id),
-                'contact_phone'  => preg_replace('/\D+/', '', (string) ($s->contact->country_code . $s->contact->mobile)),
+                'contact_phone'  => \App\Models\Contact::canonicalizePhone($s->contact->country_code ?? null, $s->contact->mobile ?? null),
                 'status'         => $s->status,
                 'enrolled_at'    => $s->enrolled_at?->toIso8601String(),
                 'failed_at'      => $s->failed_at?->toIso8601String(),
@@ -1672,6 +1780,59 @@ SYS;
 
         $series = $this->analyticsSeries($ids, $from, $to);
 
+        // WHICH FLOW ran on WHICH KEYWORD(S), and how many times — the attribution
+        // the run table (flow_subscribers) lacks. keyword_reply_logs records every
+        // fire (fired_at + keyword_reply_id, both plain); keyword_replies carries
+        // flow_id + the plain keyword string. Accurate per-fire source, scoped to
+        // this window and the workspace's flows.
+        $flowNames = \App\Models\Flow::whereIn('id', $ids)->pluck('flow_name', 'id');
+        $ktQuery = \Illuminate\Support\Facades\DB::table('keyword_reply_logs as l')
+            ->join('keyword_replies as k', 'k.id', '=', 'l.keyword_reply_id')
+            ->where('k.reply_type', 'flow')
+            ->whereNotNull('k.keyword')->where('k.keyword', '!=', '')
+            ->whereIn('k.flow_id', $ids);
+        if ($from) $ktQuery->where('l.fired_at', '>=', $from);
+        $keywordTriggers = $ktQuery->where('l.fired_at', '<=', $to)
+            ->selectRaw('k.flow_id, k.keyword, COUNT(*) as fires, MAX(l.fired_at) as last_fired')
+            ->groupBy('k.flow_id', 'k.keyword')
+            ->orderByDesc('fires')->limit(100)->get()
+            ->map(fn ($r) => [
+                'flow_id'    => (int) $r->flow_id,
+                'flow_name'  => $flowNames[$r->flow_id] ?? ('Flow #' . $r->flow_id),
+                'keyword'    => (string) $r->keyword,
+                'fires'      => (int) $r->fires,
+                'last_fired' => $r->last_fired ? \Illuminate\Support\Carbon::parse($r->last_fired)->toIso8601String() : null,
+            ])->all();
+
+        // ----- drop-off funnel: where still-ACTIVE runs are parked right now -----
+        // A run stuck 'active' on a wait node is a customer who stopped replying.
+        // Grouping the active runs by their current wait node shows which question
+        // loses people; `stalled` counts those with no movement in 24h+ (likely
+        // abandoned vs. genuinely mid-conversation). current_node_id is stamped by
+        // Node at each park (POST /flow-node/position) — runs that predate the
+        // feature have it NULL and are simply excluded, so old data degrades
+        // gracefully rather than lying.
+        $staleCut = now()->subHours(24)->toDateTimeString();
+        $dropOff = $base()->where('status', 'active')
+            ->whereNotNull('current_node_id')
+            ->selectRaw(
+                'flow_id, current_node_id, COUNT(*) as c, MAX(current_node_label) as label, '
+                . 'MAX(last_advanced_at) as last_at, '
+                . 'SUM(CASE WHEN last_advanced_at < ? THEN 1 ELSE 0 END) as stalled',
+                [$staleCut]
+            )
+            ->groupBy('flow_id', 'current_node_id')
+            ->orderByDesc('c')->limit(50)->get()
+            ->map(fn ($r) => [
+                'flow_id'   => (int) $r->flow_id,
+                'flow_name' => $flowNames[$r->flow_id] ?? ('Flow #' . $r->flow_id),
+                'node_id'   => (string) $r->current_node_id,
+                'label'     => ($r->label !== null && trim((string) $r->label) !== '') ? (string) $r->label : null,
+                'waiting'   => (int) $r->c,
+                'stalled'   => (int) $r->stalled,
+                'last_at'   => $r->last_at ? \Illuminate\Support\Carbon::parse($r->last_at)->toIso8601String() : null,
+            ])->all();
+
         return [
             'range'    => $rangeKey,
             'from'     => $from?->toIso8601String(),
@@ -1706,6 +1867,8 @@ SYS;
             'failure_reasons'        => $reasons,
             'retry_cooldown_seconds' => \App\Services\Flow\FlowRetryService::COOLDOWN_SECONDS,
             'retry_max_batch'        => \App\Services\Flow\FlowRetryService::MAX_BATCH,
+            'keyword_triggers'       => $keywordTriggers,
+            'drop_off'               => $dropOff,
             'generated_at'           => now()->toIso8601String(),
         ];
     }
@@ -2006,7 +2169,6 @@ SYS;
         return $candidate > $current ? $candidate : $current;
     }
 
-
     /** GET /flows/api/picker — tags + groups + devices for the trigger inspector. */
     public function apiPicker(Request $request): JsonResponse
     {
@@ -2216,15 +2378,127 @@ SYS;
             }
         }
 
+        // LINE channels. A LINE flow binds to a connected channel (its access
+        // token sends the reply). Same guard as the others.
+        $line = collect();
+        if (class_exists(\App\Models\LineChannel::class)) {
+            try {
+                $line = \App\Models\LineChannel::query()
+                    ->where('workspace_id', $wsId)
+                    ->where('active', true)
+                    ->orderBy('display_name')
+                    ->get(['id', 'display_name', 'basic_id'])
+                    ->map(fn ($c) => (object) [
+                        'key'   => 'line:' . $c->id,
+                        'id'    => (int) $c->id,
+                        'label' => (string) ($c->display_name ?: ($c->basic_id ?: ('LINE ' . $c->id))),
+                    ])
+                    ->values();
+            } catch (\Throwable $e) {
+                $line = collect();
+            }
+        }
+
+        // WeChat channels. A WeChat flow binds to a connected Official Account
+        // (its access token sends the reply). Same guard as the others.
+        $wechat = collect();
+        if (class_exists(\App\Models\WeChatChannel::class)) {
+            try {
+                $wechat = \App\Models\WeChatChannel::query()
+                    ->where('workspace_id', $wsId)
+                    ->where('active', true)
+                    ->orderBy('account_name')
+                    ->get(['id', 'account_name', 'wx_id'])
+                    ->map(fn ($c) => (object) [
+                        'key'   => 'wechat:' . $c->id,
+                        'id'    => (int) $c->id,
+                        'label' => (string) ($c->account_name ?: ($c->wx_id ?: ('WeChat ' . $c->id))),
+                    ])
+                    ->values();
+            } catch (\Throwable $e) {
+                $wechat = collect();
+            }
+        }
+
+        // Viber channels. A Viber flow binds to a connected Public Account.
+        $viber = collect();
+        if (class_exists(\App\Models\ViberChannel::class)) {
+            try {
+                $viber = \App\Models\ViberChannel::query()
+                    ->where('workspace_id', $wsId)
+                    ->where('active', true)
+                    ->orderBy('bot_name')
+                    ->get(['id', 'bot_name', 'bot_uri'])
+                    ->map(fn ($c) => (object) [
+                        'key'   => 'viber:' . $c->id,
+                        'id'    => (int) $c->id,
+                        'label' => (string) ($c->bot_name ?: ($c->bot_uri ?: ('Viber ' . $c->id))),
+                    ])
+                    ->values();
+            } catch (\Throwable $e) {
+                $viber = collect();
+            }
+        }
+
+        // Email mailboxes (MailTrixy mirror rows). An email flow binds to a
+        // linked mailbox; sends leave via PHP (/api/email/flow-send → MailTrixy
+        // bridge). Gated like WorkspaceEngine::senders(): platform toggle +
+        // live bridge, so a stale mirror row never appears in the picker.
+        $email = collect();
+        if (class_exists(\App\Models\WorkspaceEmailAccount::class)) {
+            try {
+                if ((bool) \App\Models\SystemSetting::get('email_enabled', false)
+                    && \App\Models\WorkspaceEmailAccount::hasConnected($wsId)) {
+                    $email = \App\Models\WorkspaceEmailAccount::query()
+                        ->forWorkspace($wsId)
+                        ->connected()
+                        ->orderBy('email')
+                        ->get(['id', 'email', 'name'])
+                        ->map(fn ($a) => (object) [
+                            'key'   => 'email:' . $a->id,
+                            'id'    => (int) $a->id,
+                            'label' => (string) ($a->name ?: ($a->email ?: ('Email ' . $a->id))),
+                        ])
+                        ->values();
+                }
+            } catch (\Throwable $e) {
+                $email = collect();
+            }
+        }
+
+        // WABA campaigns — for the "Campaign engagement" trigger. Recently sent /
+        // sending / scheduled ones the merchant would follow up on.
+        $campaigns = collect();
+        try {
+            $campaigns = \App\Models\WpCampaign::query()
+                ->where('workspace_id', $wsId)
+                ->orderByDesc('id')
+                ->limit(100)
+                ->get(['id', 'campaign_name', 'status'])
+                ->map(fn ($c) => (object) [
+                    'id'     => (int) $c->id,
+                    'name'   => (string) ($c->campaign_name ?: ('Campaign #' . $c->id)),
+                    'status' => (string) $c->status,
+                ])
+                ->values();
+        } catch (\Throwable $e) {
+            $campaigns = collect();
+        }
+
         return response()->json([
             'ok'           => true,
             'tags'         => $tags,
             'groups'       => $groups,
+            'campaigns'    => $campaigns,
             'devices'      => $devices,
             'instagram'    => $instagram,
             'facebook'     => $facebook,
             'tiktok'       => $tiktok,
             'telegram'     => $telegram,
+            'line'         => $line,
+            'wechat'       => $wechat,
+            'viber'        => $viber,
+            'email'        => $email,
             'keywordRules' => $keywordRules,
         ])
             // Never let a browser serve a stale copy of this picker — a cached
@@ -2427,8 +2701,29 @@ SYS;
         $value = null;
         if ($kind === 'tag_added')   $value = (int) ($d['tagId']   ?? 0) ?: null;
         if ($kind === 'group_join')  $value = (int) ($d['groupId'] ?? 0) ?: null;
+        // Campaign engagement — value is the WABA campaign id. The engagement
+        // status + delay live on the linked CampaignFollowup rule (synced after
+        // save), so only the campaign id is stored on the flow row (for display
+        // + to find the rule).
+        if ($kind === 'campaign_engagement') $value = (int) ($d['campaignId'] ?? 0) ?: null;
         // Sales Pipeline bridge — fire when a deal enters this stage.
         if ($kind === 'deal_stage_changed') $value = (int) ($d['stageId'] ?? 0) ?: null;
+        // CRM lifecycle triggers. 0 is a REAL value here ("any pipeline" / "any
+        // agent"), so these must NOT use the `?: null` idiom above — null would
+        // never match flowsForWorkspace()'s where('trigger_value', 0).
+        if (in_array($kind, ['deal_created', 'deal_won', 'deal_lost'], true)) {
+            $value = (int) ($d['pipelineId'] ?? 0);
+        }
+        if (in_array($kind, ['deal_assigned', 'conversation_assigned'], true)) {
+            $value = (int) ($d['userId'] ?? 0);
+        }
+        if ($kind === 'task_due') $value = 0;
+        // no_activity stores the idle window in HOURS (not an id). Clamped to a
+        // sane range: under an hour would fire on a lunch break, and a year is a
+        // dead deal nobody is nurturing.
+        if ($kind === 'no_activity') {
+            $value = max(1, min(8760, (int) ($d['hours'] ?? 48)));
+        }
         // Value-less event triggers match on trigger_value = 0 (see
         // FlowEnrollmentService::flowsForWorkspace), so store 0 not null.
         // 'away' + 'out_of_hours' fire on any inbound (condition, not a value).
@@ -2459,6 +2754,10 @@ SYS;
             'facebook',
             'tiktok',
             'telegram',
+            'line',
+            'wechat',
+            'viber',
+            'email',
         ];
         $rawSender = trim((string) ($d['deviceId'] ?? ''));
         $deviceId  = null;
@@ -2502,11 +2801,18 @@ SYS;
         // matcher reads this list to decide which rules launch this flow.
         if ($kind === 'comment_to_dm') {
             $value = 0;
-            $ids = array_values(array_filter(array_map(
-                fn ($x) => (int) $x,
-                is_array($d['keywordRuleIds'] ?? null) ? $d['keywordRuleIds'] : []
-            )));
-            $keywords = $ids ? implode(',', $ids) : null;
+            if (strtolower((string) ($d['channel'] ?? '')) === 'facebook') {
+                // Facebook has no keyword_replies comment rules to bind ids to, so
+                // a FB comment→DM flow stores a KEYWORD (like the keyword trigger)
+                // matched against the comment text. Blank = fire on any comment.
+                $keywords = trim((string) ($d['keywords'] ?? '')) ?: null;
+            } else {
+                $ids = array_values(array_filter(array_map(
+                    fn ($x) => (int) $x,
+                    is_array($d['keywordRuleIds'] ?? null) ? $d['keywordRuleIds'] : []
+                )));
+                $keywords = $ids ? implode(',', $ids) : null;
+            }
         }
 
         return [
@@ -2515,6 +2821,76 @@ SYS;
             'trigger_device_id' => $deviceId,
             'trigger_keywords'  => $keywords,
         ] + ($provider ? ['provider' => $provider] : []);
+    }
+
+    /**
+     * Keep the CampaignFollowup rule that fires a "Campaign engagement" flow in
+     * sync with the trigger node. Reuses the tested follow-up engine (events +
+     * delayed scheduling + drain) instead of a parallel firing path — the flow
+     * itself is inert to inbound matching. The rule is FLOW-OWNED (marked
+     * source=flow_trigger) so it never collides with campaign-side follow-ups.
+     */
+    private function syncCampaignEngagementRule(Flow $flow, array $flowData): void
+    {
+        $trigger = null;
+        foreach (($flowData['flowNodes'] ?? []) as $n) {
+            if (($n['type'] ?? null) === 'trigger') { $trigger = $n; break; }
+        }
+        $d    = is_array($trigger['data'] ?? null) ? $trigger['data'] : [];
+        $kind = (string) ($d['kind'] ?? '');
+        $wsId = (int) $flow->workspace_id;
+
+        $FU = \App\Models\CampaignFollowup::class;
+        $owned = fn () => $FU::query()
+            ->where('workspace_id', $wsId)
+            ->where('action_type', $FU::ACTION_START_FLOW)
+            ->where('action_ref_id', $flow->id)
+            ->where('action_payload_json->source', 'flow_trigger');
+
+        // Not (or no longer) a campaign trigger → drop the linked rule.
+        if ($kind !== 'campaign_engagement') { $owned()->delete(); return; }
+
+        $campaignId = (int) ($d['campaignId'] ?? 0);
+        $status     = (string) ($d['status'] ?? '');
+        $validEvents = [
+            $FU::EVENT_REPLIED, $FU::EVENT_CLICKED_BUTTON, $FU::EVENT_CLICKED_LINK,
+            $FU::EVENT_READ, $FU::EVENT_DELIVERED_NO_READ, $FU::EVENT_READ_NO_REPLY,
+            $FU::EVENT_SENT_NO_REPLY, $FU::EVENT_NOT_DELIVERED, $FU::EVENT_FAILED,
+        ];
+        $campaign = $campaignId > 0
+            ? \App\Models\WpCampaign::where('workspace_id', $wsId)->find($campaignId)
+            : null;
+        if (! $campaign || ! in_array($status, $validEvents, true)) {
+            $owned()->delete();     // incomplete config → nothing to fire
+            return;
+        }
+
+        $delay = max(0, min(43200, (int) ($d['delayMinutes'] ?? 0)));   // cap 30 days
+
+        $rule = $owned()->first() ?: new $FU([
+            'workspace_id'  => $wsId,
+            'action_type'   => $FU::ACTION_START_FLOW,
+            'action_ref_id' => $flow->id,
+        ]);
+        $rule->fill([
+            'campaign_id'         => $campaignId,
+            'trigger_event'       => $status,
+            'delay_minutes'       => $delay,
+            'action_payload_json' => ['source' => 'flow_trigger', 'flow_id' => $flow->id],
+            'is_active'           => true,
+        ]);
+        $rule->save();
+
+        // Backfill — a campaign that already ran: enroll current recipients who
+        // already match the status (best-effort, bounded). Only when the trigger
+        // node asked for it (the "apply to existing recipients" checkbox).
+        if (! empty($d['backfill'])) {
+            try {
+                app(\App\Services\Campaign\CampaignFollowupService::class)->backfillRule($rule->fresh());
+            } catch (\Throwable $e) {
+                Log::warning('[FLOW-CAMPAIGN-TRIGGER] backfill failed: ' . $e->getMessage(), ['flow' => $flow->id]);
+            }
+        }
     }
 
     /**

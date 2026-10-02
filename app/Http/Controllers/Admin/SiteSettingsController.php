@@ -25,7 +25,7 @@ class SiteSettingsController extends Controller
      */
     public const GROUPS = [
         'Company' => [
-            ['company_name', 'Company name', 'text', 'WaDesk Inc.', 'WaDesk Inc.'],
+            ['company_name', 'Company name', 'text', 'Your Company Inc.', 'Your Company Inc.'],
             ['tagline',      'Tagline',      'text', '', 'The complete WhatsApp business platform'],
             ['founded_year', 'Founded year', 'text', '', '2024'],
             ['address',      'Address',      'text', '', '4th Floor, Prestige Tower, MG Road'],

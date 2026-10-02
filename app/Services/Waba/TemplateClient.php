@@ -6,6 +6,7 @@ use App\Models\SystemSetting;
 use App\Models\WaProviderConfig;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
@@ -98,6 +99,15 @@ class TemplateClient
     public function submit(array $payload): array
     {
         $resp = $this->http()->post("{$this->base}/{$this->wabaId}/message_templates", $payload);
+
+        // Self-heal a WRONG waba_id, then retry once. The backfiller only ever
+        // covered a MISSING id, so a connection holding the phone_number_id in
+        // the waba_id slot failed here forever — sends worked, every template
+        // op returned #100/33, and nothing re-derived the value.
+        if (!$resp->successful() && $this->wabaIdRejected($resp) && $this->reresolveWabaId()) {
+            $resp = $this->http()->post("{$this->base}/{$this->wabaId}/message_templates", $payload);
+        }
+
         $this->stash($resp, 'submit', $payload);
 
         if (!$resp->successful()) {
@@ -110,6 +120,120 @@ class TemplateClient
             'status'   => (string) ($body['status']   ?? 'PENDING'),
             'category' => (string) ($body['category'] ?? ''),
         ];
+    }
+
+    /**
+     * Does this Meta error mean "the id you addressed is not a usable WABA"?
+     *
+     * The two signatures that matter, both produced by a phone_number_id
+     * sitting in the waba_id slot:
+     *
+     *   POST /{id}/message_templates
+     *     #100 subcode 33 — "does not exist, cannot be loaded due to missing
+     *     permissions, or does not support this operation"
+     *
+     *   GET /{id}/message_templates
+     *     #100 — "Tried accessing nonexisting field (message_templates)"
+     *     A WABA has that edge; a phone number object does not.
+     *
+     * Deliberately narrow. A token/permission fault is NOT self-healable and
+     * must keep surfacing to the operator rather than triggering a retry loop.
+     */
+    private function wabaIdRejected(Response $resp): bool
+    {
+        $code    = (int) ($resp->json('error.code') ?? 0);
+        $subcode = (int) ($resp->json('error.error_subcode') ?? 0);
+        $message = (string) ($resp->json('error.message') ?? '');
+
+        $matched = $code === 100
+            && ($subcode === 33 || stripos($message, 'nonexisting field') !== false);
+
+        // Always log the decision. Without this, a self-heal that never fires
+        // is indistinguishable from one that fires and fails.
+        Log::warning('[WABA-HEAL] template call failed', [
+            'config_id'      => $this->cfg->id,
+            'waba_id_used'   => $this->wabaId,
+            'http'           => $resp->status(),
+            'error_code'     => $code,
+            'error_subcode'  => $subcode ?: null,
+            'error_message'  => $message,
+            'heal_triggered' => $matched,
+        ]);
+
+        return $matched;
+    }
+
+    /**
+     * Re-derive the WABA id from the phone number and adopt it for this
+     * instance. Returns false when nothing better could be found, so the
+     * caller surfaces the original Meta error instead of retrying blindly.
+     */
+    private function reresolveWabaId(): bool
+    {
+        $before = $this->wabaId;
+
+        try {
+            $found = WabaIdBackfiller::resolve($this->cfg, force: true);
+        } catch (\Throwable $e) {
+            Log::error('[WABA-HEAL] re-resolve threw', [
+                'config_id' => $this->cfg->id,
+                'err'       => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        if (!$found || $found === $before) {
+            Log::warning('[WABA-HEAL] re-resolve produced nothing usable', [
+                'config_id' => $this->cfg->id,
+                'was'       => $before,
+                'returned'  => $found ?: '(null)',
+                'note'      => 'see the [WABA-BACKFILL] lines above for why',
+            ]);
+
+            return false;
+        }
+
+        $this->wabaId = (string) $found;
+
+        Log::warning('[WABA-TEMPLATE] stored waba_id was rejected by Meta — re-resolved', [
+            'config_id' => $this->cfg->id,
+            'was'       => $before,
+            'now'       => $this->wabaId,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * POST /{TEMPLATE_ID} — edit an existing template's content on Meta.
+     *
+     * Meta's edit endpoint takes the TEMPLATE id (not the WABA collection) and
+     * only accepts `category` + `components`; `name`/`language` are immutable, so
+     * they are stripped from the create payload. Meta permits an edit only when
+     * the template is NOT currently in review (APPROVED / REJECTED / PAUSED), and
+     * a successful edit sends it BACK to PENDING for re-review — the caller is
+     * responsible for writing meta_status accordingly.
+     *
+     * @param  array  $payload  from TemplatePayloadBuilder::build()
+     * @return array            ['success' => bool]
+     */
+    public function edit(string $metaTemplateId, array $payload): array
+    {
+        $editable = array_filter([
+            'category'   => $payload['category']   ?? null,
+            'components' => $payload['components']  ?? null,
+        ], fn ($v) => $v !== null && $v !== []);
+
+        $resp = $this->http()->post("{$this->base}/{$metaTemplateId}", $editable);
+        $this->stash($resp, 'edit', $editable);
+
+        if (!$resp->successful()) {
+            throw new RuntimeException($this->errorHint($resp), $resp->status());
+        }
+
+        $body = $resp->json();
+        return ['success' => (bool) ($body['success'] ?? true)];
     }
 
     /** GET /{TEMPLATE_ID}?fields=… — single template state refresh. */
@@ -139,6 +263,14 @@ class TemplateClient
         if ($after) $params['after'] = $after;
 
         $resp = $this->http()->get("{$this->base}/{$this->wabaId}/message_templates", $params);
+
+        // Same self-heal as submit(). This is the path behind "Sync from Meta
+        // failed: (#100) Tried accessing nonexisting field (message_templates)"
+        // — a phone number object simply has no such edge.
+        if (!$resp->successful() && $this->wabaIdRejected($resp) && $this->reresolveWabaId()) {
+            $resp = $this->http()->get("{$this->base}/{$this->wabaId}/message_templates", $params);
+        }
+
         $this->stash($resp, 'list', $params);
 
         if (!$resp->successful()) {
@@ -164,7 +296,7 @@ class TemplateClient
     public function uploadHeaderMedia(string $localPath, string $mime): string
     {
         if ($this->resolveAppId() === '') {
-            throw new RuntimeException('Cannot upload media — no Meta App ID available. Set the Meta App ID in Admin → Settings → WhatsApp (the same App your Embedded Signup uses), then retry.');
+            throw new RuntimeException(setup_hint('Cannot upload media — no Meta App ID available. Set the Meta App ID in Admin → Settings → WhatsApp (the same App your Embedded Signup uses), then retry.', 'Media upload is temporarily unavailable. Please contact support.'));
         }
         if (!is_readable($localPath)) {
             throw new RuntimeException("File not readable: $localPath");

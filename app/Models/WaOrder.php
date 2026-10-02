@@ -93,6 +93,14 @@ class WaOrder extends Model
                     if (!$fresh) return;
                     app(\App\Services\Deals\OrderDealService::class)->maybeCreateFromOrder($fresh);
                     app(\App\Services\Flow\FlowEnrollmentService::class)->onOrderPlaced($fresh);
+
+                    // Drip goal: an order is the outcome a sales sequence was
+                    // chasing, so end it rather than keep pushing the product
+                    // they have just bought.
+                    $contact = $fresh->contact ?? null;
+                    if ($contact instanceof \App\Models\Contact) {
+                        app(\App\Services\Drip\DripRunner::class)->onOrderPlaced($contact);
+                    }
                 } catch (\Throwable $e) {
                     \Illuminate\Support\Facades\Log::warning('[DEAL/FLOW] order hook failed: ' . $e->getMessage());
                 }
@@ -175,6 +183,54 @@ class WaOrder extends Model
     public function storefront(): BelongsTo
     {
         return $this->belongsTo(WaStorefront::class, 'storefront_id')->withDefault();
+    }
+
+    /**
+     * The WhatsApp sender the merchant PICKED for this order's shop, as fields
+     * to merge into an outbound Message so EVERY shop DM (payment link, status,
+     * checkout link, receipt, invoice) goes out FROM the shop's own number and
+     * threads under it in the inbox — NOT the workspace's default/newest device,
+     * which is what the dispatcher falls back to when a message carries no
+     * number (the "inbox uses a different number" bug).
+     *   - shop bound to an Unofficial (Baileys) device → that device's phone.
+     *   - shop on the official API (device_id null)     → its connected WABA sender.
+     * Returns [] when the order isn't tied to a shop with a resolvable number,
+     * so the dispatcher's existing default applies unchanged.
+     *
+     * @return array{from_number?: string, provider?: string}
+     */
+    public function shopSenderFields(): array
+    {
+        if (! $this->storefront_id) {
+            return [];
+        }
+        $sf = WaStorefront::where('workspace_id', $this->workspace_id)
+            ->where('id', $this->storefront_id)->first();
+        if (! $sf) {
+            return [];
+        }
+
+        if ($sf->device_id) {
+            $dev = Device::where('id', $sf->device_id)
+                ->where('workspace_id', $this->workspace_id)->first();
+            if ($dev) {
+                $from = preg_replace('/\D+/', '', (string) (($dev->country_code ?? '') . $dev->phone_number));
+                if ($from !== '') {
+                    return ['from_number' => $from, 'provider' => 'baileys'];
+                }
+            }
+        }
+
+        $cfg = WaProviderConfig::query()
+            ->where('workspace_id', $this->workspace_id)
+            ->where('provider', 'waba')
+            ->where('status', WaProviderConfig::STATUS_CONNECTED)
+            ->orderBy('id')->first();
+        if ($cfg && trim((string) $cfg->phone_number) !== '') {
+            return ['from_number' => preg_replace('/\D+/', '', (string) $cfg->phone_number), 'provider' => 'waba'];
+        }
+
+        return [];
     }
 
     public function lineItems(): HasMany

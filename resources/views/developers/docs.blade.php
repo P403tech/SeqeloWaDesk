@@ -19,7 +19,7 @@
     <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
     <link rel="stylesheet" href="{{ asset('css/api-docs.css') }}?v=7">
-    <script>window.WADESK_API = { specUrl: @json($specUrl) };</script>
+    <script>window.WADESK_API = { specUrl: @json($specUrl), brand: @json(brand_name()) };</script>
 </head>
 <body>
 
@@ -181,6 +181,6 @@
             setTimeout(function () { b.innerHTML = html; }, 1400);
         });
     </script>
-    <script src="{{ asset('js/api-docs.js') }}?v=9"></script>
+    <script src="{{ asset('js/api-docs.js') }}?v=11"></script>
 </body>
 </html>

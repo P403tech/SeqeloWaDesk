@@ -1,5 +1,6 @@
 import ApexCharts from 'apexcharts';
 import { themeColor } from '../theme-colors.js';
+import { initReferralQr } from './referral-qr.js';
 
 // Base path the page was actually served under (handles a /public install).
 // pathname never includes the query string, so it stays the route across
@@ -15,6 +16,8 @@ const BASE = window.location.pathname.replace(/\/+$/, '');
  */
 export default function init() {
     let chart = null;
+
+    initReferralQr();
 
     function readJSON(el, attr, fallback) {
         try { return JSON.parse(el.getAttribute(attr)) ?? fallback; }

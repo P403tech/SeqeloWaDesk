@@ -128,20 +128,46 @@ class WaStorefrontController extends Controller
         $expected = config('storefront.cname_target', parse_url(config('app.url'), PHP_URL_HOST) ?: 'localhost');
         $records = @dns_get_record($sf->custom_domain, DNS_CNAME) ?: [];
         $matched = false;
+
+        // 1. CNAME → our platform host (sub-domains, e.g. shop.brand.com).
         foreach ($records as $r) {
             if (isset($r['target']) && stripos($r['target'], $expected) !== false) {
                 $matched = true;
                 break;
             }
         }
+
+        // 2. A record → our platform IP. Apex/root domains cannot use a CNAME, so
+        //    the panel also offers an A record pointing at our server IP. Accept
+        //    the domain when any A record resolves to the platform host's IP.
+        if (! $matched) {
+            $platformIp  = @gethostbyname((string) $expected);
+            $expectedIps = ($platformIp && $platformIp !== $expected) ? [$platformIp] : [];
+            $extraIp     = trim((string) config('storefront.a_target', ''));
+            if ($extraIp !== '') {
+                $expectedIps[] = $extraIp;
+            }
+            if ($expectedIps) {
+                foreach (@dns_get_record($sf->custom_domain, DNS_A) ?: [] as $r) {
+                    if (isset($r['ip']) && in_array($r['ip'], $expectedIps, true)) {
+                        $matched = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         $sf->custom_domain_verified = $matched;
         $sf->save();
+
+        $aTarget = @gethostbyname((string) $expected);
+        $aHint   = ($aTarget && $aTarget !== $expected) ? ' (or an A record to ' . $aTarget . ')' : '';
 
         return response()->json([
             'ok'       => $matched,
             'expected' => $expected,
             'records'  => $records,
-            'message'  => $matched ? 'Domain verified ✓' : 'CNAME not pointing to ' . $expected,
+            'message'  => $matched ? 'Domain verified.' : 'DNS not pointing to ' . $expected . $aHint . ' yet.',
         ]);
     }
 }

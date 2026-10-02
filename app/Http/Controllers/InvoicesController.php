@@ -128,7 +128,7 @@ class InvoicesController extends Controller
         $ws = Workspace::find($this->wsId());
         if (! $ws) { return back()->with('error', 'No workspace.'); }
 
-        $currency = strtoupper($data['currency'] ?? (string) (\App\Models\InvoiceSetting::forWorkspace($ws->id)->currency ?? 'USD')) ?: 'USD';
+        $currency = strtoupper((string) (($data['currency'] ?? '') ?: (\App\Models\InvoiceSetting::forWorkspace($ws->id)->currency ?: ($ws->currency ?: 'USD'))));
         $exp      = $this->currencyExponent($currency);
         $unit     = 10 ** $exp; // minor units per 1 major
 
@@ -233,7 +233,179 @@ class InvoicesController extends Controller
     {
         $invoice = Invoice::where('public_token', $token)->with('items', 'taxSummary')->firstOrFail();
 
-        return view('public.invoice', compact('invoice'));
+        // Offer "Pay now" through the MERCHANT's own configured gateways (same
+        // WaMerchantGateway the storefront/booking checkout uses — money lands in
+        // the client's account, not the platform's). Only when still unpaid and
+        // the total is positive.
+        $gateways = collect();
+        if ($invoice->status !== Invoice::STATUS_PAID && (int) $invoice->total_minor > 0) {
+            $gateways = \App\Models\WaMerchantGateway::query()->active()
+                ->where('workspace_id', (int) $invoice->workspace_id)
+                ->where('storefront_id', 0)
+                ->get()
+                ->filter(fn ($g) => $g->isConfigured())
+                ->map(fn ($g) => ['slug' => $g->slug, 'label' => $g->display_label ?? ucfirst($g->slug)])
+                ->values();
+        }
+
+        return view('public.invoice', compact('invoice', 'gateways'));
+    }
+
+    /**
+     * Public: start a payment for an invoice through the merchant's own gateway.
+     * Creates an Order that carries the invoice id, initiates the gateway, and
+     * hands the customer the redirect / SDK checkout. Token-only (no auth).
+     */
+    public function publicPay(string $token, string $gateway)
+    {
+        $invoice = Invoice::where('public_token', $token)->firstOrFail();
+        if ($invoice->status === Invoice::STATUS_PAID) {
+            return redirect()->route('invoice.public.show', $token)->with('info', __('This invoice is already paid.'));
+        }
+        if ((int) $invoice->total_minor <= 0) {
+            return redirect()->route('invoice.public.show', $token)->with('error', __('This invoice has no amount to pay.'));
+        }
+
+        $merchant = \App\Models\WaMerchantGateway::query()->active()
+            ->where('workspace_id', (int) $invoice->workspace_id)
+            ->where('storefront_id', 0)
+            ->where('slug', $gateway)
+            ->first();
+        if (! $merchant || ! $merchant->isConfigured()) {
+            return redirect()->route('invoice.public.show', $token)->with('error', __('That payment method is not available.'));
+        }
+
+        try {
+            $driver = app(\App\Services\Payment\PaymentGatewayManager::class)
+                ->driverFromModel($merchant->toTransientPaymentGateway());
+        } catch (\Throwable $e) {
+            return redirect()->route('invoice.public.show', $token)->with('error', __('Payment method unavailable, please try another.'));
+        }
+
+        $exp    = (int) ($invoice->currency_exponent ?? 2);
+        $amount = (float) $invoice->total_minor / (10 ** max(0, $exp));
+
+        $order = \App\Models\Order::create([
+            'order_number'    => 'INV-' . strtoupper(\Illuminate\Support\Str::random(10)),
+            'workspace_id'    => (int) $invoice->workspace_id,
+            'user_id'         => (int) $invoice->user_id,
+            'gateway_id'      => null,
+            'gateway_slug'    => $gateway,
+            'currency'        => (string) $invoice->currency,
+            'amount'          => $amount,
+            'total_amount'    => $amount,
+            'status'          => 'pending',
+            'gateway_payload' => ['invoice' => ['invoice_id' => (int) $invoice->id, 'public_token' => $token]],
+        ]);
+
+        $callbackUrl = route('invoice.pay.callback', ['gateway' => $gateway]) . '?io=' . $order->id;
+
+        try {
+            $result = $driver->initiate($order, $callbackUrl);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[INVOICE-PAY] initiate failed inv=' . $invoice->id . ': ' . $e->getMessage());
+            return redirect()->route('invoice.public.show', $token)->with('error', __('Could not start the payment. Please try again.'));
+        }
+
+        if ($result->gatewayOrderId) {
+            $order->update([
+                'gateway_order_id' => $result->gatewayOrderId,
+                'gateway_payload'  => array_merge((array) $order->gateway_payload, (array) $result->payload),
+            ]);
+        }
+        if ($result->status === 'paid') {
+            $this->markInvoicePaid($invoice, $order, $result->gatewayPaymentId);
+            return redirect()->route('invoice.public.show', $token)->with('success', __('Payment received. Thank you!'));
+        }
+        if ($result->redirectUrl) return redirect()->away($result->redirectUrl);
+        if ($result->html)        return response($result->html);
+
+        return redirect()->route('invoice.public.show', $token)->with('error', __('Could not open the payment page.'));
+    }
+
+    /**
+     * Public: the gateway redirects the customer here after paying an invoice.
+     * Verifies via the merchant driver, marks the Order + Invoice paid.
+     */
+    public function payCallback(string $gateway, Request $request)
+    {
+        $payload = array_merge($request->query() ?: [], $request->post() ?: []);
+
+        $order = null;
+        if (ctype_digit((string) $request->query('io'))) {
+            $order = \App\Models\Order::find((int) $request->query('io'));
+        }
+        if (! $order) {
+            $hint = $payload['order_id'] ?? $payload['razorpay_order_id'] ?? $payload['token']
+                ?? $payload['txnid'] ?? $payload['merchantTransactionId'] ?? $payload['session_id'] ?? null;
+            if ($hint) $order = \App\Models\Order::where('gateway_order_id', $hint)->first();
+        }
+        $invoiceId = (int) data_get($order?->gateway_payload, 'invoice.invoice_id', 0);
+        $invoice   = $invoiceId ? Invoice::find($invoiceId) : null;
+        $backToken = (string) data_get($order?->gateway_payload, 'invoice.public_token', '');
+
+        if (! $order || ! $invoice) {
+            return response()->view('public.invoice-pay-result', ['state' => 'error', 'message' => __('We could not find that invoice payment.'), 'token' => $backToken]);
+        }
+
+        $merchant = \App\Models\WaMerchantGateway::query()->active()
+            ->where('workspace_id', (int) $order->workspace_id)
+            ->where('storefront_id', 0)
+            ->where('slug', $gateway)
+            ->first();
+        if (! $merchant || ! $merchant->isConfigured()) {
+            return response()->view('public.invoice-pay-result', ['state' => 'error', 'message' => __('Unknown payment provider.'), 'token' => $backToken]);
+        }
+
+        try {
+            $driver = app(\App\Services\Payment\PaymentGatewayManager::class)->driverFromModel($merchant->toTransientPaymentGateway());
+            $res    = $driver->handleCallback($payload);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[INVOICE-PAY] callback failed order=' . $order->id . ': ' . $e->getMessage());
+            return response()->view('public.invoice-pay-result', ['state' => 'error', 'message' => __('We could not verify the payment. If you were charged, contact the business.'), 'token' => $backToken]);
+        }
+
+        if ($res->gatewayOrderId) {
+            $order->update([
+                'gateway_order_id' => $res->gatewayOrderId,
+                'gateway_payload'  => array_merge((array) $order->gateway_payload, (array) $res->payload),
+            ]);
+        }
+
+        if ($res->status === 'paid') {
+            if ($order->status !== 'paid') {
+                $order->forceFill(['status' => 'paid', 'paid_at' => now(), 'gateway_payment_id' => $res->gatewayPaymentId])->save();
+            }
+            $this->markInvoicePaid($invoice, $order, $res->gatewayPaymentId);
+            return redirect()->route('invoice.public.show', $backToken)->with('success', __('Payment received. Thank you!'));
+        }
+
+        if ($res->status === 'failed') {
+            $order->forceFill(['status' => 'failed', 'failure_reason' => $res->error])->save();
+            return response()->view('public.invoice-pay-result', ['state' => 'failed', 'message' => __('Payment failed. Please try again.'), 'token' => $backToken]);
+        }
+        if ($res->redirectUrl) return redirect()->away($res->redirectUrl);
+
+        return response()->view('public.invoice-pay-result', ['state' => 'pending', 'message' => __('Your payment is being processed. You will get a confirmation shortly.'), 'token' => $backToken]);
+    }
+
+    /** Mark an invoice PAID (idempotent) once its payment Order is confirmed. */
+    private function markInvoicePaid(Invoice $invoice, \App\Models\Order $order, ?string $paymentId): void
+    {
+        if ($invoice->status === Invoice::STATUS_PAID) return;
+        try {
+            $invoice->forceFill([
+                'status'   => Invoice::STATUS_PAID,
+                'paid_at'  => now(),
+                'meta_json' => array_merge((array) $invoice->meta_json, [
+                    'paid_via'          => $order->gateway_slug,
+                    'payment_order_id'  => $order->id,
+                    'gateway_payment_id'=> $paymentId,
+                ]),
+            ])->save();
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[INVOICE-PAY] markPaid failed inv=' . $invoice->id . ': ' . $e->getMessage());
+        }
     }
 
     public function publicPdf(string $token)

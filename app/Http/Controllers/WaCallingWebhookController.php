@@ -447,6 +447,28 @@ class WaCallingWebhookController extends Controller
             'received_at' => now(),
         ]);
 
+        // Tell the Node bridge the call ended so it closes the session NOW —
+        // ending the recording streams the moment Meta says terminate. This
+        // forward was missing: the operator's hang-up button posted
+        // /n/terminate, but the CALLER hanging up (this webhook) never reached
+        // Node, so the bridge session — and its raw PCM recording — kept
+        // running until nothing stopped it (found as 15-25 GB *_user.pcm
+        // files). Node's endpoint is idempotent; unknown/already-closed calls
+        // are a no-op. Best-effort — never fail a Meta webhook over it.
+        try {
+            $nodeUrl = wd_node_url(); $nodeToken = node_token();
+            if ($nodeUrl !== '' && $nodeToken !== '') {
+                \Illuminate\Support\Facades\Http::withHeaders(['X-Node-Token' => $nodeToken])
+                    ->timeout(5)->acceptJson()
+                    ->post(rtrim($nodeUrl, '/') . '/api/waba-call/terminate', [
+                        'meta_call_id' => $metaCallId,
+                        'node_token'   => $nodeToken,
+                    ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[WA-CALLING] terminate forward to Node failed: ' . $e->getMessage());
+        }
+
         // Drop a proper "call" entry into the chat thread (like WhatsApp shows
         // "Voice call · 4 min" / "Missed voice call") so the operator sees the
         // call in the timeline instead of a blank "Message unavailable" row.

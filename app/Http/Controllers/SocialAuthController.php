@@ -93,8 +93,19 @@ class SocialAuthController extends Controller
         if ($email === '') return null;
 
         // 2) Existing email account — link the social identity to it.
-        $byEmail = User::where('email', $email)->first();
+        //    INCLUDE soft-deleted rows: the users table keeps its UNIQUE email
+        //    index even after a soft-delete, so a returning user whose account
+        //    was soft-deleted still "owns" this email. Finding them here (and
+        //    restoring if trashed) links the Google identity to the existing
+        //    row — instead of falling through to create() and hitting the
+        //    duplicate-key 500 that returning users were seeing. The default
+        //    (non-trashed) query missed those rows, which is why NEW users
+        //    worked but RETURNING ones broke.
+        $byEmail = User::withTrashed()->where('email', $email)->first();
         if ($byEmail) {
+            if ($byEmail->trashed()) {
+                $byEmail->restore();
+            }
             $byEmail->forceFill([
                 'social_provider'    => $profile['provider'],
                 'social_provider_id' => $profile['id'],
@@ -107,16 +118,40 @@ class SocialAuthController extends Controller
         // 3) Brand-new account. OAuth email is provider-verified, so mark
         //    verified. A random password keeps the column populated; the
         //    user can set a real one later via "forgot password".
-        return User::create([
-            'name'               => $profile['name'] ?: Str::before($email, '@'),
-            'email'              => $email,
-            'password'           => Hash::make(Str::random(48)),
-            'role'               => 'user',
-            'email_verified_at'  => now(),
-            'social_provider'    => $profile['provider'],
-            'social_provider_id' => $profile['id'],
-            'avatar_path'        => $profile['avatar'] ?: null,
-        ]);
+        try {
+            return User::create([
+                'name'               => $profile['name'] ?: Str::before($email, '@'),
+                'email'              => $email,
+                'password'           => Hash::make(Str::random(48)),
+                'role'               => 'user',
+                'email_verified_at'  => now(),
+                'social_provider'    => $profile['provider'],
+                'social_provider_id' => $profile['id'],
+                'avatar_path'        => $profile['avatar'] ?: null,
+            ]);
+        } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+            // The email's unique slot is already taken even though step 2 found
+            // nothing ACTIVE. Two ways this happens: (a) a concurrent OAuth
+            // callback just created the row (double-click / retry race), or
+            // (b) a SOFT-DELETED account still holds this email (users has
+            // SoftDeletes + a unique email index, and the delete-time PII scrub
+            // didn't free it). Re-resolve INCLUDING trashed and link/restore —
+            // the person owns this Google-verified email — instead of 500ing.
+            $existing = User::withTrashed()->where('email', $email)->first();
+            if (! $existing) {
+                throw $e; // genuinely unexpected — surface it
+            }
+            if ($existing->trashed()) {
+                $existing->restore();
+            }
+            $existing->forceFill([
+                'social_provider'    => $profile['provider'],
+                'social_provider_id' => $profile['id'],
+                'email_verified_at'  => $existing->email_verified_at ?: now(),
+            ])->save();
+            $this->backfillAvatar($existing, $profile);
+            return $existing;
+        }
     }
 
     private function backfillAvatar(User $user, array $profile): void

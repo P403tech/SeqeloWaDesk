@@ -128,7 +128,9 @@
                                 ['bg' => 'bg-[#D9E5F2]', 'text' => 'text-[#13478A]'],
                             ];
                             $pal = $palette[$u->id % count($palette)];
-                            $daysLeft = max(0, 30 - $u->deleted_at?->diffInDays(now()));
+                            // diffInDays() returns a FLOAT, so 30 - 0.0005 rendered as
+                            // "29.999… days". ceil to whole days remaining (46s ago → 30).
+                            $daysLeft = max(0, (int) ceil(30 - (float) ($u->deleted_at?->diffInDays(now()) ?? 0)));
                             $expiringSoon = $daysLeft <= 7;
                             $rowCls = $expiringSoon
                                 ? 'hover:bg-paper-50/60 bg-accent-amber/10'

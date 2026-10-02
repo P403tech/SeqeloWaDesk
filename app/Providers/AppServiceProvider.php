@@ -63,6 +63,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Inbound developer-webhooks for every NON-WhatsApp channel: one observer
+        // on inbox_messages fires `conversation.received` for FB / IG / Telegram /
+        // … inbound, mirroring what WaInboundController already does for WhatsApp.
+        \App\Models\InboxMessage::observe(\App\Observers\InboxMessageInboundWebhookObserver::class);
+
         // ── Node bridge auth: auto-attach X-Node-Token to EVERY outbound HTTP
         // request bound for the Node host. Node gates its whole /api surface —
         // a call is allowed only WITH the shared token OR from loopback. On a
@@ -188,7 +193,9 @@ class AppServiceProvider extends ServiceProvider
                 // above) and public/js/api-docs.js renders each description under
                 // its service heading. Keep these customer-facing and concise.
                 $tagOverviews = [
-                    'Message'      => 'Send a single WhatsApp message — text, media (image / video / document / audio) or a location pin — to one number, then read its delivery status or your message history. A file can be attached directly as a multipart `media` field or referenced by a public URL.',
+                    'Channel'       => 'List every messaging channel connected to your workspace — Unofficial WhatsApp (QR), Official WhatsApp (Cloud API / Twilio), Facebook Messenger, Instagram and Telegram — each with its id, label and connection status; and bulk-send one message to many recipients on a channel (the channel equivalent of Broadcast, with a per-recipient result list). Use the listing to discover which channel and connection you can send on with the Message endpoint.',
+                    'WhatsAppDevice' => 'Connect an UNOFFICIAL WhatsApp number over the API — no dashboard step. Start a session (`POST /whatsapp/connect`) to get a QR image / pairing code, poll its status until it reads `connected`, then send through it with the Message endpoint (pass the returned `device_id`). You can also disconnect a device.',
+                    'Message'      => 'Send a single message on ANY connected channel — WhatsApp (default), Facebook Messenger, Instagram or Telegram — by setting `channel` and `to` (phone / PSID / IGSID / chat_id). Text, media (image / video / document / audio) or a location pin; a file can be attached directly as a multipart `media` field or referenced by a public URL. Then read a message\'s delivery status or your history. Note: Facebook, Instagram and Telegram only accept a business-initiated message inside the platform\'s reply window (the customer must have messaged you first).',
                     'Template'     => 'Create, list and manage your approved WhatsApp templates, and send a template to one number with your own header, body variables and button values. Use this for utility / marketing sends that need a pre-approved template — including one with a PDF / document header (pass the file\'s public URL as the header, e.g. from the Media endpoint).',
                     'Media'        => 'Upload a file once (multipart / form-data, field name `file`, up to 16 MB) and get back a hosted public URL you can reuse across sends — for example a PDF to use as a document-header on a template, or an image on a message.',
                     'Contact'      => 'Full create / read / update / delete over your contacts and leads, including search by number, tags and custom attributes.',
@@ -199,9 +206,9 @@ class AppServiceProvider extends ServiceProvider
                     'AutoReply'    => 'Manage keyword auto-replies — the automatic responses that fire when an inbound message matches a rule.',
                     'Flow'         => 'Enroll a contact into an automation flow (chatbot) and manage your flows through the API.',
                     'Device'       => 'List the WhatsApp numbers / devices connected to your workspace and check each one\'s connection status.',
-                    'Webhook'      => 'Register and manage webhook endpoints so ' . $brand . ' POSTs real-time events (message received / sent / delivered / read / failed, plus campaign and contact events) to your server. When you set a signing secret each delivery carries an HMAC-SHA256 signature header you can verify.',
+                    'Webhook'      => 'Register and manage webhook endpoints so ' . $brand . ' POSTs real-time events to your server — including inbound messages on EVERY channel (WhatsApp, Facebook, Instagram, Telegram and more): subscribe to `conversation.received` and read `data.channel` + `data.message`. Also message sent / delivered / read / failed, plus campaign and contact events. When you set a signing secret each delivery carries an HMAC-SHA256 signature header you can verify.',
                     'Deal'         => 'Manage sales-pipeline deals — create, list, update and move deals between stages.',
-                    'Conversation' => 'Read your workspace inbox: list chat threads (conversations) and fetch the messages inside a thread.',
+                    'Conversation' => 'Read your workspace inbox across EVERY channel: list chat threads (each with its `channel` and the customer id) and fetch the messages inside a thread — WhatsApp, Facebook, Instagram and Telegram alike.',
                     'Account'      => 'Read your account details, plan, limits and message-credit usage.',
                 ];
                 $openApi->tags = array_map(
@@ -458,6 +465,108 @@ class AppServiceProvider extends ServiceProvider
             \App\Models\Device::class,
         ] as $modelClass) {
             $modelClass::observe(AuditableObserver::class);
+        }
+
+        // ── AI SDR: central lead-scoring signals ──────────────────────────
+        // Booking a meeting and moving/winning a deal are the highest-signal
+        // qualification/conversion events. Scoring them here means every
+        // channel and flow that creates an Appointment or advances a Deal feeds
+        // the lead score without each call site knowing about scoring — and a
+        // won deal also halts any outreach still chasing that lead.
+        if (class_exists(\App\Models\Appointment::class)) {
+            \App\Models\Appointment::created(function ($appt) {
+                $cid = (int) ($appt->contact_id ?? 0);
+                if ($cid > 0) {
+                    \App\Services\LeadScoring\LeadScoringService::record(
+                        $cid, 'appointment_booked',
+                        ['booking_type_id' => $appt->booking_type_id ?? null],
+                        (int) ($appt->workspace_id ?? 0) ?: null
+                    );
+
+                    // Drip goal: the booking IS the outcome a reminder sequence
+                    // was chasing. Reuses this existing hook rather than adding
+                    // a second one that could drift from it.
+                    try {
+                        $c = \App\Models\Contact::find($cid);
+                        if ($c) app(\App\Services\Drip\DripRunner::class)->onAppointmentBooked($c);
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning('[DRIP] appointment goal hook: ' . $e->getMessage());
+                    }
+                }
+            });
+        }
+        if (class_exists(\App\Models\Deal::class)) {
+            \App\Models\Deal::updated(function ($deal) {
+                $cid = (int) ($deal->contact_id ?? 0);
+                if ($cid <= 0) {
+                    return;
+                }
+                $wsId = (int) ($deal->workspace_id ?? 0) ?: null;
+                if ($deal->wasChanged('stage_id')) {
+                    \App\Services\LeadScoring\LeadScoringService::record(
+                        $cid, 'deal_stage_changed',
+                        ['stage_id' => $deal->stage_id, 'status' => (string) ($deal->status ?? '')],
+                        $wsId
+                    );
+                }
+                if ($deal->wasChanged('status') && $deal->status === 'won') {
+                    $c = \App\Models\Contact::find($cid);
+                    if ($c) {
+                        \App\Services\LeadScoring\LeadScoringService::record($c, 'deal_won', [], $wsId);
+                        \App\Services\LeadScoring\ConversionStopService::onConversion($c, 'deal_won');
+                        \App\Services\Sdr\SdrOrchestrator::onConvert($c);
+                    }
+                }
+            });
+        }
+
+        // Inbound-reply scoring + SDR stop-on-reply. A single channel-agnostic
+        // hook: any inbound message scores the contact (message_inbound +
+        // keyword_match) and, if they're in an SDR cadence, replying stops the
+        // auto-chase. Cheap per-workspace gate skips workspaces with no SDR/
+        // scoring set up; old (backfilled) messages are ignored so importing
+        // history never mis-scores. Best-effort — never breaks the ingest.
+        if (class_exists(\App\Models\InboxMessage::class)) {
+            \App\Models\InboxMessage::created(function ($msg) {
+                try {
+                    if (($msg->direction ?? '') !== 'in') {
+                        return;
+                    }
+                    // Only live inbound — skip historical/backfilled imports.
+                    if (! empty($msg->sent_at) && $msg->sent_at->lt(now()->subMinutes(15))) {
+                        return;
+                    }
+                    $conv = \App\Models\Conversation::withoutGlobalScopes()
+                        ->whereKey($msg->conversation_id)
+                        ->first(['id', 'workspace_id', 'contact_id']);
+                    if (! $conv || empty($conv->contact_id)) {
+                        return;
+                    }
+                    $wsId = (int) $conv->workspace_id;
+                    if ($wsId <= 0) {
+                        return;
+                    }
+                    $configured = \Illuminate\Support\Facades\Cache::remember(
+                        "sdr:configured:{$wsId}", 300,
+                        fn () => \App\Models\LeadScoringRule::where('workspace_id', $wsId)->where('is_active', true)->exists()
+                            || \App\Models\SdrCampaign::where('workspace_id', $wsId)->where('is_active', true)->exists()
+                    );
+                    if (! $configured) {
+                        return;
+                    }
+                    $contact = \App\Models\Contact::withoutGlobalScopes()
+                        ->where('workspace_id', $wsId)->where('id', $conv->contact_id)->first();
+                    if (! $contact) {
+                        return;
+                    }
+                    $text = (string) ($msg->body ?? '');
+                    \App\Services\LeadScoring\LeadScoringService::record($contact, 'message_inbound', ['text' => $text], $wsId);
+                    \App\Services\LeadScoring\LeadScoringService::record($contact, 'keyword_match', ['text' => $text], $wsId);
+                    \App\Services\Sdr\SdrOrchestrator::onReply($contact);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('[SDR] inbound hook failed: ' . $e->getMessage());
+                }
+            });
         }
     }
 

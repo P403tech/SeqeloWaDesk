@@ -158,7 +158,7 @@ class BookingManageController extends Controller
     {
         $tz = $type->effectiveTimezone();
         try {
-            if ($oldEventId && $appt->google_calendar_id && $this->gcal->isEnabled()) {
+            if ($oldEventId && $appt->google_calendar_id && $this->gcal->isEnabled($appt->workspace)) {
                 // Simplest robust move: delete the old event, create a fresh one.
                 try { $this->gcal->deleteEvent($appt->workspace, $appt->google_calendar_id, $oldEventId); } catch (\Throwable $e) {}
                 $appt->forceFill(['google_event_id' => null])->save();

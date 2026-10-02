@@ -152,4 +152,35 @@
     </div>
 </section>
 
+{{-- Why deals are lost. lost_reason was captured on every lost deal but never
+     reported on, so the field was effectively write-only — you could see one
+     deal's reason on its card and never the pattern across the pipeline. --}}
+<section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 pb-8">
+    <div class="bg-white border border-paper-200 rounded-[18px] px-5 py-[18px] shadow-card">
+        <div class="flex items-start justify-between mb-3">
+            <div>
+                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Why deals are lost') }}</div>
+                <h3 class="font-serif font-normal tracking-[-0.01em] text-[24px] leading-tight">{{ __('Loss reasons') }}</h3>
+            </div>
+            <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-paper-50 text-ink-700 font-mono">{{ $lost }} {{ __('lost') }}</span>
+        </div>
+        @php $lostMax = max(1, (int) $lostReasons->max('count')); @endphp
+        @forelse($lostReasons as $r)
+            <div class="py-2.5 {{ $loop->last ? '' : 'border-b border-paper-200' }}">
+                <div class="flex items-center justify-between gap-3 mb-1.5">
+                    <span class="text-[12.5px] font-medium text-ink-900 truncate">{{ $r['name'] }}</span>
+                    <span class="text-[11px] font-mono text-ink-500 shrink-0">
+                        {{ $r['count'] }} · {{ $symbol }}{{ number_format($r['value'], 0) }}
+                    </span>
+                </div>
+                <div class="dl-progress">
+                    <span style="width: {{ round($r['count'] / $lostMax * 100) }}%; background: #DC2626;"></span>
+                </div>
+            </div>
+        @empty
+            <div class="py-8 text-center text-[12px] text-ink-500">{{ __('No lost deals yet. Configure a reason list in Pipeline settings so this report can group them.') }}</div>
+        @endforelse
+    </div>
+</section>
+
 </x-layouts.user>

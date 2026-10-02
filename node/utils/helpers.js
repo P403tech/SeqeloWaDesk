@@ -292,6 +292,71 @@ export function formatPhoneNumber(phoneNumber) {
   return `${sanitized}@s.whatsapp.net`;
 }
 
+// Cache of digits → { jid, at }. A number's registered JID never changes, so a
+// long TTL is safe and it stops a big broadcast from re-querying onWhatsApp for
+// the same number (heavy onWhatsApp traffic can trip WhatsApp's anti-spam).
+const _jidCache = new Map();
+const _JID_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve a phone number to the WhatsApp JID the SERVER actually recognises,
+ * via sock.onWhatsApp(). This is what fixes "broadcast shows sent but the
+ * recipient never receives it" for Mexico (+52 ↔ +52 1), Argentina (+54 ↔ +54
+ * 9) and LID accounts: in those cases the number registers under a JID that
+ * differs from the dialled digits, so sending to `${digits}@s.whatsapp.net` is
+ * accepted locally (no error → "sent") but the server has no user at that exact
+ * JID, so nothing is delivered. onWhatsApp returns the real jid; we send there.
+ *
+ * SAFE drop-in for formatPhoneNumber — it NEVER returns null and always has a
+ * fallback to `${digits}@s.whatsapp.net` (the previous behaviour), so nothing
+ * that worked before can break:
+ *   - no live Baileys socket (WABA/Twilio provider send) → raw jid
+ *   - already a full jid / group / lid                   → returned as-is
+ *   - onWhatsApp throws / times out / rate-limited       → raw jid
+ *   - onWhatsApp says exists=false                        → raw jid + a warning
+ * Only the exists=true case swaps in the server's canonical jid — a strict
+ * improvement over the raw string.
+ */
+export async function resolveRecipientJid(sock, phoneNumber) {
+  const raw = String(phoneNumber || "");
+  // Already an addressable jid (group / lid / user) — never re-resolve.
+  if (raw.includes("@g.us") || raw.includes("@lid") || raw.includes("@s.whatsapp.net")) {
+    return raw;
+  }
+  const digits = raw.replace(/\D+/g, "");
+  const rawJid = `${digits}@s.whatsapp.net`;
+  if (!digits) return rawJid;
+
+  // onWhatsApp only applies to a live paired Baileys session; provider engines
+  // (WABA / Twilio) send by number through their own API and must stay raw.
+  if (!sock || typeof sock.onWhatsApp !== "function") return rawJid;
+
+  const hit = _jidCache.get(digits);
+  if (hit && (Date.now() - hit.at) < _JID_TTL_MS) return hit.jid;
+
+  try {
+    const res = await sock.onWhatsApp(digits);
+    const row = Array.isArray(res) ? res[0] : null;
+    if (row && row.exists && row.jid) {
+      _jidCache.set(digits, { jid: row.jid, at: Date.now() });
+      if (_jidCache.size > 20000) {
+        const entries = [..._jidCache.entries()].sort((a, b) => a[1].at - b[1].at);
+        for (let k = 0; k < entries.length >> 1; k++) _jidCache.delete(entries[k][0]);
+      }
+      if (row.jid !== rawJid) {
+        console.log(`[JID-RESOLVE] ${digits} → ${row.jid} (server canonical, differs from raw — Mexico/Argentina/LID)`);
+      }
+      return row.jid;
+    }
+    if (row && row.exists === false) {
+      console.warn(`[JID-RESOLVE] ${digits} not on WhatsApp (onWhatsApp exists=false) — using raw jid`);
+    }
+  } catch (e) {
+    console.warn(`[JID-RESOLVE] onWhatsApp(${digits}) failed: ${e?.message} — using raw jid`);
+  }
+  return rawJid;
+}
+
 // Format interactive buttons for Baileys
 export function formatInteractiveButtonsForBaileys(buttons, trackingId = null, appDomainName = null) {
   if (!buttons || !Array.isArray(buttons) || buttons.length === 0) {
@@ -1001,25 +1066,21 @@ export async function getWhatsAppSettings(appDomainName, params = {}) {
       return stale.data;
     }
 
-    // Last-resort: borrow the boot-time globally-fetched branding_footer
-    // from app.locals (populated by fetchWhatsAppSettings in node/index.js).
-    // Boot runs BEFORE any browser session lock is in play, so its fetch
-    // almost always succeeds. Per-send timeouts can then still apply the
-    // footer instead of silently dropping to null.
-    let bootFooter = null;
-    try {
-      // global.appLocals is set by node/index.js so we don't need the
-      // app reference here. Falls back gracefully when missing.
-      bootFooter = global.appLocals?.whatsappSettings?.branding_footer ?? null;
-    } catch (e) {}
-
+    // Last-resort footer MUST be null. Whether a workspace shows a branding
+    // footer is a PLAN decision resolved per-workspace server-side
+    // (BrandingFooterService::resolve → null for Premium / remove_branding).
+    // The old code borrowed the boot-time GLOBAL branding_footer here, which is
+    // NOT plan-gated — so on a per-send settings-fetch timeout a Premium
+    // workspace got the platform footer ("whatzbot") stamped on its message.
+    // Dropping to null is correct: on failure we simply omit the footer rather
+    // than apply one we can't attribute to this workspace's plan.
     const fallback = {
       use_facebook_api: false,
       facebook_phone_id: null,
       facebook_api_token: null,
-      branding_footer: bootFooter,
+      branding_footer: null,
     };
-    console.log(`[GET-SETTINGS] Using default fallback (NOT cached — next send retries) | boot_footer=${bootFooter === null ? 'null' : `"${bootFooter}"`}`);
+    console.log('[GET-SETTINGS] Using default fallback (NOT cached — next send retries) | branding_footer=null (plan-gated, never borrowed)');
     return fallback;
   }
 }

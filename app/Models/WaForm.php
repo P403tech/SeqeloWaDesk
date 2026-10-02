@@ -24,7 +24,7 @@ class WaForm extends Model
         'workspace_id', 'user_id', 'title', 'purpose', 'slug', 'audience_type',
         'submission_cap', 'cap_reached_note',
         'send_button_label', 'thank_you_note',
-        'definition_json', 'status', 'meta_flow_id', 'published_at',
+        'definition_json', 'status', 'meta_flow_id', 'provider_config_id', 'published_at',
         'publish_error', 'submission_count',
     ];
 

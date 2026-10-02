@@ -28,7 +28,7 @@ class BriefService
         if (! in_array($subjectType, ['contact', 'company', 'deal'], true)) {
             return null;
         }
-        $this->currency = (string) (InvoiceSetting::forWorkspace($workspaceId)->currency ?? 'USD') ?: 'USD';
+        $this->currency = strtoupper((string) (InvoiceSetting::forWorkspace($workspaceId)->currency ?: (\App\Models\Workspace::find($workspaceId)?->currency ?: 'USD')));
         $built = match ($subjectType) {
             'company' => $this->forCompany($workspaceId, $subjectId),
             'contact' => $this->forContact($workspaceId, $subjectId),

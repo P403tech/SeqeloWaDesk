@@ -19,6 +19,7 @@
         'ai_model' => $a?->ai_model ?? 'gemini-2.5-flash-lite',
         'ai_system_prompt' => $a?->ai_system_prompt ?? '',
         'knowledge_base_url' => $a?->knowledge_base_url ?? '',
+        'knowledge_assistant_id' => $a?->knowledge_assistant_id ?? '',
         'natural_conciseness' => $a?->natural_conciseness ?? true,
         'personality' => (array) ($meta['personality'] ?? ['warmth' => 60, 'formality' => 50, 'pace' => 50]),
         'voice_provider' => $a?->voice_provider ?? 'elevenlabs',
@@ -251,6 +252,27 @@
                             <input data-wf="knowledge_base_url" type="url" maxlength="500"
                                 placeholder="https://docs.acme.com"
                                 class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep" />
+                        </div>
+
+                        {{-- Knowledge base (RAG) — link an AI-Training assistant so the
+                             voice agent answers from that trained content. Loaded into the
+                             system prompt at call start (context-stuffed, not per-turn) so
+                             the spoken reply stays fast + smooth. --}}
+                        <div class="mb-4">
+                            <label class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">
+                                {{ __('Knowledge base') }}
+                                <span class="text-ink-500 font-normal">— {{ __('answer from a trained AI-Training assistant') }}</span>
+                            </label>
+                            <select data-wf="knowledge_assistant_id"
+                                class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep">
+                                <option value="">{{ __('None') }}</option>
+                                @foreach (($knowledgeAssistants ?? collect()) as $ka)
+                                    <option value="{{ $ka->id }}">{{ $ka->name }}</option>
+                                @endforeach
+                            </select>
+                            <div class="text-[10.5px] text-ink-500 mt-1">
+                                {{ __('Its trained docs/Q&A are added to the agent\'s brain for the whole call. Manage sources in AI Training.') }}
+                            </div>
                         </div>
 
                         {{-- Personality sliders — competitor only has one toggle. --}}

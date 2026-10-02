@@ -262,7 +262,7 @@ class WaConnectController extends Controller
             return response()->json(['ok' => false, 'message' => 'No workspace.'], 422);
         }
 
-        $serverUrl = $data['server_url']
+        $serverUrl = ($data['server_url'] ?? null)
             ?: (string) \App\Models\SystemSetting::get('baileys_server_url', env('SERVER_URL', ''));
         if ($serverUrl === '') {
             return response()->json(['ok' => false, 'message' => 'Set the Baileys Node server URL in /admin/settings first.'], 422);
@@ -299,7 +299,7 @@ class WaConnectController extends Controller
             'provider'      => WaProvider::Baileys->value,
             'status'        => WaProviderConfig::STATUS_PENDING,
             'phone_number'  => $phone,
-            'display_label' => $data['device_name'] ?: ('Baileys · ' . $phone),
+            'display_label' => ($data['device_name'] ?? null) ?: ('Baileys · ' . $phone),
             'is_primary'    => true,
             'meta_json'     => array_merge((array) ($config->meta_json ?? []), [
                 'server_url' => $serverUrl,
@@ -375,8 +375,11 @@ class WaConnectController extends Controller
             'config_id'      => $config->id,
             'phone_number'   => $phone,
             'qr_data'        => $qr,
-            'qr_poll_url'    => route('baileys.qr.poll', ['configId' => $config->id]),
-            'status_poll_url'=> route('baileys.status.poll', ['configId' => $config->id]),
+            // Build by PATH, not route('baileys.qr.poll') — those routes carry a
+            // `user.` group-name prefix (real name user.baileys.qr.poll), so the
+            // bare name threw RouteNotFoundException and 500'd this success return.
+            'qr_poll_url'    => url('/api/baileys/qr/' . $config->id),
+            'status_poll_url'=> url('/api/baileys/status/' . $config->id),
         ]);
     }
 
@@ -682,7 +685,13 @@ class WaConnectController extends Controller
         }
 
         $data = $request->validate([
-            'devices'             => 'required|array',
+            // `present`, NOT `required`: a WABA-/Twilio-only server has ZERO live
+            // Baileys sockets, so Node sends an EMPTY devices array — and the
+            // heartbeat MUST still be accepted so the scheduler sweeps (durable
+            // flow-delay resumes, scheduled campaigns) run. `required` rejects an
+            // empty array with 422 "devices field is required", which starved the
+            // sweeps on official-API-only workspaces.
+            'devices'             => 'present|array',
             'devices.*.wid'       => 'required|string|max:32',
             'devices.*.status'    => 'nullable|string|max:64',
         ]);
@@ -692,10 +701,6 @@ class WaConnectController extends Controller
             ->filter()
             ->values()
             ->all();
-        if (empty($liveDigits)) {
-            return response()->json(['ok' => true, 'touched' => 0]);
-        }
-
         // Touch last_seen_at on every live device. The PHP scan is
         // unavoidable — phone_number is encrypted, no SQL index.
         $touched = 0;
@@ -743,9 +748,15 @@ class WaConnectController extends Controller
         // Piggy-back the 30s heartbeat to fire any DUE scheduled / recurring
         // campaigns — WaDesk has no Laravel scheduler, so this is the tick.
         // Internally cache-locked so concurrent heartbeats can't double-fire.
+        // SKIP this when the dedicated Node campaign-drain loop is alive (it OWNS
+        // draining via /api/campaigns/drain and keeps this heartbeat a fast
+        // liveness ping). If that loop ever dies, its 90s marker expires and we
+        // resume sweeping here — a campaign is never left stranded.
         $sweptCampaigns = 0;
         try {
-            $sweptCampaigns = app(\App\Services\CampaignScheduleSweeper::class)->sweep();
+            if (! \Illuminate\Support\Facades\Cache::has('campaign-drain-loop-alive')) {
+                $sweptCampaigns = app(\App\Services\CampaignScheduleSweeper::class)->sweep();
+            }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('[HEARTBEAT] campaign sweep failed: ' . $e->getMessage());
         }
@@ -755,7 +766,12 @@ class WaConnectController extends Controller
         // with per-feature backoff up to the configured max attempts.
         $sweptScheduled = 0;
         try {
-            $sweptScheduled = app(\App\Services\ScheduledMessageSweeper::class)->sweep();
+            // Throttled to ~2 min (was every 30s). It only RETRIES failed one-off
+            // sends, so a slightly later retry is harmless — running its table scan
+            // on every 30s heartbeat was pure baseline DB load at scale.
+            if (\Illuminate\Support\Facades\Cache::add('scheduled-sweep-throttle', 1, now()->addSeconds(120))) {
+                $sweptScheduled = app(\App\Services\ScheduledMessageSweeper::class)->sweep();
+            }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('[HEARTBEAT] scheduled sweep failed: ' . $e->getMessage());
         }
@@ -764,9 +780,65 @@ class WaConnectController extends Controller
         // (only the unsent remainder) with backoff, up to the configured max.
         $sweptBroadcasts = 0;
         try {
-            $sweptBroadcasts = app(\App\Services\BroadcastSweeper::class)->sweep();
+            // Throttled to ~2 min (was every 30s). Its JOIN + DISTINCT over
+            // broadcast_contacts is the heaviest heartbeat query at scale, and it
+            // only RETRIES failed recipients, so a 2-min cadence is fine.
+            if (\Illuminate\Support\Facades\Cache::add('broadcast-sweep-throttle', 1, now()->addSeconds(120))) {
+                $sweptBroadcasts = app(\App\Services\BroadcastSweeper::class)->sweep();
+            }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('[HEARTBEAT] broadcast sweep failed: ' . $e->getMessage());
+        }
+
+        // Time-delayed campaign follow-ups ("no reply within X hours", "delivered
+        // but not read", …). Fires due campaign_followup_runs. Throttled to ~1 min
+        // so a "no reply in N hours" reminder lands promptly without adding heavy
+        // baseline load — the query is a bounded, indexed (status,due_at) scan.
+        $sweptFollowups = 0;
+        try {
+            if (\Illuminate\Support\Facades\Cache::add('campaign-followup-throttle', 1, now()->addSeconds(60))) {
+                $sweptFollowups = app(\App\Services\CampaignFollowupSweeper::class)->sweep();
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[HEARTBEAT] followup sweep failed: ' . $e->getMessage());
+        }
+
+        // Drip campaigns — fires due drip steps ("Day 2 message", "wait 3 days").
+        // Without this the only drain triggers were a page load / manual /drain /
+        // a WA-campaign send, so a scheduled step would stall until someone opened
+        // the app. drain() is a global, row-locked, advance-before-send due-scan
+        // (same shape as the sweepers around it). Throttled ~60s — drip steps are
+        // hour/day-scale, so a minute's granularity lands them promptly.
+        try {
+            if (\Illuminate\Support\Facades\Cache::add('drip-drain-throttle', 1, now()->addSeconds(60))) {
+                app(\App\Services\Drip\DripRunner::class)->drain(200);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[HEARTBEAT] drip drain failed: ' . $e->getMessage());
+        }
+
+        // Refer & Earn — expire pending referrals whose qualifying window closed.
+        // Day-scale, so an hourly gate is plenty; keeps the referral table honest
+        // (pending → expired) without a cron.
+        try {
+            if (\Illuminate\Support\Facades\Cache::add('referral-expire-throttle', 1, now()->addSeconds(3600))) {
+                app(\App\Services\ReferralService::class)->expireStale();
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[HEARTBEAT] referral expire failed: ' . $e->getMessage());
+        }
+
+        // Durable long flow delays ("wait N hours/days, then continue"). Fires due
+        // flow_delay_resumes rows — the durable form of a long duration-delay node
+        // that a Node restart would otherwise have dropped. Throttled ~30s so an
+        // hour/day-scale delay lands promptly; the query is a bounded, indexed
+        // (status, resume_at) scan.
+        try {
+            if (\Illuminate\Support\Facades\Cache::add('flow-delay-resume-throttle', 1, now()->addSeconds(30))) {
+                app(\App\Services\FlowDelayResumeSweeper::class)->sweep();
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[HEARTBEAT] flow-delay resume sweep failed: ' . $e->getMessage());
         }
 
         // Appointment lifecycle — free expired slot-locks, flag past-confirmed
@@ -924,11 +996,15 @@ class WaConnectController extends Controller
         $useWaba       = false;
         $accessToken   = '';
         $phoneNumberId = '';
+        $wabaId        = '';
         if ($cfg) {
             $creds         = $cfg->creds();
             $useWaba       = true;
             $accessToken   = (string) ($creds['access_token']  ?? '');
             $phoneNumberId = (string) (($cfg->meta_json['phone_number_id'] ?? '') ?: ($creds['phone_number_id'] ?? ''));
+            // WABA id — Node uses it to look up a template's real approved
+            // language on THIS account (template language-fallback / 132001).
+            $wabaId        = (string) (($cfg->meta_json['waba_id'] ?? '') ?: ($creds['waba_id'] ?? ''));
         } elseif ($phone === '') {
             // No phone supplied — return defaults (engine flag only).
             // Credentials must come from a workspace's wa_provider_configs
@@ -1031,6 +1107,7 @@ class WaConnectController extends Controller
             'facebook_api_token'       => $accessToken,        // node/utils/helpers.js
             'facebook_phone_id'        => $phoneNumberId,      // node/utils/helpers.js
             'facebook_phone_number_id' => $phoneNumberId,      // legacy key
+            'waba_id'                  => $wabaId,             // node template language lookup
             'facebook_app_version'     => $version,
             // Twilio creds — Node's sendMessageViaTwilioApi reads these
             // to POST directly to Twilio's REST API. Empty strings when

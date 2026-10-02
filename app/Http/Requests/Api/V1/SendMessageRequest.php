@@ -31,8 +31,22 @@ class SendMessageRequest extends FormRequest
     public function rules(): array
     {
         return [
-            // Recipient phone in international format (digits, E.164). Required.
-            'to'          => ['required', 'string', 'max:32'],
+            // Channel to send on. Defaults to WhatsApp (the workspace's connected
+            // engine). Other channels reply into an existing thread on that
+            // channel — the recipient must have messaged the connected
+            // Page / account / bot first (platform 24h window rules apply).
+            //   whatsapp             — WhatsApp (Unofficial / WABA / Twilio; engine picked by device_id)
+            //   facebook             — Facebook Messenger (to = PSID)
+            //   instagram            — Instagram DM (to = IGSID)
+            //   telegram             — Telegram (to = chat_id)
+            'channel'     => ['nullable', 'string', 'in:whatsapp,whatsapp_unofficial,facebook,instagram,telegram'],
+            // Which connection to send FROM on non-WhatsApp channels (optional —
+            // defaults to the workspace's connected Page / account / bot). Accepts
+            // the connection's numeric id or its native id (page_id / ig_user_id).
+            'connection_id' => ['nullable', 'string', 'max:64'],
+            // Recipient. WhatsApp: phone in international format (E.164). Facebook:
+            // PSID. Instagram: IGSID. Telegram: chat_id. Required.
+            'to'          => ['required', 'string', 'max:64'],
             // Sending sender (optional — defaults to the workspace's primary).
             // Accepts a Baileys device id (57), a WABA/Twilio provider-config id
             // ("cfg_20" or a bare 20), or an "engine:id" key — resolved across

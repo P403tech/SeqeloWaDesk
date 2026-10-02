@@ -1,4 +1,4 @@
-<x-layouts.user :title="__('WooCommerce')" nav-key="more" page="user-woocommerce-dashboard">
+<x-layouts.user :title="__('WooCommerce')" nav-key="woocommerce" page="user-woocommerce-dashboard">
     @php
         $isConnected = $integration && $integration->isConnected();
         $tabs = [
@@ -94,7 +94,7 @@
             <div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
 
                 <!-- ===== LEFT RAIL ===== -->
-                <aside class="space-y-3">
+                <aside data-keep-rail class="space-y-3">
                     <div class="border border-paper-200 rounded-2xl bg-paper-0 p-4 shadow-card">
                         <div class="w-12 h-12 rounded-xl mb-3 grid place-items-center" style="background:#F3ECFA">
                             <svg viewBox="0 0 32 32" class="w-8 h-8">
@@ -426,7 +426,7 @@
             <div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
 
                 <!-- ===== SIDEBAR ===== -->
-                <aside class="space-y-3">
+                <aside data-keep-rail class="space-y-3">
                     <div class="border border-paper-200 rounded-2xl bg-paper-0 p-4 shadow-card">
                         <div class="flex items-start justify-between gap-2">
                             <span class="w-11 h-11 rounded-xl shrink-0 grid place-items-center"
@@ -545,7 +545,7 @@
                                     @break
 
                                     @case('orders')
-                                        Last 10 orders fetched from the store.
+                                        All orders from your store — newest first, paged.
                                     @break
 
                                     @case('products')
@@ -715,23 +715,33 @@
                                         <tr>
                                             <th class="px-4 py-2.5">{{ __('Order') }}</th>
                                             <th class="px-4 py-2.5">{{ __('Customer') }}</th>
+                                            <th class="px-4 py-2.5">{{ __('Phone') }}</th>
                                             <th class="px-4 py-2.5">{{ __('Status') }}</th>
                                             <th class="px-4 py-2.5 text-right">{{ __('Total') }}</th>
                                             <th class="px-4 py-2.5 text-right">{{ __('Placed') }}</th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-paper-100">
-                                        @forelse ($orders as $o)
+                                        @forelse (($ordersPaged['items'] ?? $orders) as $o)
                                             @php
                                                 $b = $o['billing'] ?? [];
                                                 $name =
                                                     trim(($b['first_name'] ?? '') . ' ' . ($b['last_name'] ?? '')) ?:
                                                     $b['email'] ?? '—';
+                                                // Same normalization as WoocommerceController::resolveRecipient (WooPhone::fromOrder)
+                                                $phoneE164 = \App\Support\Woo\WooPhone::fromOrder($o);
                                             @endphp
                                             <tr class="hover:bg-paper-50">
                                                 <td class="px-4 py-2.5 font-mono text-ink-700">
                                                     #{{ $o['number'] ?? ($o['id'] ?? '?') }}</td>
                                                 <td class="px-4 py-2.5">{{ $name }}</td>
+                                                <td class="px-4 py-2.5 font-mono text-[11px] text-ink-700">
+                                                    @if ($phoneE164)
+                                                        +{{ $phoneE164 }}
+                                                    @else
+                                                        <span class="text-ink-400">—</span>
+                                                    @endif
+                                                </td>
                                                 <td class="px-4 py-2.5"><span
                                                         class="font-mono text-[10px] px-2 py-0.5 rounded-full bg-paper-100 text-ink-700">{{ ucfirst((string) ($o['status'] ?? '—')) }}</span>
                                                 </td>
@@ -744,13 +754,35 @@
                                             </tr>
                                         @empty
                                             <tr>
-                                                <td colspan="5" class="px-4 py-8 text-center text-[12px] text-ink-500">
+                                                <td colspan="6" class="px-4 py-8 text-center text-[12px] text-ink-500">
                                                     {{ __('No orders found.') }}</td>
                                             </tr>
                                         @endforelse
                                     </tbody>
                                 </table>
                                 </div>
+                                @php
+                                    $opCur = (int) ($ordersPaged['page'] ?? 1);
+                                    $opMax = (int) ($ordersPaged['total_pages'] ?? 1);
+                                    $opTot = (int) ($ordersPaged['total'] ?? 0);
+                                @endphp
+                                @if ($opMax > 1)
+                                    <div class="flex items-center justify-between px-4 py-3 border-t border-paper-200 text-[12px] text-ink-500">
+                                        <div>{{ __('Page') }} <span class="font-mono text-ink-800">{{ $opCur }}</span> {{ __('of') }} <span class="font-mono text-ink-800">{{ $opMax }}</span>@if ($opTot) · <span class="font-mono text-ink-800">{{ number_format($opTot) }}</span> {{ __('orders') }}@endif</div>
+                                        <div class="flex items-center gap-2">
+                                            @if ($opCur > 1)
+                                                <a href="?tab=orders&page={{ $opCur - 1 }}" class="px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 font-medium">{{ __('Prev') }}</a>
+                                            @else
+                                                <span class="px-3 py-1.5 border border-paper-100 rounded-full text-ink-300">{{ __('Prev') }}</span>
+                                            @endif
+                                            @if ($opCur < $opMax)
+                                                <a href="?tab=orders&page={{ $opCur + 1 }}" class="px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 font-medium">{{ __('Next') }}</a>
+                                            @else
+                                                <span class="px-3 py-1.5 border border-paper-100 rounded-full text-ink-300">{{ __('Next') }}</span>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @endif
                             </div>
                         @break
 

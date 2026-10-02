@@ -30,6 +30,15 @@ class FrontendController extends Controller
             return app(\App\Http\Controllers\StorefrontPublicController::class)->index($request);
         }
 
+        // White-label tenant domain (Phase 2): NEVER show the platform's marketing
+        // homepage on a client's branded domain. With no shop to render at the
+        // root, send guests to that domain's login and authed members to the app.
+        if (\App\Http\Middleware\ResolveTenantDomain::isTenant()) {
+            return \Illuminate\Support\Facades\Auth::check()
+                ? redirect()->to('/dashboard')
+                : redirect()->route('login');
+        }
+
         // Frontend kill-switch (admin → /admin/frontend toggle). When OFF, the
         // public HOMEPAGE redirects straight to login (guests) / the app
         // (authed) — but every OTHER page (privacy, terms, legal, pricing…)
@@ -116,6 +125,7 @@ class FrontendController extends Controller
      */
     public function terms(Request $request)          { return $this->legal('terms'); }
     public function privacy(Request $request)        { return $this->legal('privacy'); }
+    public function dataDeletion(Request $request)   { return $this->legal('data-deletion'); }
     public function refund(Request $request)         { return $this->legal('refund'); }
     public function cookies(Request $request)        { return $this->legal('cookies'); }
     public function acceptableUse(Request $request)  { return $this->legal('acceptable-use'); }

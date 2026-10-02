@@ -67,7 +67,9 @@
                 </h1>
 
                 <div class="mt-8 flex flex-wrap gap-2">
-                    @foreach (['Team Inbox', 'Broadcasts', 'Flow Builder · AI', 'WA Campaigns · A/B', 'Templates', 'Auto-Reply', 'Meta Ads · CTWA', 'AI Agents · RAG', 'Catalog · Storefront', 'Appointments', 'Chatbot Widgets', 'WA Forms', 'Chat Links', '3 Engines · WABA/Unofficial API/Twilio', '36 Integrations', 'WA Calling', 'Webhooks · API'] as $chip)
+                    <span
+                        class="rounded-full bg-wa-deep text-paper-0 px-3 py-1.5 text-[11.5px] mono font-semibold">{{ __('Omnichannel · WhatsApp · Instagram · Facebook · Telegram · TikTok · SMS') }}</span>
+                    @foreach (['Team Inbox', 'Broadcasts', 'Flow Builder · AI', 'WA Campaigns · A/B', 'Templates', 'Auto-Reply', 'Meta Ads · CTWA', 'AI Agents · RAG', 'Catalog · Storefront', 'Appointments', 'Chatbot Widgets', 'WA Forms', 'Chat Links', '2 Engines · WABA/Twilio', '36 Integrations', 'WA Calling', 'Webhooks · API'] as $chip)
                         <span
                             class="hairline rounded-full bg-white px-3 py-1.5 text-[11.5px] mono">{{ $chip }}</span>
                     @endforeach

@@ -52,11 +52,36 @@
                         <div class="flex justify-between font-semibold text-[15px] pt-2 border-t border-paper-200"><span>Total</span><span>{{ $money($invoice->total_minor) }}</span></div>
                     </div>
 
-                    <a href="{{ route('invoice.public.pdf', $invoice->public_token) }}" target="_blank"
-                        class="mt-2 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[13px] font-semibold">
-                        <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>
-                        Download PDF
-                    </a>
+                    @if (session('success'))
+                        <div class="mb-3 rounded-xl bg-wa-mint text-wa-deep text-[12.5px] px-4 py-2.5">{{ session('success') }}</div>
+                    @elseif (session('error'))
+                        <div class="mb-3 rounded-xl bg-red-50 text-red-700 text-[12.5px] px-4 py-2.5">{{ session('error') }}</div>
+                    @elseif (session('info'))
+                        <div class="mb-3 rounded-xl bg-paper-100 text-ink-700 text-[12.5px] px-4 py-2.5">{{ session('info') }}</div>
+                    @endif
+
+                    <div class="flex flex-wrap items-center gap-2 mt-2">
+                        @if (($invoice->status ?? '') !== 'paid' && (int) $invoice->total_minor > 0 && ($gateways ?? collect())->isNotEmpty())
+                            @foreach ($gateways as $g)
+                                <a href="{{ route('invoice.public.pay', ['token' => $invoice->public_token, 'gateway' => $g['slug']]) }}"
+                                    class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[13px] font-semibold">
+                                    <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v8H2z"/><path d="M2 7h12"/></svg>
+                                    {{ __('Pay with') }} {{ $g['label'] }}
+                                </a>
+                            @endforeach
+                        @elseif (($invoice->status ?? '') === 'paid')
+                            <span class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-wa-mint text-wa-deep text-[12.5px] font-semibold">
+                                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8l3 3 7-7"/></svg>
+                                {{ __('Paid') }}
+                            </span>
+                        @endif
+
+                        <a href="{{ route('invoice.public.pdf', $invoice->public_token) }}" target="_blank"
+                            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full {{ (($invoice->status ?? '') !== 'paid' && ($gateways ?? collect())->isNotEmpty()) ? 'border border-paper-200 bg-paper-0 hover:bg-paper-50 text-ink-800' : 'bg-wa-deep hover:bg-wa-teal text-paper-0' }} text-[13px] font-semibold">
+                            <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>
+                            {{ __('Download PDF') }}
+                        </a>
+                    </div>
                 </div>
             </div>
             <p class="text-center text-[11px] text-ink-400 mt-4">{{ brand_name() }}</p>

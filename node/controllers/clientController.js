@@ -186,6 +186,18 @@ export async function getPairingCode(req, res, app) {
     // Initialize or get client manager
     let clientManager = app.locals.clientManagers[phoneNumber];
 
+    // IDEMPOTENT PAIRING: if a socket is already pairing and has a FRESH code,
+    // return that SAME code. Tearing it down to regenerate changes the code the
+    // user is entering mid-flow → WhatsApp rejects with 401 "couldn't link
+    // device". Poll/retry calls MUST reuse the live code, not reset the socket.
+    if (clientManager && clientManager.sock && clientManager.pairingCode &&
+        clientManager.pairingCodeAt && (Date.now() - clientManager.pairingCodeAt) < 120000 &&
+        !app.locals.client_ready[phoneNumber]) {
+      delete app.locals.connectionLocks[phoneNumber];
+      console.log(`[${phoneNumber}] [PAIR] returning existing fresh code ${clientManager.pairingCode} (idempotent — no teardown)`);
+      return res.json({ success: true, code: clientManager.pairingCode, message: "Pairing code (existing)", expires_in: 180 });
+    }
+
     if (!clientManager) {
       clientManager = new BaileysClientManager(
         phoneNumber,
@@ -287,6 +299,52 @@ export async function getPairingCode(req, res, app) {
 /**
  * Get client status
  */
+/**
+ * BULK status — one call for many numbers.
+ *
+ * Laravel's /devices/check used to ask for one phone at a time, which meant a
+ * workspace with 208 numbers made 208 sequential HTTP round-trips inside a
+ * single web request, every 10 seconds. This reads the same in-memory maps
+ * getClientStatus() reads, so it is a map lookup per number and one response.
+ *
+ * The caller MUST send the list of numbers it wants. We deliberately do not
+ * enumerate app.locals.clients: on a bridge shared by several customers that
+ * would hand every caller a list of every other tenant's connected numbers.
+ *
+ * POST { phones: ["919812345678", ...] }
+ *   -> { ok: true, statuses: { "919812345678": { status, isReady } , ... } }
+ * A number the bridge has never heard of comes back as disconnected, which is
+ * the truthful answer and keeps the caller's reconciliation logic uniform.
+ */
+export async function getClientsStatus(req, res, app) {
+  try {
+    const raw = Array.isArray(req.body?.phones) ? req.body.phones : [];
+    // Cap the batch so a malformed or hostile caller cannot ask for millions.
+    const phones = [...new Set(raw.map((p) => String(p).replace(/\D+/g, "")).filter(Boolean))].slice(0, 1000);
+
+    const statuses = {};
+    for (const phone of phones) {
+      const client = app.locals.clients[phone];
+      const isReady = app.locals.client_ready[phone] || false;
+      const manager = app.locals.clientManagers[phone];
+
+      if (client && isReady) {
+        statuses[phone] = { status: "connected", isReady: true };
+      } else if (manager && manager.qrCode) {
+        statuses[phone] = { status: "qr_ready", isReady: false };
+      } else if (manager && manager.pairingCode) {
+        statuses[phone] = { status: "code_ready", isReady: false };
+      } else {
+        statuses[phone] = { status: "disconnected", isReady: false };
+      }
+    }
+
+    res.json({ ok: true, count: Object.keys(statuses).length, statuses });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to get clients status", details: error.message });
+  }
+}
+
 export async function getClientStatus(req, res, app) {
   const phoneNumber = req.params.phoneNumber;
   

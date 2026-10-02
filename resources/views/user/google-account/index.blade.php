@@ -238,14 +238,86 @@
                     </div>
                 </div>
 
-                {{-- Admin-side OAuth check banner --}}
-                @if (!$appReady)
-                    <div
-                        class="rounded-[14px] border border-accent-coral/30 bg-accent-coral/10 text-[#A1431F] px-4 py-3 text-[12.5px]">
-                        <strong class="font-semibold">{{ __('Admin setup needed:') }}</strong>
-                        Platform-level Google OAuth client isn't configured. Ask the admin to set client ID + secret in
-                        <code class="px-1 bg-paper-0 rounded font-mono">/admin/settings → Integrations → Google</code>
-                        before this page can connect.
+                {{-- ── Use your own Google app (self-serve BYO — owner only) ──────
+                     The workspace owner pastes their OWN Google Cloud OAuth client
+                     ID + secret and connects through their own app: no admin config
+                     or approval, no shared-app review limits. Members don't see the
+                     keys; when nothing is configured yet they're told to ask the owner. --}}
+                @if ($isOwner && !empty($manualAllowed))
+                    <div class="bg-paper-0 border {{ $appReady ? 'border-paper-200' : 'border-wa-deep/40' }} rounded-[14px] shadow-card overflow-hidden">
+                        <div class="px-4 py-3 border-b border-paper-200 flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Your Google app') }}</div>
+                                <div class="text-[13px] text-ink-900 mt-0.5">{{ $ownApp ? __('Connecting through your own Google app') : __('Connect with your own Google app') }}</div>
+                            </div>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono shrink-0 {{ $ownApp ? 'bg-wa-mint text-wa-deep border border-wa-green/40' : 'bg-paper-100 text-ink-500 border border-paper-200' }}">
+                                <span class="w-1.5 h-1.5 rounded-full {{ $ownApp ? 'bg-wa-green' : 'bg-paper-200' }}"></span>{{ $ownApp ? __('keys saved') : __('not set') }}
+                            </span>
+                        </div>
+                        <div class="p-4 space-y-3.5">
+                            @if (!$appReady)
+                                <p class="text-[12.5px] text-ink-600 leading-relaxed">
+                                    {{ __('Create a Google Cloud OAuth client and paste its keys here, then click Connect Google. No approval needed — you use your own Google app.') }}
+                                </p>
+                            @endif
+                            <form method="POST" action="{{ route('user.google-account.own-app') }}" class="space-y-3" autocomplete="off">
+                                @csrf
+                                <label class="block">
+                                    <span class="text-[11.5px] text-ink-700">{{ __('OAuth Client ID') }}</span>
+                                    <input type="text" name="google_client_id" value="{{ old('google_client_id', $ownApp['id'] ?? '') }}"
+                                        placeholder="1234567890-abc.apps.googleusercontent.com"
+                                        class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                </label>
+                                <label class="block">
+                                    <span class="text-[11.5px] text-ink-700">{{ __('OAuth Client secret') }}</span>
+                                    <input type="password" name="google_client_secret" value="" autocomplete="new-password"
+                                        placeholder="{{ ($ownApp['secret'] ?? '') !== '' ? __('saved — leave blank to keep') : 'GOCSPX-…' }}"
+                                        class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                    <span class="block mt-1 text-[11px] text-ink-500">{{ __('Stored encrypted. Leave blank to keep the saved secret.') }}</span>
+                                </label>
+                                <div class="rounded-xl border border-paper-200 bg-paper-50/60 px-3 py-2.5">
+                                    <div class="text-[11px] text-ink-600">{{ __('In your Google app, add this exact Authorized redirect URI:') }}</div>
+                                    <code class="block mt-1 text-[11px] font-mono text-wa-deep break-all">{{ $googleRedirectUri }}</code>
+                                </div>
+
+                                {{-- In-app step-by-step: where to get the keys. --}}
+                                <details class="rounded-xl border border-paper-200 bg-paper-50/60 px-4 py-3">
+                                    <summary class="cursor-pointer text-[12px] font-semibold text-wa-deep list-none flex items-center justify-between">
+                                        {{ __('Where do I get these keys?') }}
+                                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5 text-ink-500" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4" /></svg>
+                                    </summary>
+                                    <ol class="mt-3 space-y-1.5 text-[11.5px] text-ink-600 list-decimal pl-4 leading-relaxed">
+                                        <li>{{ __('Open') }} <span class="font-mono">console.cloud.google.com</span> → {{ __('create a project (or pick one).') }}</li>
+                                        <li>{{ __('APIs &amp; Services → Enabled APIs → enable: Google Calendar API, Google Sheets API, Google Docs API, Google Drive API, Google Forms API.') }}</li>
+                                        <li>{{ __('OAuth consent screen → External → add your email as a Test user (Testing mode works right away — no Google verification needed for your own use).') }}</li>
+                                        <li>{{ __('Credentials → Create credentials → OAuth client ID → Web application.') }}</li>
+                                        <li>{{ __('Under Authorized redirect URIs, paste the URI shown above.') }}</li>
+                                        <li>{{ __('Copy the Client ID + Client secret and paste them here, then Save.') }}</li>
+                                    </ol>
+                                </details>
+
+                                <div class="flex items-center gap-2">
+                                    <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12.5px] font-semibold hover:bg-wa-teal">{{ __('Save Google app') }}</button>
+                                </div>
+                            </form>
+                            @if ($ownApp)
+                                <form method="POST" action="{{ route('user.google-account.own-app') }}"
+                                    onsubmit="return confirm('{{ __('Clear your Google app keys? Google will use the platform app instead, if one is configured.') }}');">
+                                    @csrf
+                                    <input type="hidden" name="google_client_id" value="">
+                                    <input type="hidden" name="google_client_secret" value="">
+                                    <button type="submit" class="text-[11.5px] text-accent-coral hover:underline">{{ __('Clear keys') }}</button>
+                                </form>
+                            @endif
+                        </div>
+                    </div>
+                @elseif (!$appReady)
+                    <div class="rounded-[14px] border border-accent-coral/30 bg-accent-coral/10 text-[#A1431F] px-4 py-3 text-[12.5px]">
+                        @if (!empty($manualAllowed))
+                            {{ __('Google isn\'t connected yet. Ask the workspace owner to add the Google app keys on this page.') }}
+                        @else
+                            {{ __('Google isn\'t available for this workspace yet.') }}
+                        @endif
                     </div>
                 @endif
 

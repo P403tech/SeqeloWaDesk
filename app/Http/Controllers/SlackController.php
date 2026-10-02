@@ -80,7 +80,7 @@ class SlackController extends Controller
 
         $teamId = (string) ($j['team_id'] ?? '');
         if ($teamId !== '' && SlackIntegration::where('team_id', $teamId)->where('workspace_id', '!=', $wsId)->exists()) {
-            return back()->withErrors(['bot_token' => __('This Slack workspace is already connected to another WaDesk workspace.')])->withInput();
+            return back()->withErrors(['bot_token' => __('This Slack workspace is already connected to another :brand workspace.', ['brand' => brand_name()])])->withInput();
         }
 
         $cmd = trim((string) ($data['slash_command'] ?? '/wa')) ?: '/wa';

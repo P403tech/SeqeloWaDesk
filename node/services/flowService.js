@@ -2,7 +2,9 @@ import axios from "axios";
 import moment from "moment-timezone";
 import dns from "dns";
 import net from "net";
+import { downloadMediaMessage } from "@itsukichan/baileys";
 import { runUserCode } from "./codeSandbox.js";
+import { splitKeywords, matchKeywordJump } from "./flowMatch.js";
 import { formatInteractiveButtonsForBaileys, formatPhoneNumber, sendMessageViaFacebookApi, sendMessageViaTwilioApi, getWhatsAppSettings } from "../utils/helpers.js";
 import {
   isSockUsable,
@@ -52,11 +54,17 @@ async function mirrorFlowOutboundToInbox(settings, recipientPhone, text, mediaTy
   try {
     const appDomain = settings && settings.__appDomainName;
     const device    = settings && settings.__devicePhone;
-    if (!appDomain || !device) return;
+    if (!appDomain || !device) { console.warn(`[MIRROR] SKIP no-context appDomain=${appDomain||'MISSING'} device=${device||'MISSING'}`); return; }
     const body = String(text || '').trim();
     if (!body && !mediaType) return;
     const recipient = String(recipientPhone || '').replace(/[^\d]/g, '');
     if (!recipient) return;
+
+    // Diagnostic: shows EXACTLY what the flow mirrors to the inbox. If this logs
+    // the full rendered body (e.g. "Hi Mr, Your Smart Child Method...") the Node
+    // side is correct; if it logs just a variable value ("Mr"), the running build
+    // is missing the executeTemplateNode mirror-hint (deploy this flowService.js).
+    console.log(`[FLOW-MIRROR→INBOX] to=${recipient} kind=${(extra && extra.message_kind) || (mediaType ? 'media' : 'text')} btns=${(extra && Array.isArray(extra.buttons) && extra.buttons.length) || 0} body_len=${body.length} body="${body.slice(0, 90).replace(/\n/g, '|')}"`);
 
     await axios.post(`${appDomain}/api/inbound-message`, {
       device_phone:  device,
@@ -75,7 +83,7 @@ async function mirrorFlowOutboundToInbox(settings, recipientPhone, text, mediaTy
       headers: { 'Accept': 'application/json', 'X-Node-Token': process.env.NODE_WEBHOOK_TOKEN || '' },
     });
   } catch (e) {
-    console.warn(`[FLOW] inbox-mirror failed: ${e?.response?.status || ''} ${e?.message}`);
+    console.error(`[MIRROR] FAILED status=${e?.response?.status || ''} ${e?.message} body=${JSON.stringify(e?.response?.data || '').slice(0,300)}`);
   }
 }
 
@@ -407,7 +415,61 @@ async function sendWabaCtaUrl(phone, body, displayText, url, settings, opts = {}
 /** Meta-approved template — only sends when templateName + meta_template_id
  *  match a registered template in the customer's WABA. Twilio uses
  *  ContentSid when registered, else degrades to plain text. */
-async function sendWabaTemplate(phone, templateName, language, components, settings, twilioContentSid = null) {
+// True when a Meta send error is a template LANGUAGE/translation miss (#132001),
+// so the caller can retry the same template under a fallback locale. The error
+// arrives as a formatted STRING (formatMetaError), not a code field.
+function _templateLangMismatch(err) {
+  const s = String(err || '').toLowerCase();
+  return s.includes('132001') || s.includes('does not exist in') || s.includes('translation');
+}
+
+// Ask Meta which language a template is ACTUALLY approved in on THIS WABA, so a
+// 132001 can be retried with the real locale instead of guessing. Returns the
+// approved language code, or null when the template isn't on this WABA at all
+// (a strong signal the flow is sending from a number on the WRONG WABA).
+async function _fetchApprovedTemplateLanguage(templateName, settings) {
+  try {
+    const wabaId = settings.waba_id || settings.wabaId || '';
+    const token  = settings.facebook_api_token;
+    if (!wabaId || !token) return null;
+    const apiVersion = settings.facebook_app_version || process.env.FACEBOOK_API_VERSION || 'v23.0';
+    const resp = await axios.get(`https://graph.facebook.com/${apiVersion}/${wabaId}/message_templates`, {
+      params: { name: String(templateName), fields: 'name,language,status', limit: 50 },
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 8000,
+    });
+    const rows  = (resp.data && Array.isArray(resp.data.data)) ? resp.data.data : [];
+    const exact = rows.filter((t) => String(t.name) === String(templateName));
+    if (!exact.length) return null; // template not on this WABA
+    const picked = exact.find((t) => String(t.status).toUpperCase() === 'APPROVED') || exact[0];
+    return picked && picked.language ? String(picked.language) : null;
+  } catch (e) {
+    console.warn(`[TPL] language lookup failed for "${templateName}": ${e?.message}`);
+    return null;
+  }
+}
+
+async function sendWabaTemplate(phone, templateName, language, components, settings, twilioContentSid = null, mirrorInfo = null) {
+  // Rendered text for the inbox mirror. A template goes to Meta as a NAME +
+  // parameters, never as prose, so the thread has nothing readable to show
+  // unless the CALLER hands us the hydrated message — executeTemplateNode
+  // already builds it. Joining the body parameters (the old fallback) rendered
+  // the whole template as just its first variable, e.g. "Mr".
+  const _bodyComp   = (components || []).find((c) => c.type === 'body');
+  const _bodyParams = _bodyComp ? (_bodyComp.parameters || []) : [];
+  const _mirrorText = String((mirrorInfo && mirrorInfo.text) || '').trim()
+    || _bodyParams.map((p) => p.text || '').join(' ').trim()
+    || `[template] ${templateName}`;
+  // Tag it so the inbox renders a template card rather than a bare bubble, and
+  // so an operator can tell a template apart from something an agent typed.
+  // Buttons ride along so the card shows the same rows the customer can tap.
+  const _tplMirrorExtra = {
+    template_name: String(templateName || ''),
+    message_kind: 'template',
+    ...(Array.isArray(mirrorInfo && mirrorInfo.buttons) && mirrorInfo.buttons.length
+      ? { buttons: mirrorInfo.buttons } : {}),
+  };
+
   if (_isTwilio(settings)) {
     // Twilio fallback — build positional ContentVariables from the body
     // parameters Meta would have received. Twilio's substitution engine
@@ -419,16 +481,103 @@ async function sendWabaTemplate(phone, templateName, language, components, setti
       contentVariables[String(i + 1)] = String(p.text || '');
     });
     const text = params.map((p) => p.text || '').join(' ').trim();
-    return sendTwilioTemplate(phone, templateName, language, text, settings, twilioContentSid, contentVariables);
+    // Mirror the Twilio branch too — it returned early, so a Twilio install had
+    // exactly the same hole as WABA.
+    const rTw = await sendTwilioTemplate(phone, templateName, language, text, settings, twilioContentSid, contentVariables);
+    await _mirrorIfSent(rTw, settings, phone, text || _mirrorText, null, _tplMirrorExtra);
+    return rTw;
   }
-  return sendMessageViaFacebookApi(phone, {
+
+  console.log(`[TPL] send name="${templateName}" mirrorText="${String(_mirrorText).slice(0,60)}" appDomain=${settings?.__appDomainName||'MISSING'} device=${settings?.__devicePhone||'MISSING'}`);
+  const _lang0 = String(language || 'en_US');
+  let r = await sendMessageViaFacebookApi(phone, {
     type: 'template',
     template: {
       name: String(templateName),
-      language: { code: String(language || 'en_US') },
+      language: { code: _lang0 },
       components: Array.isArray(components) ? components : [],
     },
   }, settings);
+
+  // LANGUAGE FALLBACK — Meta #132001 ("template name does not exist in <lang>")
+  // means this template is not approved in the locale we sent. The local
+  // wa_templates.language often drifts from Meta's approved locale (Hindi-text
+  // templates Meta frequently keeps under en_US), which dead-ended the flow.
+  // Retry the SAME name + components under the common fallbacks so a locale
+  // mismatch self-heals instead of failing the send. We stop as soon as one
+  // succeeds, or when Meta returns a DIFFERENT error (e.g. a param mismatch),
+  // since retrying other languages then would be pointless.
+  if (r && r.success === false && _templateLangMismatch(r.error)) {
+    const tried = new Set([_lang0.toLowerCase()]);
+    // 1) Ask Meta the template's REAL approved language on this WABA (definitive).
+    const realLang = await _fetchApprovedTemplateLanguage(String(templateName), settings);
+    const candidates = [];
+    if (realLang && !tried.has(realLang.toLowerCase())) candidates.push(realLang);
+    // 2) Common fallbacks, in case the lookup was unavailable (no waba_id/token).
+    const base = _lang0.includes('_') ? _lang0.split('_')[0] : '';
+    ['en_US', 'en', base].forEach((c) => {
+      if (c && !tried.has(c.toLowerCase()) && !candidates.some((x) => x.toLowerCase() === c.toLowerCase())) candidates.push(c);
+    });
+
+    for (const code of candidates) {
+      console.warn(`[TPL] 132001 on "${templateName}" (sent "${_lang0}") — retrying as "${code}"${realLang && code === realLang ? ' (Meta-confirmed locale)' : ''}`);
+      const r2 = await sendMessageViaFacebookApi(phone, {
+        type: 'template',
+        template: { name: String(templateName), language: { code }, components: Array.isArray(components) ? components : [] },
+      }, settings);
+      tried.add(code.toLowerCase());
+      r = r2;
+      if (r2 && r2.success) { console.log(`[TPL] language fallback SUCCEEDED as "${code}" for "${templateName}"`); break; }
+      if (r2 && !_templateLangMismatch(r2.error)) break; // non-language error (e.g. params) — stop trying locales
+    }
+
+    // Template truly isn't on this WABA in any tried locale → almost always the
+    // flow is sending from a number on the WRONG WABA. Say so plainly.
+    if (r && r.success === false && !realLang) {
+      console.warn(`[TPL] "${templateName}" not found on WABA ${settings.waba_id || settings.wabaId || '?'} — the sending number is likely on a DIFFERENT WABA than the template, or the name/locale differs. Check WhatsApp Manager.`);
+    }
+  }
+
+  // THE FIX. Every other send helper in this file mirrors itself into the team
+  // inbox; this one ended with a bare `return` and never did. The template went
+  // out to WhatsApp — the customer received it and replied — but the thread had
+  // no record of it, so the conversation appeared to start with the customer's
+  // answer to a question nobody could see.
+  //
+  // Routed through _mirrorIfSent (not a direct mirror) on purpose: WABA helpers
+  // return { success:false } rather than throwing, so mirroring unconditionally
+  // would make a FAILED template look delivered.
+  await _mirrorIfSent(r, settings, phone, _mirrorText, null, _tplMirrorExtra);
+  return r;
+}
+
+// A Meta template's imported sample URL is commonly a protected
+// scontent.whatsapp.net URL. Passing it as a Graph `link` appears accepted
+// initially, then fails asynchronously with 131053 because Graph gets HTTP
+// 403 while fetching it. Laravel's TemplateSender downloads that sample with
+// the required request headers, uploads it to Meta, and returns a reusable id.
+async function resolveFlowTemplateHeaderMediaId(session, templateId, settings) {
+  const workspaceId = Number(session?.flowData?.workspace_id || 0);
+  const phoneNumberId = String(settings?.facebook_phone_id || settings?.facebook_phone_number_id || '').trim();
+  const appDomain = String(settings?.__appDomainName || '').replace(/\/$/, '');
+  if (!workspaceId || !templateId || !phoneNumberId || !appDomain) return null;
+
+  try {
+    const response = await axios.post(`${appDomain}/api/flow-node/template-header-media`, {
+      workspace_id: workspaceId,
+      template_id: Number(templateId),
+      phone_number_id: phoneNumberId,
+    }, {
+      timeout: 70000,
+      headers: { 'Accept': 'application/json', 'X-Node-Token': process.env.NODE_WEBHOOK_TOKEN || '' },
+    });
+    const mediaId = String(response?.data?.media_id || '').trim();
+    if (response?.data?.ok && mediaId) return mediaId;
+    console.warn(`[FLOW] template media-id unavailable template=${templateId}: ${response?.data?.error || 'unknown'}`);
+  } catch (e) {
+    console.warn(`[FLOW] template media-id request failed template=${templateId}: ${e?.response?.data?.error || e?.message || 'unknown'}`);
+  }
+  return null;
 }
 
 // =============================================================
@@ -630,7 +779,65 @@ function extractReplyFromMessage(message) {
   };
 }
 
+/**
+ * Collect a customer's uploaded media on an Ask node flagged `acceptMedia`, and
+ * return a durable PUBLIC URL for it so the node's variable holds something
+ * usable downstream (Sheets, Webhook, a template media header, a Media node).
+ * Engine-agnostic:
+ *   - WABA / Twilio: Laravel already downloaded + stored the media and forwarded
+ *     the URL on `message.__mediaUrl` — use it directly.
+ *   - Unofficial (Baileys): the raw buffer lives here — download it, POST it to
+ *     /api/flow/store-media, and use the returned URL.
+ * Returns "" on any failure so the flow just carries on (variable stays text).
+ */
+async function captureAskMedia(message, sock, appLocals) {
+  try {
+    // WABA / Twilio — URL was stored + forwarded by the Laravel webhook.
+    const pre = message?.__mediaUrl;
+    if (pre) return String(pre);
+
+    // Unofficial (Baileys) — the media binary is on the socket message.
+    const m    = message?.message || {};
+    const doc  = m.documentMessage || m.documentWithCaptionMessage?.message?.documentMessage;
+    const part = m.imageMessage || m.videoMessage || m.audioMessage || m.pttMessage || doc || m.stickerMessage;
+    if (!part) return "";
+
+    const buffer = await downloadMediaMessage(message, "buffer", {}, {
+      reuploadRequest: sock?.updateMediaMessage,
+    });
+    if (!buffer || !buffer.length) return "";
+
+    const mime = String(part.mimetype || "application/octet-stream");
+    const base = String(appLocals?.appDomainName || "").replace(/\/+$/, "");
+    if (!base) return "";
+    const res = await axios.post(
+      `${base}/api/flow/store-media`,
+      { data: buffer.toString("base64"), mime },
+      { headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" }, timeout: 25000 },
+    );
+    return String(res?.data?.url || "");
+  } catch (e) {
+    console.warn(`[FLOW] captureAskMedia failed: ${e?.message}`);
+    return "";
+  }
+}
+
 // ✅ STEP 1: Handle flow response with proper appLocals passing
+// Advance from a node via a SPECIFIC output port (e.g. the delay node's
+// "timeout" = port 2). Mirrors the condition-node routing; dead-ends park.
+async function routeViaPort(nodeId, port, session, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey) {
+  const edge = (session.flowData.flowEdges || []).find((e) => e.sourceNodeId === `${nodeId}_${port}`);
+  if (edge) {
+    const nextNodeId = String(edge.targetNodeId).replace(/_\d+$/, "");
+    const nextNode = (session.flowData.flowNodes || []).find((n) => n.id === nextNodeId);
+    if (nextNode) {
+      await executeFlowNode(nextNode, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+      return;
+    }
+  }
+  parkOrEndFlow(appLocals, sessionKey);
+}
+
 export async function handleFlowResponse(
   message,
   session,
@@ -680,6 +887,24 @@ export async function handleFlowResponse(
     return;
   }
 
+  // Ask node set to accept an upload (originalWait.acceptMedia): capture the
+  // media ITSELF as the answer — a stored public URL — instead of the empty
+  // text a media-only message extracts to. Engine-agnostic: WABA/Twilio pass a
+  // pre-stored __mediaUrl; Baileys downloads the buffer inside captureAskMedia.
+  const _hasMedia = !!message?.__mediaUrl || !!(message?.message && (
+    message.message.imageMessage    || message.message.videoMessage ||
+    message.message.audioMessage    || message.message.documentMessage ||
+    message.message.stickerMessage  || message.message.documentWithCaptionMessage ||
+    message.message.pttMessage
+  ));
+  if (originalWait.acceptMedia && _hasMedia) {
+    const _mediaUrl = await captureAskMedia(message, sock, appLocals);
+    if (_mediaUrl) {
+      userMessage = _mediaUrl;
+      console.log(`[FLOW] Ask node=${nodeId} captured media → ${_mediaUrl.slice(0, 80)}`);
+    }
+  }
+
   console.log(`[FLOW] handleFlowResponse entry node=${nodeId} type=${nextNodeType} text="${String(userMessage).substring(0, 40)}" replyId="${reply.id}" msgKeys=[${Object.keys(message.message || {}).join(',')}]`);
 
   // sessionKey is used by the mid-flow menu re-pick block below (it can restart a
@@ -688,6 +913,22 @@ export async function handleFlowResponse(
   // down from this block threw a ReferenceError (temporal dead zone) at runtime,
   // which silently killed every tap on an earlier menu. Declared once, here.
   const sessionKey = `${phoneNumber}_${userNumber}`;
+
+  // ── Node-level keyword JUMP ────────────────────────────────────────────────
+  // A TYPED message (not a button/list tap) that matches any node's jump-trigger
+  // keywords interrupts the current wait and runs that node — e.g. typing "menu"
+  // anytime jumps to the menu node. Skips the node we're parked on so its own
+  // answer isn't hijacked, and cancels a pending reply-wait timer.
+  if (reply.text && !reply.id) {
+    const _jump = matchKeywordJump(session.flowData, reply.text);
+    if (_jump && _jump.id !== nodeId) {
+      console.log(`[FLOW] keyword-jump → node=${_jump.id} on "${String(reply.text).slice(0, 30)}"`);
+      if (session._delayTimeout) { clearTimeout(session._delayTimeout); session._delayTimeout = null; }
+      session.waitingForInput = null;
+      await executeFlowNode(_jump, userNumber, phoneNumber, sock, appLocals, sessionKey);
+      return;
+    }
+  }
 
   // ── Button-tap router — route to the EXACT menu the tapped button belongs to ─
   // A button tap must land on the branch wired to THAT button, no matter which
@@ -706,6 +947,22 @@ export async function handleFlowResponse(
   // advances its exact edge (and stays put on an unwired option). Typed answers are
   // unaffected — a free-text reply carries no reply.id and rarely a menu title.
   {
+    // LIST rows carry `list_<nodeId>_p<i>` in the reply id. Like buttons, a tap
+    // on an EARLIER list message must route to THAT list node's branch, not
+    // whichever node is waiting now — otherwise selecting a 2nd item on the same
+    // list (after the flow already advanced past it) is silently dropped
+    // ("no response"). Route it to the source list node and return.
+    const _lm = String(reply.id || "").match(/^list_(n_[a-z0-9]+)_p(\d+)$/i);
+    if (_lm) {
+      const _listNode = session.flowData.flowNodes.find((n) => n.id === _lm[1]) || null;
+      if (_listNode) {
+        console.log(`[FLOW] list tap id="${reply.id}" → list node=${_listNode.id}; routing to its wired branch (was waiting node=${nodeId})`);
+        session.waitingForInput = null;
+        await handleListResponse(message, session, _listNode.id, userNumber, phoneNumber, sock, appLocals, sessionKey);
+        return;
+      }
+    }
+
     let _srcNode = null;
     const _bm = String(reply.id || "").match(/^b_(n_[a-z0-9]+)_p(\d+)$/i);
     if (_bm) {
@@ -866,14 +1123,22 @@ export async function handleFlowResponse(
       appLocals,
       sessionKey,
     );
+  } else if (nextNodeType === "TimeDelayReply") {
+    // Wait-for-reply delay: the customer replied → cancel the timeout timer and
+    // continue via the "resume" port (default port 1 = moveToNextNode).
+    if (session._delayTimeout) { clearTimeout(session._delayTimeout); session._delayTimeout = null; }
+    session.waitingForInput = null;
+    await moveToNextNode(nodeId, session.flowData, userNumber, phoneNumber, sock, appLocals, sessionKey);
   } else if (nextNodeType === "AiChat") {
     // Conversation mode — the AI node is driving the chat. The exit keyword
     // (if configured) breaks the loop and advances to the wired next node;
     // any other message re-runs the AI node, which answers and re-parks.
-    const exitKw = String(originalWait.exitKeyword || "").trim().toLowerCase();
+    // Exit keywords are a COMMA-SEPARATED LIST (e.g. "exit, bye, quit, stop") —
+    // the loop breaks when the customer's message exactly matches ANY of them.
+    const exitKws = splitKeywords(originalWait.exitKeyword);
     const um = String(userMessage || "").trim().toLowerCase();
-    if (exitKw && um === exitKw) {
-      console.log(`[FLOW] ai conversation exit keyword "${exitKw}" — advancing node=${nodeId}`);
+    if (exitKws.length && exitKws.includes(um)) {
+      console.log(`[FLOW] ai conversation exit keyword "${um}" — advancing node=${nodeId}`);
       // If this conversational node ALSO has "Extract structured data (JSON)"
       // on, its per-turn replies were natural language, so nothing was ever
       // flattened into {{reply.<field>}}. Run ONE hidden extraction pass over
@@ -1524,11 +1789,17 @@ export async function executeFlowNode(
   session.__nodeVisits[node.id] = (session.__nodeVisits[node.id] || 0) + 1;
   if (session.__nodeVisits[node.id] > MAX_NODE_VISITS) {
     console.warn(`[FLOW] loop-guard: node ${node.id} executed ${session.__nodeVisits[node.id]}× in session ${sessionKey} — ending flow to break an infinite loop. Fix the flow: this node's branch loops back to it without an exit (e.g. add a retry cap or an "else" port).`);
-    endFlowSession(appLocals, sessionKey);
+    endFlowSession(appLocals, sessionKey, "aborted");
     return;
   }
 
   session.currentNodeId = node.id;
+  // Drop-off funnel (analytics Phase 2): when this is a WAIT node, record the
+  // run's position so /flows/analytics can show which question stalls
+  // customers. Deduped + async + fully guarded — pass-through nodes and
+  // non-enroll runs are ignored inside the helper, so this never affects
+  // execution.
+  reportFlowPosition(appLocals, session, node);
   const finalNumber = formatPhoneNumber(targetPhoneNumber);
 
   // Stash senderPhoneNumber + appDomainName on the session so the
@@ -1765,6 +2036,18 @@ export async function executeFlowNode(
       break;
     case "AssignAgent":
       await executeAssignAgentNode(
+        node, session, targetPhoneNumber, senderPhoneNumber,
+        sock, appLocals, sessionKey,
+      );
+      break;
+    case "Task":
+      await executeTaskNode(
+        node, session, targetPhoneNumber, senderPhoneNumber,
+        sock, appLocals, sessionKey,
+      );
+      break;
+    case "ContactUpdate":
+      await executeContactUpdateNode(
         node, session, targetPhoneNumber, senderPhoneNumber,
         sock, appLocals, sessionKey,
       );
@@ -3104,34 +3387,65 @@ async function moveToNextNode(
   sessionKey
 ) {
   const sourceKey = `${currentNodeId}_1`;
-  const nextEdge = flowData.flowEdges.find(
+  // FAN-OUT: a node (including the Trigger, which reaches here via the default
+  // case) wired to SEVERAL nodes on its "out" port fires ALL of them, one after
+  // another — not just the first edge. Every out-edge shares the `_1` port
+  // suffix (FlowNormalizer maps the 'out' handle to port 1), so we take the
+  // FULL list, not `.find`. Branch ports (yes/no, p0/p1, timeout) use other
+  // suffixes and are unaffected — this is strictly the linear "continue" port.
+  const nextEdges = flowData.flowEdges.filter(
     (edge) => edge.sourceNodeId === sourceKey
   );
 
-  if (nextEdge) {
-    // The normalizer appends `_<port>` to make edge ids (e.g. `n_abc_1`).
-    // Node IDs themselves CONTAIN underscores (`n_<random>`), so naive
-    // `.split('_')[0]` returns just `n` and the next-node lookup fails.
-    // Strip ONLY the trailing port suffix.
+  if (nextEdges.length === 0) {
+    console.log(`[FLOW] moveToNextNode no edge from ${sourceKey} — dead-end (no End node)`);
+    parkOrEndFlow(appLocals, sessionKey);
+    return;
+  }
+
+  const session = appLocals && appLocals.activeFlowSessions
+    ? appLocals.activeFlowSessions[sessionKey] : null;
+  const fanning = nextEdges.length > 1;
+  // While >1 branch runs, protect the session from teardown by any one branch's
+  // End node (endFlowSession defers on this flag). Nested fan-outs increment it.
+  if (fanning && session) session.__fanoutActive = (session.__fanoutActive || 0) + 1;
+
+  let ran = 0;
+  for (const nextEdge of nextEdges) {
+    // The normalizer appends `_<port>` to make edge ids (e.g. `n_abc_1`). Node
+    // IDs themselves CONTAIN underscores, so strip ONLY the trailing port suffix.
     const nextNodeId = String(nextEdge.targetNodeId).replace(/_\d+$/, "");
     const nextNode = flowData.flowNodes.find((n) => n.id === nextNodeId);
-    if (nextNode) {
-      console.log(`[FLOW] moveToNextNode from=${currentNodeId} via ${sourceKey} → ${nextNodeId} (${nextNode.flowNodeType})`);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await executeFlowNode(
-        nextNode,
-        targetPhoneNumber,
-        senderPhoneNumber,
-        sock,
-        appLocals,
-        sessionKey
-      );
-    } else {
-      console.warn(`[FLOW] moveToNextNode edge target ${nextNodeId} not found — dead-end`);
-      parkOrEndFlow(appLocals, sessionKey);
+    if (!nextNode) {
+      console.warn(`[FLOW] moveToNextNode edge target ${nextNodeId} not found — skipping this branch`);
+      continue;
     }
-  } else {
-    console.log(`[FLOW] moveToNextNode no edge from ${sourceKey} — dead-end (no End node)`);
+    console.log(`[FLOW] moveToNextNode from=${currentNodeId} via ${sourceKey} → ${nextNodeId} (${nextNode.flowNodeType})${fanning ? ` [fan-out ${ran + 1}/${nextEdges.length}]` : ""}`);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await executeFlowNode(
+      nextNode,
+      targetPhoneNumber,
+      senderPhoneNumber,
+      sock,
+      appLocals,
+      sessionKey
+    );
+    ran++;
+  }
+
+  if (fanning && session) {
+    session.__fanoutActive = Math.max(0, (session.__fanoutActive || 1) - 1);
+    // All branches done: if one asked to End AND none of them parked waiting for
+    // a reply, end the flow for real now. If a branch parked (waitingForInput),
+    // keep the session alive to receive that reply.
+    if (session.__fanoutActive === 0 && session.__endAfterFanout && !session.waitingForInput) {
+      session.__endAfterFanout = false;
+      endFlowSession(appLocals, sessionKey, session.__endOutcome || "completed");
+    }
+  }
+
+  if (ran === 0) {
+    // Every branch's target node was missing — treat as a dead-end.
     parkOrEndFlow(appLocals, sessionKey);
   }
 }
@@ -3176,8 +3490,212 @@ function parkOrEndFlow(appLocals, sessionKey) {
   endFlowSession(appLocals, sessionKey);
 }
 
+// Wait nodes — the only node types a run can STALL on (each waits for the
+// customer's next reply). These are exactly the drop-off points the analytics
+// funnel measures; pass-through nodes (message / action / delay) never strand a
+// run, so they are not tracked.
+const WAIT_NODE_TYPES = new Set([
+  "Question", "InteractiveButtons", "List", "Poll",
+  "BookAppointment", "CommerceShop",
+]);
+
+/**
+ * Stamp the wait node a run is parked on so /flows/analytics can show where
+ * customers drop off. Enroll-path runs only (they carry the flow_subscribers
+ * id), deduped once per node per run, fire-and-forget. A best-effort human
+ * label is denormalized so the analytics query never parses flow_data. Fully
+ * guarded — analytics must never break a live flow.
+ */
+function reportFlowPosition(appLocals, session, node) {
+  try {
+    if (!session || !session.flowSubscriberId || !node) return;
+    if (!WAIT_NODE_TYPES.has(node.flowNodeType)) return;
+    const nodeId = node.id;
+    if (!nodeId) return;
+    session.__posReported = session.__posReported || new Set();
+    if (session.__posReported.has(nodeId)) return; // once per node per run
+    session.__posReported.add(nodeId);
+
+    const raw = node.text || node.message || node.question || node.body ||
+      node.bodyText || node.title || node.caption || node.flowNodeType || "";
+    const label = String(raw).replace(/\s+/g, " ").trim().slice(0, 180);
+
+    const base = appLocals && appLocals.appDomainName;
+    if (!base) return;
+    axios
+      .post(
+        `${base}/api/flow-node/position`,
+        { flow_subscriber_id: session.flowSubscriberId, node_id: nodeId, node_label: label },
+        { timeout: 8000, headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" } }
+      )
+      .then(
+        () => {},
+        (e) => console.warn(`[FLOW] position POST failed node=${nodeId}: ${e?.response?.status || e?.message}`)
+      );
+  } catch (e) {
+    console.warn(`[FLOW] reportFlowPosition threw: ${e?.message}`);
+  }
+}
+
+// Shared X-Node-Token headers for the flow-node durability calls.
+function _flowNodeHeaders() {
+  return { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" };
+}
+
+/**
+ * DURABLE SESSIONS — mirror a session's park state to Laravel so a Node restart
+ * can't drop a flow that is waiting for the customer's reply. Called right after
+ * an inbound/trigger settles: upserts a snapshot while the session is parked
+ * (waitingForInput set), or clears it once the run advances past the park or
+ * ends — so a later inbound can never rehydrate a stale question. Awaited by
+ * callers that can await; fully guarded so it can never break a live flow.
+ */
+export async function syncParkedSession(appLocals, sessionKey) {
+  try {
+    const base = appLocals && appLocals.appDomainName;
+    if (!base || !sessionKey) return;
+    const s = appLocals.activeFlowSessions && appLocals.activeFlowSessions[sessionKey];
+    const w = (s && s.status === "active") ? s.waitingForInput : null;
+    if (w && w.nodeId) {
+      // A park now exists for this key — drop any cached "no park" miss so a
+      // later rehydration (e.g. after the in-memory session is idle-swept but
+      // the park persists) isn't wrongly skipped.
+      if (appLocals.__noParkCache) appLocals.__noParkCache.delete(sessionKey);
+      const parts = String(sessionKey).split("_");
+      await axios.post(
+        `${base}/api/flow-node/park-session`,
+        {
+          session_key: sessionKey,
+          flow_id: s.flowId || null,
+          flow_subscriber_id: s.flowSubscriberId || null,
+          device_phone: parts[0] || "",
+          customer_phone: parts[1] || "",
+          node_id: String(w.nodeId),
+          waiting: w,
+          variables: s.userVariables || {},
+          provider: s.provider || (s.flowData && s.flowData.provider) || null,
+        },
+        { timeout: 8000, headers: _flowNodeHeaders() }
+      );
+    } else {
+      await axios.post(
+        `${base}/api/flow-node/park-session`,
+        { session_key: sessionKey, clear: true },
+        { timeout: 8000, headers: _flowNodeHeaders() }
+      );
+    }
+  } catch (e) {
+    console.warn(`[FLOW] syncParkedSession failed key=${sessionKey}: ${e?.response?.status || e?.message}`);
+  }
+}
+
+/**
+ * DURABLE SESSIONS — rebuild an in-memory session from Laravel's snapshot when
+ * an inbound arrives and there is NO live session (e.g. after a Node restart),
+ * so the customer's reply resumes the parked flow instead of being dropped.
+ * Returns the rehydrated session, or null when there's nothing parked / the flow
+ * can't be reloaded. (A parked node inside a sub-flow can't be rebuilt across a
+ * restart — the id names the parent — so it returns null and fails safe.)
+ */
+export async function rehydrateParkedSession(appLocals, sessionKey) {
+  try {
+    const base = appLocals && appLocals.appDomainName;
+    if (!base || !sessionKey) return null;
+
+    // Cost guard: rehydration is only needed for the (rare) restart-orphaned
+    // parks, but it's attempted on every inbound that has no live session —
+    // which for non-flow customers is most traffic. A park can only exist
+    // alongside an in-memory session (syncParkedSession upserts while parked),
+    // so once we've confirmed "no park + no session" for a key it stays true
+    // until that customer next enters a flow. Cache the miss for 5 min so a
+    // session-less customer triggers at most one lookup per window. Bounded.
+    appLocals.__noParkCache = appLocals.__noParkCache || new Map();
+    const missAt = appLocals.__noParkCache.get(sessionKey);
+    if (missAt && (Date.now() - missAt) < 300000) return null;
+
+    const r = await axios.get(
+      `${base}/api/flow-node/park-session`,
+      { params: { session_key: sessionKey }, timeout: 10000, headers: _flowNodeHeaders() }
+    );
+    if (!r.data || !r.data.found) {
+      appLocals.__noParkCache.set(sessionKey, Date.now());
+      if (appLocals.__noParkCache.size > 5000) {
+        // Simple prune: drop the oldest half so the cache can't grow unbounded.
+        const entries = [...appLocals.__noParkCache.entries()].sort((a, b) => a[1] - b[1]);
+        for (let i = 0; i < entries.length >> 1; i++) appLocals.__noParkCache.delete(entries[i][0]);
+      }
+      return null;
+    }
+    appLocals.__noParkCache.delete(sessionKey);
+    const p = r.data;
+    if (!p.flow_id) return null;
+    const fr = await axios.get(
+      `${base}/api/flows/${p.flow_id}`,
+      { timeout: 20000, headers: _flowNodeHeaders() }
+    );
+    if (!fr.data?.success) { console.warn(`[FLOW] rehydrate: flow ${p.flow_id} not found`); return null; }
+    const flowData = fr.data.data.flow_data;
+    if (!flowData || !Array.isArray(flowData.flowNodes) || !flowData.flowNodes.some((n) => n.id === p.node_id)) {
+      console.warn(`[FLOW] rehydrate: flow ${p.flow_id} missing parked node ${p.node_id} (sub-flow across restart?)`);
+      return null;
+    }
+    const session = {
+      sessionId: `${sessionKey}_${Date.now()}`,
+      flowId: p.flow_id,
+      flowSubscriberId: p.flow_subscriber_id || null,
+      flowData,
+      currentNodeId: p.node_id,
+      userVariables: (p.variables && typeof p.variables === "object") ? p.variables : {},
+      waitingForInput: p.waiting || null,
+      messageHistory: [],
+      status: "active",
+      provider: p.provider || null,
+      startedAt: new Date().toISOString(),
+      __rehydrated: true,
+    };
+    appLocals.activeFlowSessions = appLocals.activeFlowSessions || {};
+    appLocals.activeFlowSessions[sessionKey] = session;
+    console.log(`[FLOW] rehydrated parked session ${sessionKey} flow=${p.flow_id} node=${p.node_id}`);
+    return session;
+  } catch (e) {
+    console.warn(`[FLOW] rehydrateParkedSession failed key=${sessionKey}: ${e?.response?.status || e?.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fire-and-forget POST that stamps a flow run finished in Laravel. Keyed by
+ * the flow_subscribers row id the enroll path seeded on the session. Any
+ * failure is logged and swallowed — analytics accuracy must never break a live
+ * flow. Mirrors the X-Node-Token pattern every other flow-node call uses.
+ */
+function reportFlowCompletion(appLocals, flowSubscriberId, flowId) {
+  try {
+    const base = appLocals && appLocals.appDomainName;
+    if (!base || !flowSubscriberId) return;
+    axios
+      .post(
+        `${base}/api/flow-node/complete`,
+        { flow_subscriber_id: flowSubscriberId },
+        { timeout: 8000, headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" } }
+      )
+      .then(
+        () => console.log(`[FLOW] completion recorded subscriber=${flowSubscriberId} flow=${flowId ?? "?"}`),
+        (e) => console.warn(`[FLOW] completion POST failed subscriber=${flowSubscriberId}: ${e?.response?.status || e?.message}`)
+      );
+  } catch (e) {
+    console.warn(`[FLOW] reportFlowCompletion threw: ${e?.message}`);
+  }
+}
+
 // ✅ STEP 7: End flow session and set cooldown
-function endFlowSession(appLocals, sessionKey) {
+//
+// `outcome` distinguishes a NATURAL end ("completed" — End node, linear tail,
+// agent hand-off) from an abnormal stop ("aborted" — loop-guard, send failure,
+// operator AI-takeover). Only a natural end reports completion to Laravel so
+// /flows/analytics's completion rate + duration reflect real finishes and are
+// not inflated by mid-flow breaks.
+function endFlowSession(appLocals, sessionKey, outcome = "completed") {
   if (!appLocals || !appLocals.activeFlowSessions) {
 
     return;
@@ -3186,6 +3704,17 @@ function endFlowSession(appLocals, sessionKey) {
   const session = appLocals.activeFlowSessions[sessionKey];
   if (!session) {
     console.warn(`⚠️ Session ${sessionKey} already ended`);
+    return;
+  }
+
+  // FAN-OUT GUARD: while a node is fanning out to several branches (see
+  // moveToNextNode), one branch reaching an End node must NOT tear the session
+  // down — its sibling branches still have to send, and marking the session
+  // "completed" here would also block their menus from re-arming. Defer the end
+  // until the whole fan-out settles; moveToNextNode runs it for real then.
+  if (session.__fanoutActive > 0) {
+    session.__endAfterFanout = true;
+    session.__endOutcome = outcome;
     return;
   }
 
@@ -3210,6 +3739,24 @@ function endFlowSession(appLocals, sessionKey) {
   // Mark as completed
   session.status = "completed";
   session.waitingForInput = null;
+
+  // Persist the completion to Laravel so /flows/analytics shows a real
+  // completion rate + average duration (until now completion lived ONLY in
+  // this in-memory status, so every finished run still read as 'active' in the
+  // flow_subscribers table). Only on a natural end, and only when this run has
+  // a subscriber row (enroll path) — campaign / mobile-chat starts carry no id
+  // and are skipped server-side. Fire-and-forget: never blocks or throws into
+  // the runtime. Guarded so a session re-activated by a persistent menu and
+  // then re-ended does not double-report.
+  if (outcome === "completed" && session.flowSubscriberId && !session.__completionReported) {
+    session.__completionReported = true;
+    reportFlowCompletion(appLocals, session.flowSubscriberId, session.flowId);
+  }
+
+  // Durable sessions: the run ended, so drop any parked snapshot for this key
+  // (status is now "completed", so syncParkedSession takes the clear branch).
+  // Fire-and-forget — never block the teardown.
+  syncParkedSession(appLocals, sessionKey);
 
   // Clean up session after delay — but only if it's STILL completed. A
   // persistent template menu re-activates this same session (re-shows the
@@ -3237,7 +3784,7 @@ function endWaitNodeOnSendFailure(appLocals, session, label) {
   const key = Object.keys(appLocals.activeFlowSessions)
     .find((k) => appLocals.activeFlowSessions[k] === session);
   console.error(`[FLOW] ${label} send to Meta FAILED — NOT parking (would hang the flow forever); ending session ${key || "?"} so a re-trigger works.`);
-  if (key) endFlowSession(appLocals, key);
+  if (key) endFlowSession(appLocals, key, "aborted");
   else { session.status = "completed"; session.waitingForInput = null; }
 }
 
@@ -3258,7 +3805,8 @@ export function endFlowSessionsForPhone(appLocals, customerPhone) {
     const parts = String(key).split("_").map((p) => p.replace(/\D+/g, ""));
     const hit = parts.some((p) => p && (p === phone || p.endsWith(phone) || phone.endsWith(p)));
     if (hit) {
-      endFlowSession(appLocals, key);
+      // Operator AI-takeover / manual stop — not a natural completion.
+      endFlowSession(appLocals, key, "aborted");
       ended++;
     }
   }
@@ -3275,6 +3823,34 @@ async function executeTimeDelayNode(
   appLocals,
   sessionKey
 ) {
+  // WAIT-FOR-REPLY mode: instead of a fixed pause, PARK until the customer
+  // replies (resume via port 1), and arm an optional timeout timer that routes
+  // the "timeout" port (2) if they don't answer in time. The reply is picked up
+  // by handleFlowResponse's "TimeDelayReply" branch. (Timer is in-process, like
+  // the AI conversational park — a restart drops a pending timeout.)
+  if (String(node.eventType || "duration") === "reply") {
+    const timeoutMs = (typeof node.timeoutSeconds === "number" && node.timeoutSeconds > 0)
+      ? node.timeoutSeconds * 1000 : 0;
+    session.status = "active";
+    session.waitingForInput = { nodeId: node.id, variable: "user_message", nextNodeType: "TimeDelayReply" };
+    appLocals.activeFlowSessions[sessionKey] = session;
+    if (session._delayTimeout) clearTimeout(session._delayTimeout);
+    if (timeoutMs > 0) {
+      session._delayTimeout = setTimeout(async () => {
+        try {
+          const s = appLocals.activeFlowSessions[sessionKey];
+          if (!s || !s.waitingForInput || s.waitingForInput.nodeId !== node.id
+              || s.waitingForInput.nextNodeType !== "TimeDelayReply") return; // replied / jumped away
+          s.waitingForInput = null; s._delayTimeout = null;
+          console.log(`[FLOW] delay node=${node.id} reply timeout — routing timeout port`);
+          await routeViaPort(node.id, 2, s, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+        } catch (e) { console.error(`[FLOW] delay timeout route failed: ${e?.message}`); }
+      }, timeoutMs);
+    }
+    console.log(`[FLOW] delay node=${node.id} waiting for reply (timeout=${timeoutMs}ms)`);
+    return;
+  }
+
   // FlowNormalizer normalizes the builder's `{amount, unit}` into a
   // single `delaySeconds` scalar. The old executor read `node.delay`
   // + `node.unit` — both undefined under the new normalizer → 0ms wait
@@ -3289,11 +3865,36 @@ async function executeTimeDelayNode(
     delayMs = delayAmount * (
       delayUnit === "min" || delayUnit === "minute" || delayUnit === "minutes" ? 60_000 :
       delayUnit === "hour" || delayUnit === "hours" ? 3_600_000 :
+      delayUnit === "week" || delayUnit === "weeks" ? 604_800_000 :
+      delayUnit === "month" || delayUnit === "months" ? 2_592_000_000 :
+      delayUnit === "year" || delayUnit === "years" ? 31_536_000_000 :
       delayUnit === "day"  || delayUnit === "days"  ? 86_400_000 :
       1_000
     );
   }
   console.log(`[FLOW] delay node=${node.id} ${delayMs}ms`);
+
+  // DURABLE LONG DELAYS: a SHORT delay keeps the reliable in-process await —
+  // surviving a sub-2-minute window is near-certain and it avoids any DB churn.
+  // A LONG delay (hours/days) would be silently lost on a Node restart
+  // (deploy/crash) — the awaited promise dies and the flow stalls forever — so
+  // persist it to Laravel and PARK instead of awaiting. The heartbeat sweep
+  // (FlowDelayResumeSweeper) resumes it via /api/flow/resume-delay, advancing
+  // this same node's default out-port. If the park POST fails (Laravel
+  // unreachable) we fall back to the original in-process await so a healthy
+  // process still continues.
+  const DURABLE_DELAY_MIN_MS = 60_000; // 1 minute
+  if (delayMs >= DURABLE_DELAY_MIN_MS) {
+    const parked = await parkDurableDelay(
+      node, delayMs, session, senderPhoneNumber, targetPhoneNumber, appLocals, sessionKey
+    );
+    if (parked) {
+      console.log(`[FLOW] delay node=${node.id} PARKED durably ~${Math.round(delayMs / 1000)}s (survives restart)`);
+      return; // the sweep resumes us
+    }
+    console.warn(`[FLOW] delay node=${node.id} durable park failed — falling back to in-process wait`);
+  }
+
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 
 
@@ -3306,6 +3907,39 @@ async function executeTimeDelayNode(
     appLocals,
     sessionKey
   );
+}
+
+/**
+ * Persist a long duration-delay to Laravel so a Node restart can't drop it.
+ * Awaited (not fire-and-forget) because the caller must know whether the park
+ * succeeded — on failure it falls back to the in-process wait. One-time call
+ * when a flow ENTERS a long delay (rare), so the blocking round-trip is cheap.
+ * Returns true only when Laravel confirmed the pending row.
+ */
+async function parkDurableDelay(node, delayMs, session, senderPhoneNumber, targetPhoneNumber, appLocals, sessionKey) {
+  try {
+    const base = appLocals && appLocals.appDomainName;
+    if (!base || !session || !session.flowId) return false; // no flow id → can't be resumed; use in-process wait
+    const r = await axios.post(
+      `${base}/api/flow-node/delay-park`,
+      {
+        flow_id: session.flowId,
+        flow_subscriber_id: session.flowSubscriberId || null,
+        session_key: sessionKey,
+        device_phone: String(senderPhoneNumber || ""),
+        customer_phone: String(targetPhoneNumber || ""),
+        node_id: node.id,
+        provider: session.provider || (session.flowData && session.flowData.provider) || null,
+        resume_seconds: Math.round(delayMs / 1000),
+        variables: session.userVariables || {},
+      },
+      { timeout: 10000, headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" } }
+    );
+    return !!(r.data && r.data.ok);
+  } catch (e) {
+    console.warn(`[FLOW] parkDurableDelay POST failed node=${node.id}: ${e?.response?.status || e?.message}`);
+    return false;
+  }
 }
 
 /**
@@ -4053,7 +4687,18 @@ async function executeTemplateNode(
       //      degrade to interactive button or text body. The 24-hour
       //      customer-service window applies — Meta still accepts
       //      free-form messages within it.
-      if (tplName && node.templateMetaId) {
+      // Send as a REAL Meta `type:template` whenever the node references a
+      // genuine registered template — identified by its NAME plus EITHER a
+      // hydrated meta-id OR a wa_templates row id (node.templateId). Meta's
+      // send-template API keys on the template NAME + language (not the meta
+      // id), so requiring templateMetaId here was wrong: an approved template
+      // whose meta-id simply wasn't hydrated (node.templateId=63, meta-id null)
+      // fell through to the `interactive` branch below and went out as a SESSION
+      // message — which Meta rejects with 131047 ("Re-engagement message, >24h")
+      // for any cold lead. Templates are exempt from the 24h window; interactive
+      // messages are not. Gating on templateId restores real-template delivery
+      // while still degrading a truly inline (no wa_templates row) template.
+      if (tplName && (node.templateMetaId || node.templateId)) {
         // Build components per Meta's send-template spec.
         const bodyParams = [];
         // Walk positional placeholders in body, push resolved values.
@@ -4063,8 +4708,46 @@ async function executeTemplateNode(
           bodyParams.push({ type: 'text', text: String(v) });
         }
         const components = [];
+        // HEADER component — REQUIRED when the template was created with a
+        // header, else Meta rejects with #132012 "header component parameter
+        // should not be empty". Mirrors TemplatePayloadBuilder (the campaign path):
+        //   TEXT header with a {{n}} placeholder → text parameter
+        //   IMAGE / VIDEO / DOCUMENT header      → media link (header_sample_url)
+        const hdrFmt = String(node.templateHeaderFormat || 'TEXT').toUpperCase();
+        if (hdrFmt === 'IMAGE' || hdrFmt === 'VIDEO' || hdrFmt === 'DOCUMENT') {
+          const link = String(node.templateHeaderMediaUrl || '').trim();
+          const mediaId = await resolveFlowTemplateHeaderMediaId(session, node.templateId, settings);
+          if (mediaId) {
+            const mk = hdrFmt.toLowerCase(); // image | video | document
+            components.push({ type: 'header', parameters: [{ type: mk, [mk]: { id: mediaId } }] });
+            console.log(`[FLOW] template media header resolved to Meta id template=${node.templateId}`);
+          } else if (link) {
+            // Legacy/public-media fallback. Private Meta sample URLs are fixed by
+            // the id path above; this keeps externally hosted customer media
+            // working when Laravel has no source bytes to upload.
+            const mk = hdrFmt.toLowerCase();
+            components.push({ type: 'header', parameters: [{ type: mk, [mk]: { link } }] });
+          } else {
+            console.warn(`[FLOW] template "${tplName}" has a ${hdrFmt} header but NO header_sample_url — Meta will reject (#132012). Set a sample media on the template.`);
+          }
+        } else if (header) {
+          // TEXT header only needs a parameter when it carries a placeholder.
+          const hCount = (String(header).match(/\{\{\s*\d+\s*\}\}/g) || []).length;
+          if (hCount > 0) {
+            const hp = [];
+            for (let i = 1; i <= hCount; i++) hp.push({ type: 'text', text: String(subst('{{' + i + '}}')) });
+            components.push({ type: 'header', parameters: hp });
+          }
+        }
         if (bodyParams.length) components.push({ type: 'body', parameters: bodyParams });
-        const r = await sendWabaTemplate(finalNumber, tplName, node.templateLanguage || 'en_US', components, settings);
+        // Hand the mirror the message we just RENDERED (header/body/footer with
+        // {{vars}} resolved) plus the template's buttons. Without it the helper
+        // could only join the parameter VALUES, so the team inbox showed a bubble
+        // containing just "Mr" instead of the actual template the customer got.
+        const r = await sendWabaTemplate(finalNumber, tplName, node.templateLanguage || 'en_US', components, settings, null, {
+          text,
+          buttons: buttons.slice(0, 3).map((b, i) => ({ text: String(b.text || b.title || b.label || ('Button ' + (i + 1))) })),
+        });
         if (!r.success) console.warn(`[FLOW] template WABA send failed: ${r.error}`);
         else console.log(`[FLOW] template SENT via WABA (type:template, components=${components.length})`);
       } else if (buttons.length > 0) {
@@ -4584,6 +5267,33 @@ async function executeLocationNode(
   );
 }
 
+// Readable summary of everything the customer entered during the flow — Ask
+// answers + WhatsApp Form fields (stored as `<saveAs>.<field>`). Handed to the
+// AI agent so its reply is BASED ON the flow chat / the form the customer
+// filled, and it never re-asks. Skips internal bookkeeping keys (user_message,
+// _*) and nested objects (conversation-mode history, the raw form JSON — its
+// flattened .field keys already carry the values). Capped for prompt size.
+function _flowAnswersSummary(session) {
+  const uv = (session && session.userVariables) || {};
+  const skip = new Set(["user_message"]);
+  const lines = [];
+  for (const [k, v] of Object.entries(uv)) {
+    if (skip.has(k) || String(k).startsWith("_")) continue;
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
+      if (v.length && typeof v[0] === "object") continue; // history/structured
+      const flat = v.map((x) => String(x)).filter(Boolean).join(", ");
+      if (flat) lines.push(`${k}: ${flat}`);
+    } else if (typeof v === "object") {
+      continue; // nested — the flattened .field keys carry the real values
+    } else {
+      const s = String(v).trim();
+      if (s !== "") lines.push(`${k}: ${s}`);
+    }
+  }
+  return lines.slice(0, 50).join("\n").slice(0, 5500);
+}
+
 // ✅ STEP 18: Execute Chatbot Node (starts a sub-flow)
 async function executeChatbotNode(
   node,
@@ -4613,6 +5323,9 @@ async function executeChatbotNode(
           workspace_id: session.flowData?.workspace_id || 0,
           agent_id: agentId,
           customer_phone: targetPhoneNumber,
+          // The flow answers + WhatsApp Form the customer filled, so the agent
+          // replies based on them and doesn't re-ask.
+          flow_context: _flowAnswersSummary(session),
         },
         {
           timeout: 30000,
@@ -4717,7 +5430,15 @@ async function executeMediaNode(
   targetPhoneNumber, senderPhoneNumber, appLocals, sessionKey,
 ) {
   const kind     = String(node.mediaKind || 'image').toLowerCase();
-  let   url      = String(node.mediaUrl || '');
+  // Resolve {{variables}} in the URL / caption / filename from the session so a
+  // Media node can point at a DYNAMIC URL captured earlier in the flow (e.g.
+  // {{invoice_url}} from a webhook, or an uploaded file from an Ask node).
+  // Mirrors the same {{var}} subst the message/template nodes use. MUST run
+  // BEFORE the absolutise safety-net below, so a resolved https URL isn't
+  // mistaken for a relative path. Works identically on Baileys / WABA / Twilio.
+  const subst = (s) => String(s || "").replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, k) =>
+    String(session.userVariables?.[k] ?? session.vars?.[k] ?? ""));
+  let   url      = subst(String(node.mediaUrl || ''));
   // Safety net: a relative path ("/storage/..") can't be fetched by Baileys/
   // WABA, so the media silently never sends. FlowNormalizer also absolutises
   // server-side, but this guards old/cached flows + any other field shape.
@@ -4725,8 +5446,8 @@ async function executeMediaNode(
     const base = String(appLocals.appDomainName || '').replace(/\/+$/, '');
     if (base) url = base + (url.startsWith('/') ? '' : '/') + url;
   }
-  const caption  = String(node.mediaCaption || '');
-  const filename = String(node.mediaFilename || '');
+  const caption  = subst(String(node.mediaCaption || ''));
+  const filename = subst(String(node.mediaFilename || ''));
   const mimetype = String(node.mediaMimetype || '');
 
   console.log(`[FLOW] media node=${node.id} kind=${kind} url_len=${url.length} caption_len=${caption.length}`);
@@ -5688,6 +6409,26 @@ async function executeWebhookNode(
     } else {
       cfg.data = body;
     }
+    // #28 — ALWAYS attach a context envelope so the receiver can identify WHO
+    // triggered this webhook, even when the operator's body only carried the
+    // question's answer. JSON object bodies only; never overwrites the
+    // operator's own keys (their `_wadesk`, if any, wins).
+    if (cfg.data && typeof cfg.data === "object" && !Array.isArray(cfg.data)) {
+      const uv = session.userVariables || {};
+      const ws = session.__wabaSettings || {};
+      cfg.data._wadesk = Object.assign({
+        customer_phone:  senderPhoneNumber || uv.phone || "",
+        wa_id:           senderPhoneNumber || "",
+        name:            uv.name || uv.pushName || "",
+        first_name:      uv.first_name || "",
+        push_name:       uv.pushName || "",
+        device_phone:    targetPhoneNumber || "",
+        waba_id:         ws.waba_id || ws.wabaId || "",
+        phone_number_id: ws.phone_number_id || ws.phoneNumberId || "",
+        conversation_id: session.conversationId || null,
+        flow_id:         session.flowId || null,
+      }, cfg.data._wadesk || {});
+    }
     const resp = await axios(cfg);
     const respLen = typeof resp.data === "string" ? resp.data.length : JSON.stringify(resp.data ?? "").length;
     console.log(`[Webhook] node ${node.id} ← HTTP ${resp.status} from ${url} (response ${respLen} bytes)`);
@@ -5779,27 +6520,133 @@ async function executeTagContactNode(
   sock, appLocals, sessionKey,
 ) {
   const action = String(node.action || "add").toLowerCase();
-  const tagId  = node.tagId  ? String(node.tagId)  : "";
-  const tag    = node.tag    ? String(node.tag)    : "";
-  const wsId   = session.flowData?.workspace_id || null;
-  if (!wsId || (!tagId && !tag)) {
-    console.warn(`[Tag] node ${node.id} missing workspace_id or tag — skipping`);
+  // add/remove operate on a TAG; add_group/remove_group on a contact GROUP.
+  const isGroup = action === "add_group" || action === "remove_group";
+  const tagId   = node.tagId   ? String(node.tagId)   : "";
+  const tag     = node.tag     ? String(node.tag)     : "";
+  const groupId = node.groupId ? String(node.groupId) : "";
+  const group   = node.group   ? String(node.group)   : "";
+  const wsId    = session.flowData?.workspace_id || null;
+  const haveTarget = isGroup ? (groupId || group) : (tagId || tag);
+
+  // Full trace of what this node actually resolved from the saved flow JSON —
+  // if the flow "did nothing" this line tells us whether the node even had a
+  // tag/workspace to act on, or whether Laravel rejected it below.
+  console.log(`[Tag] node=${node.id} ws=${wsId || "NULL"} to=${targetPhoneNumber} action=${action} `
+    + `tagId=${tagId || "-"} tag="${tag || "-"}" groupId=${groupId || "-"} group="${group || "-"}"`);
+
+  if (!wsId || !haveTarget) {
+    console.warn(`[Tag] node=${node.id} SKIP — missing ${!wsId ? "workspace_id" : (isGroup ? "group" : "tag")} `
+      + `(ws=${wsId || "NULL"}, target=${haveTarget || "NULL"}). Check the flow's workspace_id and that the node has a tag selected.`);
     return moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
   }
   try {
-    await axios.post(`${appLocals.appDomainName}/api/flow-node/tag`, {
+    const resp = await axios.post(`${appLocals.appDomainName}/api/flow-node/tag`, {
       workspace_id:   wsId,
       customer_phone: targetPhoneNumber,
       action,
-      tag_id:         tagId || null,
-      tag_name:       tag   || null,
+      tag_id:         tagId   || null,
+      tag_name:       tag     || null,
+      group_id:       groupId || null,
+      group_name:     group   || null,
     }, {
       timeout: 8000,
       headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "" },
     });
+    console.log(`[Tag] node=${node.id} OK <- ${JSON.stringify(resp?.data || {})}`);
   } catch (e) {
-    console.warn(`[Tag] action=${action} failed: ${e?.message}`);
+    // Log Laravel's response body (status + error) — not just the axios message —
+    // so "unauthorized" / "tag_unresolved" / "contact_not_found" is visible.
+    const status = e?.response?.status;
+    const body   = e?.response?.data ? JSON.stringify(e.response.data) : (e?.message || "unknown");
+    console.warn(`[Tag] node=${node.id} action=${action} FAILED status=${status || "?"} body=${body}`);
   }
+  await moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+}
+
+// ✅ Task node — create a follow-up task an agent actually sees, instead of the
+// flow ending with a note nobody reads. Laravel owns the write (workspace-scoped
+// assignee validation + the contact/deal link), so this only substitutes {{vars}}
+// and posts. Non-fatal: a failure logs and the flow still advances — a missing
+// task must never strand the customer mid-conversation.
+async function executeTaskNode(
+  node, session, targetPhoneNumber, senderPhoneNumber,
+  sock, appLocals, sessionKey,
+) {
+  const wsId  = session.flowData?.workspace_id || null;
+  const title = _flowSubst(session, String(node.title || "")).trim();
+
+  if (!wsId || !title) {
+    console.warn(`[Task] node ${node.id} missing workspace_id or title — skipping`);
+    return moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+  }
+
+  try {
+    const r = await axios.post(`${appLocals.appDomainName}/api/flow-node/task`, {
+      workspace_id:   wsId,
+      customer_phone: targetPhoneNumber,
+      title,
+      notes:          _flowSubst(session, String(node.notes || "")) || null,
+      assignee_id:    node.assigneeId ? Number(node.assigneeId) : null,
+      priority:       String(node.priority || "medium"),
+      // Normalizer already flattened {amount, unit} → seconds, so this executor
+      // never has to know the unit vocabulary (the mistake TimeDelay made).
+      due_in_seconds: node.dueInSeconds != null ? Number(node.dueInSeconds) : null,
+      related_type:   String(node.relatedType || "") || null,
+    }, {
+      timeout: 10000,
+      headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "" },
+    });
+    console.log(`[Task] node ${node.id} created task=${r.data?.task_id} due=${r.data?.due_at || "none"}`);
+  } catch (e) {
+    console.warn(`[Task] create failed: ${e?.response?.data?.message || e?.message}`);
+  }
+
+  await moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+}
+
+// ✅ Update contact node — write what the flow learned back onto the contact
+// record. Before this a flow could TAG a contact but never store an answer, so
+// an Ask node's reply lived only inside that one session and was lost when it
+// ended. Laravel enforces the write whitelist + custom-field typing; this just
+// resolves {{vars}} and posts. Non-fatal, same as the Task node.
+async function executeContactUpdateNode(
+  node, session, targetPhoneNumber, senderPhoneNumber,
+  sock, appLocals, sessionKey,
+) {
+  const wsId = session.flowData?.workspace_id || null;
+  const rows = Array.isArray(node.fields) ? node.fields : [];
+
+  // Substitute first, then drop rows whose key is blank. A blank VALUE is kept
+  // on purpose — clearing a field is a legitimate edit.
+  const fields = rows
+    .map((f) => ({
+      key:   String(f?.key || "").trim(),
+      value: _flowSubst(session, String(f?.value ?? "")),
+    }))
+    .filter((f) => f.key !== "");
+
+  if (!wsId || fields.length === 0) {
+    console.warn(`[ContactUpdate] node ${node.id} missing workspace_id or fields — skipping`);
+    return moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
+  }
+
+  try {
+    const r = await axios.post(`${appLocals.appDomainName}/api/flow-node/contact-update`, {
+      workspace_id:   wsId,
+      customer_phone: targetPhoneNumber,
+      fields,
+    }, {
+      timeout: 10000,
+      headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "" },
+    });
+    const skipped = (r.data?.skipped || []);
+    console.log(`[ContactUpdate] node ${node.id} wrote=[${(r.data?.written || []).join(",")}]`
+      + (skipped.length ? ` SKIPPED=[${skipped.join(",")}] (not a known field, or the value did not fit its type)` : ""));
+  } catch (e) {
+    console.warn(`[ContactUpdate] failed: ${e?.response?.data?.message || e?.message}`);
+  }
+
   await moveToNextNode(node.id, session.flowData, targetPhoneNumber, senderPhoneNumber, sock, appLocals, sessionKey);
 }
 

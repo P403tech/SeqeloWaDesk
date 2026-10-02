@@ -135,6 +135,7 @@ $tplHeaderDisplay = $namedFor($tplHeader, $sectionSlotKey['header']);
                             class="sec-title font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Identity') }}</span>
                         <span class="sec-meta font-mono text-[10px] text-ink-500">{{ __('required') }}</span>
                     </div>
+                    @php $onMeta = !empty($template->meta_template_id); @endphp
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         <div>
                             <label
@@ -143,10 +144,15 @@ $tplHeaderDisplay = $namedFor($tplHeader, $sectionSlotKey['header']);
                                     class="req text-accent-coral">*</span></label>
                             <input id="tpl-name" name="template_name" type="text"
                                 value="{{ old('template_name', $template->template_name ?? '') }}" maxlength="60"
-                                required
-                                class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                                required @readonly($onMeta)
+                                class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 @if($onMeta) bg-paper-50 text-ink-500 cursor-not-allowed @endif">
                             <div class="hint text-[10.5px] text-ink-500 mt-1 leading-[1.35]">
-                                {{ __('a-z, 0-9, _ only / max 60.') }}</div>
+                                @if($onMeta)
+                                    {{ __('Locked — Meta does not allow renaming a template. Create a new template to change the name.') }}
+                                @else
+                                    {{ __('a-z, 0-9, _ only / max 60.') }}
+                                @endif
+                            </div>
                         </div>
                         <div>
                             <label
@@ -170,8 +176,12 @@ $tplHeaderDisplay = $namedFor($tplHeader, $sectionSlotKey['header']);
                                 class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]"
                                 for="tpl-language">{{ __('Language') }} <span
                                     class="req text-accent-coral">*</span></label>
-                            <select id="tpl-language" name="language" required
-                                class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                            {{-- On-Meta templates can't change language (Meta identity =
+                                 name+language). Disable the picker AND post the stored
+                                 value via a hidden field so validation still passes. --}}
+                            @if($onMeta)<input type="hidden" name="language" value="{{ $tplLang }}">@endif
+                            <select id="tpl-language" name="language" required @disabled($onMeta)
+                                class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 @if($onMeta) bg-paper-50 text-ink-500 cursor-not-allowed @endif">
                                 @php
                                     $tplLangs = wa_template_languages();
                                     // If this template was imported/created with a code that isn't in
@@ -187,7 +197,12 @@ $tplHeaderDisplay = $namedFor($tplHeader, $sectionSlotKey['header']);
                                 @endforeach
                             </select>
                             <div class="hint text-[10.5px] text-ink-500 mt-1 leading-[1.35]">
-                                {{ __('One locale per template.') }}</div>
+                                @if($onMeta)
+                                    {{ __('Locked — language is fixed once a template is on Meta.') }}
+                                @else
+                                    {{ __('One locale per template.') }}
+                                @endif
+                            </div>
                         </div>
                     </div>
                     {{-- Twilio ContentSid: per-template pointer to a Twilio Content

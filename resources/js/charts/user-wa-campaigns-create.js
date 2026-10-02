@@ -1,5 +1,7 @@
 import { initVariableMap } from '../template-var-map.js';
 import { fillSamples, loadAttributeValues } from '../template-vars.js';
+import { initFollowups } from './campaign-followups.js';
+import { initBestTime } from './campaign-best-time.js';
 
 export default function init() {
     // Live preview substitutes a real SAMPLE VALUE for each {{token}} in
@@ -123,7 +125,9 @@ export default function init() {
         sel.addEventListener('change', sync);
         sync();
     })();
-    const total = 5;
+    // Count the panes actually rendered — the optional "Follow-ups" step (plan-
+    // gated) means the total is 5 or 6, so never hardcode it.
+    const total = document.querySelectorAll(".step-pane").length || 5;
       let current = 1;
       let format = "Text";
 
@@ -181,7 +185,23 @@ export default function init() {
       };
 
       const selectedType = () => document.querySelector("input[name='campaign_type']:checked")?.value || "Custom message";
-      const selectedSchedule = () => document.querySelector("input[name='schedule_type']:checked")?.value || "Send now";
+      const selectedSchedule = () => document.querySelector("input[name='schedule_type']:checked")?.value || "now";
+
+      // Timezone: default the picker to the OPERATOR's own browser timezone when
+      // it would otherwise be the generic UTC fallback — so the Schedule step
+      // shows their local zone, not UTC. An explicit workspace/user tz preference
+      // (anything other than UTC) is left untouched. (#17)
+      (function () {
+        const tzSel = document.getElementById("timezone");
+        if (!tzSel) return;
+        try {
+          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          if (browserTz && (tzSel.value === "UTC" || !tzSel.value)) {
+            const opt = Array.from(tzSel.options).find((o) => o.value === browserTz);
+            if (opt) tzSel.value = browserTz;
+          }
+        } catch (e) { /* Intl unavailable — keep the server default */ }
+      })();
       const numberFormat = (value) => new Intl.NumberFormat("en-IN").format(value);
 
       // Per-source recipient counts. Always read every field regardless
@@ -220,9 +240,15 @@ export default function init() {
       const recipientTotal = () => recipientBreakdown().total;
 
       const scheduleText = () => {
+        // selectedSchedule() returns the RADIO VALUE: "now" | "scheduled" |
+        // "recurring". Comparing against the display string "Send now" never
+        // matched, so a Send-now campaign's review card read "Later"/scheduled.
         const mode = selectedSchedule();
-        if (mode === "Send now") return "Now";
-        return `${mode} ${document.getElementById("send-date").value} ${document.getElementById("send-time").value}`;
+        if (mode === "now") return "Now";
+        const date = document.getElementById("send-date")?.value || "";
+        const time = document.getElementById("send-time")?.value || "";
+        const label = mode === "recurring" ? "Recurring" : "Scheduled";
+        return `${label} ${date} ${time}`.trim();
       };
 
       // Defensive setter — never throws if the element is missing, and
@@ -695,12 +721,28 @@ export default function init() {
       // template builder. Binds to compose-textarea's hidden
       // [name="custom_message_variable_map"] field; the slot→attribute
       // map it writes is consumed by the controller at send time.
-      initVariableMap({
+      const ccVarMap = initVariableMap({
         body:   document.getElementById('message-body'),
         hidden: document.querySelector('[name="custom_message_variable_map"]'),
         rows:   document.getElementById('cc-var-map-rows'),
         empty:  document.getElementById('cc-var-map-empty'),
       });
+
+      // Split ONE CSV line into fields, honouring "quoted, values".
+      const parseCsvRow = (line) => {
+        const out = []; let cur = ''; let q = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (q) {
+            if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+            else cur += ch;
+          } else if (ch === '"') q = true;
+          else if (ch === ',') { out.push(cur.trim()); cur = ''; }
+          else cur += ch;
+        }
+        out.push(cur.trim());
+        return out;
+      };
 
       document.getElementById("split").addEventListener("input", event => {
         document.getElementById("split-val").textContent = `${event.target.value}%`;
@@ -948,18 +990,26 @@ export default function init() {
         const f = e.target.files?.[0];
         const echo = document.getElementById('csv-filename');
         if (echo) echo.textContent = f ? `selected: ${f.name}` : '';
-        if (!f) { csvCount = 0; updatePreview(); return; }
+        if (!f) { csvCount = 0; ccVarMap?.setColumns([]); window.__tlmSetColumns?.([]); updatePreview(); return; }
         // Count the data rows so the review total + the "at least one recipient"
         // guard include the CSV. Drop a header row when the first line has no
         // digits (i.e. it's the "name,phone" label row, not a real number).
+        // Also lift the header names out so the variable-mapping dropdowns can
+        // offer the file's columns ("From your file") — WA-Sender-style.
         const r = new FileReader();
         r.onload = () => {
           const lines = String(r.result || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+          // Header row = first line with letters and no long digit run (a phone).
+          const headers = (lines.length && /[a-zA-Z]/.test(lines[0]) && !/\d{5,}/.test(lines[0]))
+            ? parseCsvRow(lines[0]).filter(Boolean)
+            : [];
+          ccVarMap?.setColumns(headers);          // custom-message surface
+          window.__tlmSetColumns?.(headers);      // template surface (WABA)
           if (lines.length && !/\d/.test(lines[0])) lines.shift();
           csvCount = lines.length;
           updatePreview();
         };
-        r.onerror = () => { csvCount = 0; updatePreview(); };
+        r.onerror = () => { csvCount = 0; ccVarMap?.setColumns([]); window.__tlmSetColumns?.([]); updatePreview(); };
         r.readAsText(f);
       });
 
@@ -1028,10 +1078,27 @@ export default function init() {
       }
 
       const campaignForm = document.getElementById("campaignForm");
+
+      // Stop Enter in a text/number field from implicitly submitting the form.
+      // Previously an accidental Enter on step 2 launched the half-built
+      // campaign (which then failed). Textareas keep their newline behaviour.
+      campaignForm.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        const el = event.target;
+        if (el && el.tagName === "INPUT" && el.type !== "submit" && el.type !== "button") {
+          event.preventDefault();
+        }
+      });
+
       campaignForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-        // The stepper hides #submitBtn until step 5, so submission only fires
-        // when the operator has reached the Review pane and confirms.
+        // Only actually launch from the final Review step. Any earlier submit
+        // (an implicit one that slipped through) just advances the stepper
+        // instead of firing an incomplete campaign.
+        if (current < total) {
+          if (gateForward(current)) setStep(current + 1);
+          return;
+        }
         const json = await ajaxSubmit(campaignForm);
         if (json && json.ok) {
           window.toast?.(json.message || "Campaign launched.", "success");
@@ -1284,4 +1351,9 @@ export default function init() {
               closeAiModal();
           }
       });
+
+      // Campaign Follow-ups rule builder (shared with the edit form).
+      initFollowups();
+      // Best-time-to-send heatmap + suggestion on the Schedule step.
+      initBestTime();
 }

@@ -57,6 +57,9 @@ class WaInboundController extends Controller
             'footer'         => 'nullable|string|max:191',
             'is_lid'         => 'nullable|boolean',
             'raw_jid'        => 'nullable|string|max:191',
+            // Group subject — only sent for @g.us inbound, so a group thread is
+            // titled after the GROUP, not whoever spoke first.
+            'group_subject'  => 'nullable|string|max:191',
             'lid_jid'        => 'nullable|string|max:191',
             'timestamp'      => 'nullable|integer',
             // Contact-card (vCard) sharing — Baileys / WABA send a structured
@@ -132,7 +135,15 @@ class WaInboundController extends Controller
                     }
                 }
             }
-            // Nothing to attach to — silently accept so the bridge doesn't retry.
+            // Nothing to attach to — the reacted message has no stored
+            // wa_message_id (an older row saved before wamids were recorded), so
+            // the pip can't be placed. Accept so the bridge doesn't retry, but
+            // log the target so a genuine "reaction not showing" is traceable to
+            // the missing wamid rather than an assumed code fault (#22).
+            \Log::info('[INBOUND-REACT] target not found — no bubble carries this wamid', [
+                'reaction_target' => (string) ($data['reaction_target'] ?? ''),
+                'device_phone'    => (string) ($data['device_phone'] ?? ''),
+            ]);
             return response()->json(['ok' => true, 'kind' => 'reaction', 'message_id' => null]);
         }
 
@@ -149,8 +160,12 @@ class WaInboundController extends Controller
 
         // Match the device by digits-only phone — phone_number is
         // encrypted-at-rest so we can't SQL-WHERE on it, we scan in PHP.
+        // workspace_id MUST be selected: the thread, the auto-created Contact and
+        // the saved-name lookup below all partition on it. Omitting it made every
+        // inbound fall through to the owner's CURRENTLY-SELECTED workspace, so a
+        // multi-workspace owner filed messages wherever they last switched to.
         $device = Device::query()
-            ->get(['id', 'user_id', 'country_code', 'phone_number'])
+            ->get(['id', 'user_id', 'workspace_id', 'country_code', 'phone_number'])
             ->first(function ($d) use ($devicePhoneDigits) {
                 $full = preg_replace('/\D+/', '', (string) ($d->country_code . $d->phone_number));
                 return $full === $devicePhoneDigits;
@@ -197,11 +212,23 @@ class WaInboundController extends Controller
         // sends, or an `@lid` suffix on either jid. Length is not a LID test:
         // E.164 allows up to 15 digits, and a doubled country code was enough
         // to trip the old 8–13 guess and open a numberless "WhatsApp contact".
+        // sends, or an `@lid` suffix on either jid. Both are facts; length is
+        // not.
+        //
+        // This used to also guess "anything outside 8–13 digits is a LID". That
+        // is wrong twice over: E.164 allows up to 15 digits, so long real
+        // numbers were misread, and a genuine LID is ~15 digits anyway — the
+        // same range as a long phone — so the test could not separate them. The
+        // visible damage was a real customer landing in a `…@lid` thread with
+        // no number, titled "WhatsApp contact", that never merged with their
+        // actual chat. A double-prefixed number (country code stored inside
+        // `mobile` too) was enough to trip it.
         $lidJidHint = (string) ($data['lid_jid'] ?? '');
         $rawJidHint = (string) ($data['raw_jid'] ?? '');
         $isLid = (bool) ($data['is_lid'] ?? false)
               || str_ends_with($rawJidHint, '@lid')
               || str_ends_with($lidJidHint, '@lid')
+              // No phone at all left to key on — nothing else it can be.
               || $senderPhoneDigits === '';
 
         // Canonical JID for outbound routing — preferred when we have
@@ -235,6 +262,17 @@ class WaInboundController extends Controller
                 : '+' . $senderPhoneDigits;
         }
 
+        // GROUP thread: the title is the group's own subject, never the member
+        // who happened to speak first. Normally the wa_groups sync has already
+        // created the conversation with the right name — this covers a group
+        // that messages before its first sync.
+        if (str_ends_with($rawJid, '@g.us')) {
+            $groupSubject = trim((string) ($data['group_subject'] ?? ''));
+            if ($groupSubject !== '') {
+                $title = $groupSubject;
+            }
+        }
+
         Log::info('[INBOUND] received', [
             'device_phone' => $devicePhoneDigits,
             'sender'       => $senderPhoneDigits,
@@ -258,6 +296,9 @@ class WaInboundController extends Controller
         // stored shape and partitions on nothing but the workspace, so this
         // path can no longer create a second thread for someone who already
         // has one — whichever engine or surface opened it.
+        // current_workspace_id is a LEGACY fallback only — for pre-workspace device
+        // rows whose workspace_id is genuinely null. It must never be the normal
+        // path: the owner's selected workspace is not where the device lives.
         $wsId = (int) ($device->workspace_id
             ?: \App\Models\User::query()->whereKey($userId)->value('current_workspace_id'));
 
@@ -471,6 +512,23 @@ class WaInboundController extends Controller
         if (!empty($data['header'])) $msgMeta['header'] = (string) $data['header'];
         if (!empty($data['footer'])) $msgMeta['footer'] = (string) $data['footer'];
         $contactMeta = !empty($msgMeta) ? $msgMeta : null;
+
+        // Diagnostic for flow-mirrored templates: shows what Laravel RECEIVED +
+        // will STORE. If body_len is large (full "Hi Mr, Your Smart Child..."),
+        // the fix is flowing through; if body is just a variable ("Mr"), the Node
+        // build is old (deploy flowService.js). `message_kind` is logged from the
+        // raw request (it isn't a stored column — the inbox card is drawn from
+        // meta.buttons/header/footer, which ARE stored above).
+        if ($request->input('source') === 'flow' && $direction === 'out') {
+            Log::info('[FLOW-MIRROR-IN] flow outbound template/message mirror', [
+                'recv_body_len'  => mb_strlen((string) ($data['body'] ?? '')),
+                'recv_body_head' => mb_substr((string) ($data['body'] ?? ''), 0, 90),
+                'buttons'        => is_array($data['buttons'] ?? null) ? count($data['buttons']) : 0,
+                'message_kind'   => $request->input('message_kind'),
+                'template_name'  => $request->input('template_name'),
+                'stored_meta'    => $contactMeta ? array_keys($contactMeta) : [],
+            ]);
+        }
 
         $inboundMsg = InboxMessage::create([
             'conversation_id' => $convo->id,

@@ -7,6 +7,7 @@
             'name' => $w?->name ?? '',
             'mode' => $w?->mode ?? 'ai',
             'assistant_id' => $w?->assistant_id ?? null,
+            'flow_id' => $w?->flow_id ?? null,
             'target_whatsapp_cc' => $w?->target_whatsapp_cc ?? '',
             'target_whatsapp_number' => $w?->target_whatsapp_number ?? '',
             'prefilled_message' => $w?->prefilled_message ?? "Hi, I'd like to know more.",
@@ -29,6 +30,7 @@
             'collect_name' => (bool) ($w?->collect_name ?? true),
             'collect_email' => (bool) ($w?->collect_email ?? false),
             'collect_phone' => (bool) ($w?->collect_phone ?? false),
+            'ai_capture_enabled' => (bool) ($w?->ai_capture_enabled ?? false),
         ];
         $embedToken = $w?->embed_token ?? null;
         $assistantsJs = $assistants->map(fn($a) => ['id' => $a->id, 'name' => $a->name]);
@@ -150,7 +152,7 @@
                                 class="text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-2">{{ __('Conversation engine') }}
                                 <span class="text-accent-coral">*</span></label>
                             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                @foreach (['ai' => ['Smart agent', 'Trained AI answers right in the browser.', 'M3 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 2v-2a2 2 0 0 1-2-2z'], 'whatsapp' => ['WhatsApp deep-link', 'Send the visitor into the WhatsApp app to chat.', 'M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5'], 'both' => ['Smart + WhatsApp', 'Visitor picks — chat here or open WhatsApp.', 'M3 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 2v-2a2 2 0 0 1-2-2z']] as $val => $info)
+                                @foreach (['ai' => ['Smart agent', 'Trained AI answers right in the browser.', 'M3 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 2v-2a2 2 0 0 1-2-2z'], 'whatsapp' => ['WhatsApp deep-link', 'Send the visitor into the WhatsApp app to chat.', 'M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5'], 'both' => ['Smart + WhatsApp', 'Visitor picks — chat here or open WhatsApp.', 'M3 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 2v-2a2 2 0 0 1-2-2z'], 'flow' => ['Workflow', 'Run a flow you built — steps, buttons, conditions.', 'M4 4h5v5H4zM15 15h5v5h-5zM9 6.5h6a2 2 0 0 1 2 2V15']] as $val => $info)
                                     <label
                                         class="type-tile cursor-pointer border rounded-2xl p-4 transition {{ $defaults['mode'] === $val ? 'border-wa-deep bg-[#F0F8F6]' : 'border-paper-200' }}"
                                         data-mode-tile="{{ $val }}">
@@ -159,7 +161,7 @@
                                             {{ $defaults['mode'] === $val ? 'checked' : '' }}>
                                         <div class="flex items-start justify-between mb-3">
                                             <span
-                                                class="w-10 h-10 rounded-xl {{ $val === 'ai' ? 'bg-wa-mint text-wa-deep' : ($val === 'whatsapp' ? 'bg-[#D9E5F2] text-[#13478A]' : 'bg-[#F3E9FF] text-[#5B3D8A]') }} grid place-items-center">
+                                                class="w-10 h-10 rounded-xl {{ $val === 'ai' ? 'bg-wa-mint text-wa-deep' : ($val === 'whatsapp' ? 'bg-[#D9E5F2] text-[#13478A]' : ($val === 'flow' ? 'bg-[#FFF0DB] text-[#8A5B13]' : 'bg-[#F3E9FF] text-[#5B3D8A]')) }} grid place-items-center">
                                                 <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none"
                                                     stroke="currentColor" stroke-width="1.6">
                                                     <path d="{{ $info[2] }}" />
@@ -195,6 +197,30 @@
                                     href="{{ url('/ai-training') }}"
                                     class="font-semibold text-wa-deep underline">{{ __('Build a smart agent') }}</a>
                                 first.</div>
+                        </div>
+
+                        <div data-show-when-mode="flow" class="mb-4">
+                            <label
+                                class="text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-1.5">{{ __('Workflow to run') }}</label>
+                            <select data-field="flow_id"
+                                class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 leading-snug focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                                <option value="">— {{ __('Pick a published flow') }} —</option>
+                                @foreach ($flows as $f)
+                                    <option value="{{ $f->id }}">{{ $f->flow_name }}</option>
+                                @endforeach
+                            </select>
+                            {{-- Only PUBLISHED + active flows are listed: an unpublished
+                                 flow saves fine and then never runs, which from the
+                                 visitor's side looks exactly like a broken widget. --}}
+                            <div class="text-[10.5px] text-ink-500 mt-1">
+                                @if ($flows->isEmpty())
+                                    {{ __('No published flows yet.') }}
+                                    <a href="{{ url('/flows') }}" class="font-semibold text-wa-deep underline">{{ __('Build one') }}</a>
+                                    {{ __('and publish it, then pick it here.') }}
+                                @else
+                                    {{ __('Only published flows appear here. Anything the flow does not answer falls through to your smart agent, if one is set.') }}
+                                @endif
+                            </div>
                         </div>
 
                         <div data-show-when-mode="whatsapp,both" class="mb-3">
@@ -406,6 +432,19 @@
                                     </label>
                                 @endforeach
                             </div>
+
+                            {{-- AI conversational capture — the bot pulls the visitor's
+                                 details out of the chat itself (no form) and saves them
+                                 onto the contact, then answers using what it captured. --}}
+                            <label
+                                class="flex items-start gap-2 border border-paper-200 rounded-lg p-2.5 mt-2 cursor-pointer hover:border-wa-deep transition">
+                                <input type="checkbox" data-field="ai_capture_enabled"
+                                    class="w-4 h-4 mt-0.5 accent-wa-deep">
+                                <span>
+                                    <span class="text-[12.5px] text-ink-900 font-medium block">{{ __('AI auto-capture lead info from the chat') }}</span>
+                                    <span class="text-[10.5px] text-ink-500">{{ __('The AI reads the conversation and saves name, email, phone + your custom attributes onto the contact — no form needed. Then it answers using what it learned.') }}</span>
+                                </span>
+                            </label>
                         </div>
                     </div>
 

@@ -61,7 +61,7 @@
 
     @if ($doc->buyer_name || $doc->company?->name || $doc->buyer_email)
         <div class="card">
-            <h2>Prepared for</h2>
+            <h2>{{ __('Prepared for') }}</h2>
             <div class="buyer">
                 @if ($doc->buyer_name)<strong>{{ $doc->buyer_name }}</strong><br>@endif
                 @if ($doc->company?->name){{ $doc->company->name }}<br>@endif
@@ -72,9 +72,9 @@
     @endif
 
     <div class="card">
-        <h2>Line items</h2>
+        <h2>{{ __('Line items') }}</h2>
         <table>
-            <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit</th><th class="r">Amount</th></tr></thead>
+            <thead><tr><th>{{ __('Description') }}</th><th class="r">{{ __('Qty') }}</th><th class="r">{{ __('Unit') }}</th><th class="r">{{ __('Amount') }}</th></tr></thead>
             <tbody>
                 @forelse ($items as $it)
                     <tr>
@@ -84,19 +84,19 @@
                         <td class="r">{{ $fmt($it['line_total_minor'] ?? 0) }}</td>
                     </tr>
                 @empty
-                    <tr><td colspan="4" style="color:#8a8478;padding:16px 0;">No items.</td></tr>
+                    <tr><td colspan="4" style="color:#8a8478;padding:16px 0;">{{ __('No items.') }}</td></tr>
                 @endforelse
             </tbody>
         </table>
         <div class="totals">
-            <div class="row"><span>Subtotal</span><span>{{ $fmt($doc->subtotal_minor) }}</span></div>
-            @if ($doc->tax_minor > 0)<div class="row"><span>Tax ({{ rtrim(rtrim(number_format($doc->tax_rate_bp / 100, 2), '0'), '.') }}%)</span><span>{{ $fmt($doc->tax_minor) }}</span></div>@endif
-            <div class="row grand"><span>Total</span><span>{{ $fmt($doc->total_minor) }}</span></div>
+            <div class="row"><span>{{ __('Subtotal') }}</span><span>{{ $fmt($doc->subtotal_minor) }}</span></div>
+            @if ($doc->tax_minor > 0)<div class="row"><span>{{ __('Tax') }} ({{ rtrim(rtrim(number_format($doc->tax_rate_bp / 100, 2), '0'), '.') }}%)</span><span>{{ $fmt($doc->tax_minor) }}</span></div>@endif
+            <div class="row grand"><span>{{ __('Total') }}</span><span>{{ $fmt($doc->total_minor) }}</span></div>
         </div>
     </div>
 
     @if ($doc->notes)
-        <div class="card"><h2>Notes</h2><div class="buyer" style="white-space:pre-wrap;">{{ $doc->notes }}</div></div>
+        <div class="card"><h2>{{ __('Notes') }}</h2><div class="buyer" style="white-space:pre-wrap;">{{ $doc->notes }}</div></div>
     @endif
 
     @php
@@ -107,30 +107,30 @@
 
     {{-- Confirmation banner after the customer acts --}}
     @if ($justDecided === 'accepted' || $doc->status === 'accepted')
-        <div class="banner banner-ok">✓ You accepted this {{ strtolower($doc->typeLabel()) }}. {{ $brand }} has been notified and will follow up.</div>
+        <div class="banner banner-ok">✓ {{ __('You accepted this :type. :brand has been notified and will follow up.', ['type' => strtolower($doc->typeLabel()), 'brand' => $brand]) }}</div>
     @elseif ($justDecided === 'rejected' || $doc->status === 'rejected')
-        <div class="banner banner-no">This {{ strtolower($doc->typeLabel()) }} was declined. If this was a mistake, please contact {{ $brand }}.</div>
+        <div class="banner banner-no">{{ __('This :type was declined. If this was a mistake, please contact :brand.', ['type' => strtolower($doc->typeLabel()), 'brand' => $brand]) }}</div>
     @elseif ($doc->status === 'invoiced')
-        <div class="banner banner-ok">✓ Accepted — an invoice has been issued for this {{ strtolower($doc->typeLabel()) }}.</div>
+        <div class="banner banner-ok">✓ {{ __('Accepted — an invoice has been issued for this :type.', ['type' => strtolower($doc->typeLabel())]) }}</div>
     @endif
 
     {{-- Customer decision buttons (only while still open) --}}
     @if ($isOpen)
         <div class="card">
-            <h2>Your decision</h2>
+            <h2>{{ __('Your decision') }}</h2>
             <div class="actions">
                 <form method="POST" action="{{ route('salesdoc.public.accept', $doc->public_token) }}">@csrf
-                    <button type="submit" class="btn btn-accept">✓ Accept this {{ strtolower($doc->typeLabel()) }}</button>
+                    <button type="submit" class="btn btn-accept">✓ {{ __('Accept this :type', ['type' => strtolower($doc->typeLabel())]) }}</button>
                 </form>
-                <form method="POST" action="{{ route('salesdoc.public.decline', $doc->public_token) }}" onsubmit="return confirm('Decline this {{ strtolower($doc->typeLabel()) }}?')">@csrf
-                    <button type="submit" class="btn btn-decline">Decline</button>
+                <form method="POST" action="{{ route('salesdoc.public.decline', $doc->public_token) }}" onsubmit="return confirm('{{ __('Decline this :type?', ['type' => strtolower($doc->typeLabel())]) }}')">@csrf
+                    <button type="submit" class="btn btn-decline">{{ __('Decline') }}</button>
                 </form>
             </div>
-            <div class="note">By accepting you confirm the scope and pricing above.</div>
+            <div class="note">{{ __('By accepting you confirm the scope and pricing above.') }}</div>
         </div>
     @endif
 
-    <div class="foot">This {{ strtolower($doc->typeLabel()) }} was generated by {{ $brand }}.</div>
+    <div class="foot">{{ __('This :type was generated by :brand.', ['type' => strtolower($doc->typeLabel()), 'brand' => $brand]) }}</div>
 </div>
 </body>
 </html>

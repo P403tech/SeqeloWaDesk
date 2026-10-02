@@ -7,5 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="{{ $__appFont['url'] }}" rel="stylesheet">
-    <style>:root{--font-sans:{{ $__appFont['stack'] }};}body{font-family:{{ $__appFont['stack'] }};}</style>
+    {{-- RAW ({!! !!}) inside <style>: the font stack contains single quotes
+         (e.g. 'Poppins') that {{ }} would escape to &#039;, which is INVALID
+         CSS inside a <style> tag — the browser then drops the rule and the font
+         silently never applies. Safe: the stack is ALWAYS a fixed value from
+         app_font_catalog() (the user only picks a validated key), never input. --}}
+    <style>:root{--font-sans:{!! $__appFont['stack'] !!};}body{font-family:{!! $__appFont['stack'] !!};}</style>
 @endif

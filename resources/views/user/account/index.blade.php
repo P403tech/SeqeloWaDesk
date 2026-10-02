@@ -299,18 +299,15 @@
                             <h3 class="font-serif text-[20px]">{{ __('Past orders') }}</h3>
                             @php
                                 $paidCount = $orders->where('status', 'paid')->count();
-                                // Show lifetime in the order's currency when all orders
-// share one — otherwise fall back to the workspace
-// currency. Common case is one currency per workspace.
-$lifetimeCurrency =
-    $orders->where('status', 'paid')->pluck('currency')->unique()->count() === 1
-        ? $orders->where('status', 'paid')->first()?->currency
-        : (optional($authUser->currentWorkspace)->currency ?:
-        'USD');
+                                // Lifetime + per-order amounts render in the order's OWN
+                                // currency (formatIn, no conversion) so they match the
+                                // invoice exactly. $ordersLifetimeCurrency is resolved in
+                                // AccountController: single-currency → that currency;
+                                // mixed → the workspace currency.
                             @endphp
                             <span class="font-mono text-[10.5px] text-ink-500">
                                 {{ $orders->count() }} order{{ $orders->count() === 1 ? '' : 's' }} ·
-                                {!! \App\Support\FormatSettings::currency($ordersLifetimeAmount) !!} {{ __('lifetime') }}
+                                {!! \App\Support\FormatSettings::formatIn($ordersLifetimeAmount, $ordersLifetimeCurrency) !!} {{ __('total') }}
                             </span>
                         </div>
                         @if ($orders->isEmpty())
@@ -368,14 +365,14 @@ $lifetimeCurrency =
                                             <td class="px-2 py-3 font-mono text-[11.5px]">
                                                 {{ optional($o->created_at)->format('M j, Y') }}</td>
                                             <td class="px-2 py-3 font-semibold">
-                                                {!! \App\Support\FormatSettings::display($o->amount, $o->currency) !!}
+                                                {!! \App\Support\FormatSettings::formatIn($o->amount, $o->currency) !!}
                                                 @if ($o->discount_amount > 0 || $o->tax_amount > 0)
                                                     <div class="text-[10px] font-mono text-ink-500 mt-0.5">
                                                         @if ($o->discount_amount > 0)
-                                                            −{!! \App\Support\FormatSettings::display($o->discount_amount, $o->currency) !!} disc
+                                                            −{!! \App\Support\FormatSettings::formatIn($o->discount_amount, $o->currency) !!} disc
                                                         @endif
                                                         @if ($o->tax_amount > 0)
-                                                            +{!! \App\Support\FormatSettings::display($o->tax_amount, $o->currency) !!} tax
+                                                            +{!! \App\Support\FormatSettings::formatIn($o->tax_amount, $o->currency) !!} tax
                                                         @endif
                                                     </div>
                                                 @endif
@@ -860,30 +857,80 @@ $lifetimeCurrency =
                 <div data-pane="affiliate" class="space-y-5 hidden">
                     <div class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
                         <div class="flex items-start justify-between gap-4">
+                            @php
+                                $defCur = (string) \App\Models\SystemSetting::get('default_currency', 'USD');
+                                $referrerRewardTxt = \App\Support\FormatSettings::formatIn(\App\Services\ReferralService::referrerRewardMinor() / 100, $defCur);
+                                $refereeRewardMinor = \App\Services\ReferralService::refereeRewardMinor();
+                                $refereeRewardTxt = \App\Support\FormatSettings::formatIn($refereeRewardMinor / 100, $defCur);
+                                $waMsg = trim(__('Join me on this WhatsApp platform') . ($refereeRewardMinor > 0 ? ' — ' . __('we both get a bonus') : '') . ': ' . $referralUrl);
+                                $waShareUrl = 'https://wa.me/?text=' . rawurlencode($waMsg);
+                            @endphp
                             <div>
                                 <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
-                                    {{ __('Your affiliate code') }}</div>
+                                    {{ __('Refer & Earn') }}</div>
                                 <h3 class="font-serif text-[28px] mt-1">{{ $authUser->referral_code ?: 'NO-CODE' }}
                                 </h3>
                                 <p class="text-[12.5px] text-ink-600 mt-2 max-w-md">
-                                    {{ __('Share your unique link. Every new sign-up earns you') }} <span
-                                        class="text-wa-deep font-semibold">{!! \App\Support\FormatSettings::display((int) $signupReward / 100) !!}</span>,
-                                    {{ __('deposited straight into your wallet.') }}</p>
+                                    {{-- Reward rendered in the platform's operating currency for EVERY
+                                         viewer (formatIn = no per-workspace conversion). Copy matches the
+                                         real trigger: the reward pays on the friend's FIRST paid top-up. --}}
+                                    {{ __('Share your link. When a friend joins and makes their first paid top-up, you earn') }}
+                                    <span class="text-wa-deep font-semibold">{!! $referrerRewardTxt !!}</span>@if ($refereeRewardMinor > 0)
+                                        {{ __('and they get') }} <span class="text-wa-deep font-semibold">{!! $refereeRewardTxt !!}</span> {{ __('too') }}@endif.
+                                </p>
                             </div>
-                            <button
-                                class="px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[11.5px] font-medium inline-flex items-center gap-1.5"
-                                onclick="copyText('{{ $referralUrl }}')">
-                                <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor"
-                                    stroke-width="1.6">
-                                    <rect x="3" y="3" width="9" height="9" rx="1.5" />
-                                    <path d="M5.5 5.5h-2v9h9v-2" />
-                                </svg>
-                                {{ __('Copy link') }}
-                            </button>
+                            <div class="flex flex-col gap-2 shrink-0">
+                                <a href="{{ $waShareUrl }}" target="_blank" rel="noopener"
+                                    class="px-3 py-1.5 rounded-full bg-wa-green text-white hover:opacity-90 text-[11.5px] font-medium inline-flex items-center justify-center gap-1.5">
+                                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="currentColor"><path d="M8 0a8 8 0 0 0-6.9 12l-1 3.6 3.7-1A8 8 0 1 0 8 0Zm4.3 11c-.2.5-1 1-1.5 1-.4 0-.9.2-3-.9-2.5-1.3-4-3.9-4.1-4-.2-.2-1-1.3-1-2.5s.6-1.7.8-2c.2-.2.4-.2.6-.2h.4c.2 0 .4 0 .6.5l.8 2c0 .2.1.4 0 .5l-.4.5-.3.3c-.1.2-.3.3-.1.6.1.3.7 1.1 1.4 1.8 1 .8 1.7 1 2 1.2.2.1.4 0 .5-.1l.7-.8c.2-.2.4-.2.6-.1l1.9.9c.2.1.4.2.5.3.1.2.1.7-.1 1.2Z"/></svg>
+                                    {{ __('Share on WhatsApp') }}
+                                </a>
+                                <button
+                                    class="px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[11.5px] font-medium inline-flex items-center justify-center gap-1.5"
+                                    onclick="copyText('{{ $referralUrl }}')">
+                                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.6">
+                                        <rect x="3" y="3" width="9" height="9" rx="1.5" />
+                                        <path d="M5.5 5.5h-2v9h9v-2" />
+                                    </svg>
+                                    {{ __('Copy link') }}
+                                </button>
+                            </div>
                         </div>
-                        <div
-                            class="mt-4 px-3 py-2 rounded-lg bg-paper-50 border border-paper-200 font-mono text-[11.5px] text-ink-700 break-all">
-                            {{ $referralUrl }}</div>
+                        <div class="mt-4 flex items-center gap-4 flex-wrap">
+                            <div data-qr-url="{{ $referralUrl }}"
+                                class="w-[132px] h-[132px] shrink-0 rounded-xl bg-paper-0 border border-paper-200 p-2 grid place-items-center overflow-hidden"
+                                title="{{ __('Scan to open the referral link') }}"></div>
+                            <div class="min-w-0 flex-1">
+                                <div class="text-[11px] text-ink-500 mb-1">{{ __('Scan the QR, or share the link:') }}</div>
+                                <div class="px-3 py-2 rounded-lg bg-paper-50 border border-paper-200 font-mono text-[11.5px] text-ink-700 break-all">
+                                    {{ $referralUrl }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {{-- How Refer & Earn works — 3 quick steps --}}
+                    <div class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
+                        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-3">{{ __('How it works') }}</div>
+                        <ol class="grid sm:grid-cols-3 gap-3">
+                            <li class="rounded-xl bg-paper-50 border border-paper-200 p-3.5">
+                                <div class="w-7 h-7 rounded-full bg-wa-mint text-wa-deep font-serif text-[15px] flex items-center justify-center mb-2">1</div>
+                                <div class="text-[12.5px] font-semibold text-ink-800">{{ __('Share your link') }}</div>
+                                <p class="text-[11.5px] text-ink-500 mt-1">{{ __('Send it on WhatsApp or copy it anywhere.') }}</p>
+                            </li>
+                            <li class="rounded-xl bg-paper-50 border border-paper-200 p-3.5">
+                                <div class="w-7 h-7 rounded-full bg-wa-mint text-wa-deep font-serif text-[15px] flex items-center justify-center mb-2">2</div>
+                                <div class="text-[12.5px] font-semibold text-ink-800">{{ __('Friend joins & tops up') }}</div>
+                                <p class="text-[11.5px] text-ink-500 mt-1">{{ __('They sign up with your link and make their first paid top-up.') }}</p>
+                            </li>
+                            <li class="rounded-xl bg-wa-mint/40 border border-wa-green/40 p-3.5">
+                                <div class="w-7 h-7 rounded-full bg-wa-deep text-white font-serif text-[15px] flex items-center justify-center mb-2">3</div>
+                                <div class="text-[12.5px] font-semibold text-ink-800">{{ __('You both earn') }}</div>
+                                <p class="text-[11.5px] text-ink-600 mt-1">
+                                    {{ __('You get') }} <span class="font-semibold text-wa-deep">{!! $referrerRewardTxt !!}</span>@if ($refereeRewardMinor > 0), {{ __('they get') }} <span class="font-semibold text-wa-deep">{!! $refereeRewardTxt !!}</span>@endif.
+                                </p>
+                            </li>
+                        </ol>
+                        <p class="text-[11px] text-ink-400 mt-3">{{ __('Paid on the first paid top-up, not at signup.') }}</p>
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -906,9 +953,9 @@ $lifetimeCurrency =
                         <div class="bg-paper-0 border border-accent-amber/40 rounded-2xl p-4 shadow-card">
                             <div class="text-[11px] text-ink-600 font-medium">{{ __('Earned') }}</div>
                             <div class="font-serif text-[34px] leading-none mt-1">
-                                {!! \App\Support\FormatSettings::display((int) $totalEarnedFromReferrals / 100) !!}</div>
+                                {!! \App\Support\FormatSettings::display((int) $totalEarnedMinor / 100) !!}</div>
                             <div class="text-[11px] text-ink-500 mt-2">≈
-                                {{ number_format((int) floor($totalEarnedFromReferrals / max(1, $creditsPerMessage))) }}
+                                {{ number_format((int) floor($totalEarnedCredits / max(1, $creditsPerMessage))) }}
                                 {{ __('messages') }}</div>
                         </div>
                     </div>
@@ -947,11 +994,33 @@ $lifetimeCurrency =
                                         <td class="px-2 py-2.5 font-mono text-[11.5px]">{{ $r->code_used }}</td>
                                         <td class="px-2 py-2.5 font-mono text-[11.5px]">
                                             {{ optional($r->created_at)->format('M d, Y') }}</td>
-                                        <td class="px-2 py-2.5"><span
-                                                class="text-[10.5px] font-mono px-2 py-0.5 rounded bg-wa-mint text-wa-deep">{{ __('active') }}</span>
+                                        <td class="px-2 py-2.5">
+                                            @php
+                                                $st = $r->status ?: ($r->award_transaction_id ? 'paid' : 'pending');
+                                                $stStyle = match ($st) {
+                                                    'paid'    => 'bg-wa-mint text-wa-deep',
+                                                    'expired' => 'bg-paper-100 text-ink-500',
+                                                    'void'    => 'bg-accent-coral/15 text-accent-coral',
+                                                    default   => 'bg-accent-amber/15 text-accent-amber',
+                                                };
+                                                $stLabel = match ($st) {
+                                                    'paid'    => __('Earned'),
+                                                    'expired' => __('Expired'),
+                                                    'void'    => __('Void'),
+                                                    default   => __('Pending'),
+                                                };
+                                            @endphp
+                                            <span class="text-[10.5px] font-mono px-2 py-0.5 rounded {{ $stStyle }}">{{ $stLabel }}</span>
                                         </td>
                                         <td class="px-4 py-2.5 text-right font-semibold">
-                                            +{!! \App\Support\FormatSettings::display((int) $r->credits_awarded / 100) !!}</td>
+                                            {{-- Money awarded to the referrer = reward_minor (NOT credits_awarded,
+                                                 which is a credit count). Pending rows show a dash. --}}
+                                            @if (($r->reward_minor ?? 0) > 0)
+                                                +{!! \App\Support\FormatSettings::display((int) $r->reward_minor / 100) !!}
+                                            @else
+                                                <span class="text-ink-400">—</span>
+                                            @endif
+                                        </td>
                                     </tr>
                                 @empty
                                     <tr>
@@ -1241,7 +1310,7 @@ $lifetimeCurrency =
                                 <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">{{ __('Translation engine') }}</div>
                                 <div class="text-[16px] font-semibold mt-1">{{ $xlateProviderName }}</div>
                                 <div class="mt-2 text-[11.5px] text-ink-600 leading-snug">
-                                    {{ __('You do NOT enter any API keys here. The engine + its keys are set up once, platform-wide, by your admin. The free engine works out of the box; admins can plug in DeepL / Google Translate for higher quality.') }}
+                                    {{ __('You do NOT enter any API keys here — translation is configured once, platform-wide, and works out of the box automatically. A free engine is enabled by default; the platform can be set up to use DeepL / Google Translate for higher quality.') }}
                                 </div>
                                 @if ($isPlatformAdmin)
                                     <a href="{{ url('/admin/translation-providers') }}" class="inline-block mt-2 text-[11.5px] text-wa-deep font-semibold underline">{{ __('Configure providers + keys (admin) →') }}</a>

@@ -80,6 +80,37 @@ class MessageController extends V1Controller
             $params['message_text'] = $params['message_text'] ?: ' ';
         }
 
+        // Non-WhatsApp channels (Facebook / Instagram / Telegram) reply into the
+        // Team-Inbox thread for that recipient via the shared InboxDispatcher —
+        // the SAME path an operator reply uses (per-channel client, plan gating,
+        // threading). WhatsApp (default) stays on the tested QuickMessage path.
+        $channel = strtolower((string) $request->input('channel', 'whatsapp'));
+        if (in_array($channel, \App\Services\Api\ChannelOutboundSender::CHANNELS, true)) {
+            $res = app(\App\Services\Api\ChannelOutboundSender::class)->send(
+                workspaceId: $this->workspaceId(),
+                channel: $channel,
+                to: (string) $request->input('to'),
+                text: (string) ($request->input('text') ?? ''),
+                mediaPath: $params['media_path'] ?? ($params['media_url'] ?? null),
+                mediaType: in_array($type, ['image', 'video', 'document', 'audio'], true) ? $type : null,
+                connectionId: $request->input('connection_id'),
+            );
+
+            if (! ($res['ok'] ?? false)) {
+                return $this->fail($res['code'] ?? 'send_failed', (string) ($res['error'] ?? 'Message could not be sent.'), 422);
+            }
+
+            return $this->created((new MessageResource([
+                'id'         => $res['message_id'] ?? null,
+                'to'         => $request->input('to'),
+                'type'       => $type,
+                'status'     => $res['status'] ?? 'sent',
+                'body'       => $request->input('text'),
+                'media_url'  => $request->input('media_url'),
+                'created_at' => now()->toIso8601String(),
+            ]))->resolve());
+        }
+
         $internal = Request::create('/api/app/send-quick-message', 'POST', $params);
         $internal->setUserResolver(fn () => $request->user());
 
@@ -120,11 +151,21 @@ class MessageController extends V1Controller
             ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $this->workspaceId()))
             ->first();
 
-        if (!$msg) {
-            return $this->fail('not_found', 'Message not found.', 404);
+        if ($msg) {
+            return $this->ok((new MessageResource($msg))->resolve());
         }
 
-        return $this->ok((new MessageResource($msg))->resolve());
+        // Channel (Facebook / Instagram / Telegram / …) sends land in inbox_messages,
+        // not messages — resolve those too, scoped to the workspace via the thread.
+        $inbox = \App\Models\InboxMessage::query()->whereKey($id)
+            ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $this->workspaceId()))
+            ->first();
+
+        if ($inbox) {
+            return $this->ok(\App\Http\Controllers\Api\V1\ConversationController::shapeInboxMessage($inbox));
+        }
+
+        return $this->fail('not_found', 'Message not found.', 404);
     }
 
     /** GET /api/v1/messages — recent message history. */

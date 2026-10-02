@@ -121,12 +121,25 @@ class WaWebhookController extends Controller
             // "known_waba_config: true, config_has_secret: false" and every
             // inbound message from that number was rejected even though the
             // right secret was sitting in the row.
+            // Same ranked pick as $knownCfg below — a stale duplicate (waba_id
+            // match, empty creds) must not shadow the live connected row that
+            // owns this exact phone and holds the app_secret/token.
             $cfg = ($pid !== '' || $waba !== '')
-                ? $wabaCfgs->first(function ($c) use ($pid, $waba) {
+                ? $wabaCfgs->filter(function ($c) use ($pid, $waba) {
                     $m = (array) ($c->meta_json ?? []);
                     return ($waba !== '' && (string) ($m['waba_id'] ?? '') === $waba)
                         || ($pid !== '' && (string) ($m['phone_number_id'] ?? '') === $pid);
                 })
+                ->sortByDesc(function ($c) use ($pid) {
+                    $m = (array) ($c->meta_json ?? []);
+                    $s = 0;
+                    if ($pid !== '' && (string) ($m['phone_number_id'] ?? '') === $pid) $s += 8;
+                    if ($c->status === 'connected') $s += 4;
+                    if (!empty($c->credentials_json)) $s += 2;
+                    if ($c->is_primary) $s += 1;
+                    return $s;
+                })
+                ->first()
                 : null;
 
             if ($cfg) {
@@ -167,12 +180,32 @@ class WaWebhookController extends Controller
         $decoded = json_decode($content, true) ?: [];
         $pidTop  = (string) data_get($decoded, 'entry.0.changes.0.value.metadata.phone_number_id', '');
         $wabaTop = (string) data_get($decoded, 'entry.0.id', '');
+        // Resolve the owning config. CRITICAL: rank the matches — a stale
+        // DUPLICATE row (same waba_id, an OLD phone_number_id, disconnected, empty
+        // creds) must NOT win over the live connected row that owns THIS exact
+        // phone number and holds the token. The deep creds trace caught exactly
+        // this: `first()` by id picked the empty config 5 (waba_id-only match)
+        // over the connected config 6 (exact phone match + token), which killed
+        // both the signature check AND the ownership fallback → every inbound
+        // (incl. template button taps) was rejected. Prefer: exact phone_number_id
+        // → connected → has creds → primary.
         $knownCfg = ($wabaTop !== '' || $pidTop !== '')
-            ? WaProviderConfig::query()->where('provider', 'waba')->get()->first(function ($c) use ($wabaTop, $pidTop) {
-                $m = (array) ($c->meta_json ?? []);
-                return ($wabaTop !== '' && (string) ($m['waba_id'] ?? '') === $wabaTop)
-                    || ($pidTop !== '' && (string) ($m['phone_number_id'] ?? '') === $pidTop);
-            })
+            ? WaProviderConfig::query()->where('provider', 'waba')->get()
+                ->filter(function ($c) use ($wabaTop, $pidTop) {
+                    $m = (array) ($c->meta_json ?? []);
+                    return ($wabaTop !== '' && (string) ($m['waba_id'] ?? '') === $wabaTop)
+                        || ($pidTop !== '' && (string) ($m['phone_number_id'] ?? '') === $pidTop);
+                })
+                ->sortByDesc(function ($c) use ($pidTop) {
+                    $m = (array) ($c->meta_json ?? []);
+                    $s = 0;
+                    if ($pidTop !== '' && (string) ($m['phone_number_id'] ?? '') === $pidTop) $s += 8;
+                    if ($c->status === 'connected') $s += 4;
+                    if (!empty($c->credentials_json)) $s += 2;
+                    if ($c->is_primary) $s += 1;
+                    return $s;
+                })
+                ->first()
             : null;
 
         if (!$passed) {
@@ -202,6 +235,40 @@ class WaWebhookController extends Controller
                 'workspace_id'       => $knownCfg->workspace_id ?? null,
                 'body_len'           => strlen($content),
             ]);
+
+            // PER-CONFIG deep trace — enumerate every WABA config that could own
+            // this number, so we can see WHICH row actually holds the creds/token
+            // (outbound works, so one of them does) vs which one matched the
+            // signature check. Logs key NAMES + presence only, never secret values.
+            try {
+                $wsGuess = (int) ($knownCfg->workspace_id ?? 0);
+                $traceRows = WaProviderConfig::query()->where('provider', 'waba')
+                    ->when($wsGuess > 0, fn ($q) => $q->where('workspace_id', $wsGuess))
+                    ->get();
+                foreach ($traceRows as $c) {
+                    $m  = (array) ($c->meta_json ?? []);
+                    $cr = $c->creds();
+                    \Log::warning('[WA-webhook] deep creds trace', [
+                        'config_id'        => $c->id,
+                        'workspace_id'     => $c->workspace_id,
+                        'is_primary'       => (bool) $c->is_primary,
+                        'status'           => $c->status,
+                        'meta_waba_id'     => (string) ($m['waba_id'] ?? ''),
+                        'meta_phone_id'    => (string) ($m['phone_number_id'] ?? ''),
+                        'matches_payload'  => ($wabaTop !== '' && (string) ($m['waba_id'] ?? '') === $wabaTop)
+                                              || ($pidTop !== '' && (string) ($m['phone_number_id'] ?? '') === $pidTop),
+                        'is_matched_cfg'   => $knownCfg && $c->id === $knownCfg->id,
+                        'creds_blob_len'   => strlen((string) $c->credentials_json),
+                        'creds_decoded_ok' => $cr !== [],
+                        'creds_keys'       => array_keys($cr),
+                        'has_access_token' => (string) ($cr['access_token'] ?? '') !== '',
+                        'has_app_secret'   => (string) ($cr['app_secret'] ?? '') !== '',
+                        'waba_verify_by_ownership' => (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('[WA-webhook] deep creds trace failed: ' . $e->getMessage());
+            }
 
             // OWNERSHIP FALLBACK — for WABAs connected with override_callback_uri.
             //
@@ -394,6 +461,16 @@ class WaWebhookController extends Controller
                     continue;
                 }
 
+                // Groups API lifecycle. Four separate fields, all carrying a
+                // `groups[]` array rather than messages[]/statuses[], so they
+                // must be handled before the message path. The invite link in
+                // particular ONLY ever arrives here — never in the create
+                // response — so a group has no link until this fires.
+                if (in_array($field, ['group_lifecycle_update', 'group_participants_update', 'group_settings_update', 'group_status_update'], true)) {
+                    $this->applyGroupUpdate($field, $value, $config);
+                    continue;
+                }
+
                 // WhatsApp Business username lifecycle — Meta flips the status
                 // (reserved → approved once usernames roll out in the region) or
                 // signals a change/delete made from the WhatsApp Business app.
@@ -473,6 +550,17 @@ class WaWebhookController extends Controller
                         }
                     }
 
+                    // GROUP message. Meta stamps `group_id` on the message and
+                    // sets `from` to the PARTICIPANT who spoke — so the 1-on-1
+                    // pipeline below would file it against that person's own
+                    // thread and run flows / auto-reply / AI on it. In a group
+                    // that means replying to everyone, per message, with
+                    // per-participant billing behind it. Store and stop.
+                    if (! empty($msg['group_id'])) {
+                        $this->ingestWabaGroupMessage($workspaceId, $msg, $value, $config);
+                        continue;
+                    }
+
                     $type = $msg['type'] ?? null;
                     if ($type === 'order') {
                         $this->captureOrderFromWaba($workspaceId, $msg, $value);
@@ -522,6 +610,15 @@ class WaWebhookController extends Controller
 
                 // Status updates (sent / delivered / read / failed)
                 foreach ($value['statuses'] ?? [] as $st) {
+                    // GROUP statuses arrive one row PER PARTICIPANT for a single
+                    // sent message, each with its own pricing block. Feeding
+                    // them to applyStatus() would rewrite the same bubble N
+                    // times and, worse, leave billing counting one send where
+                    // Meta charged for N deliveries. Handle them separately.
+                    if (($st['recipient_type'] ?? '') === 'group') {
+                        $this->applyGroupStatus($workspaceId, $st, $config);
+                        continue;
+                    }
                     $this->applyStatus($workspaceId, $st);
                 }
 
@@ -681,6 +778,337 @@ class WaWebhookController extends Controller
      * the id. We scope to this WABA's `provider_config_id` so a
      * spoofed wabaId can't poison another workspace's templates.
      */
+    /**
+     * Groups API webhooks — group_lifecycle_update, group_participants_update,
+     * group_settings_update, group_status_update.
+     *
+     * All four share one envelope: value.groups[] with a `type` discriminator.
+     * We mirror each into `waba_groups` so the UI never has to call Graph just
+     * to render a list, and so the invite link is captured the moment Meta
+     * issues it — that link appears ONLY here, never in the create response.
+     *
+     * Everything is keyed on (provider_config_id, group_id) because a Cloud API
+     * group belongs to a phone number, not a workspace.
+     */
+    /**
+     * Store one Cloud API GROUP message in the team inbox.
+     *
+     * Storage only — no flows, no keyword auto-reply, no AI agent. Groups are a
+     * broadcast surface: automation would answer the whole room on every
+     * message, and Meta bills group sends PER PARTICIPANT, so an automated
+     * reply loop in a 500-member group is a real bill, not just noise.
+     *
+     * Identity: the thread is keyed on Meta's opaque `group_id` (never a jid —
+     * Cloud API groups have none). The author is `from`, the participant, which
+     * is what makes "who said this" correct in the thread.
+     */
+    private function ingestWabaGroupMessage(int $workspaceId, array $msg, array $value, $config): void
+    {
+        try {
+            $groupId = (string) ($msg['group_id'] ?? '');
+            if ($groupId === '' || ! $workspaceId) {
+                return;
+            }
+
+            $wamid       = (string) ($msg['id'] ?? '');
+            $participant = preg_replace('/\D+/', '', (string) ($msg['from'] ?? ''));
+            $type        = (string) ($msg['type'] ?? 'text');
+
+            // Body + media shape, mirroring the 1-on-1 extractor's priorities.
+            $body      = '';
+            $mediaType = null;
+            switch ($type) {
+                case 'text':     $body = (string) ($msg['text']['body'] ?? ''); break;
+                case 'image':    $mediaType = 'image';    $body = (string) ($msg['image']['caption'] ?? ''); break;
+                case 'video':    $mediaType = 'video';    $body = (string) ($msg['video']['caption'] ?? ''); break;
+                case 'audio':    $mediaType = 'audio';    break;
+                case 'document': $mediaType = 'document'; $body = (string) ($msg['document']['caption'] ?? ''); break;
+                case 'sticker':  $mediaType = 'sticker';  break;
+                default:
+                    $body = (string) ($msg['text']['body'] ?? '');
+            }
+            if ($body === '' && ! $mediaType) {
+                return;   // reactions / receipts / system events — nothing to show
+            }
+
+            // The group row supplies the thread title. It normally exists from
+            // the lifecycle webhook; a message arriving first is possible, so
+            // fall back to the id rather than titling the thread after whoever
+            // happened to speak.
+            $group = \App\Models\WabaGroup::where('provider_config_id', $config->id)
+                ->where('group_id', $groupId)->first();
+            $title = trim((string) ($group?->subject ?? '')) ?: __('WhatsApp group');
+
+            $conv = \App\Models\Conversation::where('workspace_id', $workspaceId)
+                ->where('raw_jid', $groupId)->first();
+
+            if (! $conv) {
+                $conv = \App\Models\Conversation::create([
+                    'workspace_id'     => $workspaceId,
+                    'user_id'          => $config->workspace?->user_id,
+                    // Polymorphic, exactly like every other WABA thread:
+                    // device_id holds the provider-config id and `provider`
+                    // disambiguates which table that id belongs to.
+                    'device_id'        => $config->id,
+                    'raw_jid'          => $groupId,
+                    'title'            => $title,
+                    'preview'          => mb_substr($body, 0, 120),
+                    'status'           => 'received',
+                    'platform'         => 'W',
+                    'provider'         => 'waba',
+                    'origin'           => 'chat',
+                    'channel'          => 'whatsapp',
+                    'inbox_status'     => 'open',
+                    'recipients_count' => 1,
+                ]);
+            }
+
+            $sentAt = isset($msg['timestamp'])
+                ? \Carbon\Carbon::createFromTimestamp((int) $msg['timestamp'], config('app.timezone'))
+                : now();
+
+            $inbox = \App\Models\InboxMessage::create([
+                'conversation_id' => $conv->id,
+                'direction'       => 'in',
+                'provider'        => 'waba',
+                'body'            => $body,
+                'media_type'      => $mediaType,
+                'from_number'     => $participant ?: null,
+                'status'          => 'received',
+                'meta'            => [
+                    'wa_message_id' => $wamid ?: null,
+                    'group_id'      => $groupId,
+                    // Kept so the bubble can name the sender even when the
+                    // participant is not a saved contact.
+                    'participant'   => $participant,
+                    'sender_name'   => (string) data_get($value, 'contacts.0.profile.name', ''),
+                ],
+                'sent_at'         => $sentAt,
+                'delivered_at'    => $sentAt,
+            ]);
+
+            $conv->forceFill([
+                'preview'         => mb_substr($body !== '' ? $body : '[' . $type . ']', 0, 120),
+                'last_message_at' => $sentAt,
+                'last_inbound_at' => $sentAt,
+                'unread_count'    => (int) $conv->unread_count + 1,
+                'inbox_status'    => $conv->inbox_status === 'resolved' ? 'open' : $conv->inbox_status,
+            ])->save();
+
+            \Log::info('[WABA-GROUPS] inbound stored', [
+                'group_id' => $groupId, 'conv' => $conv->id, 'msg' => $inbox->id, 'from' => $participant,
+            ]);
+        } catch (\Throwable $e) {
+            // Never 500 back to Meta over one message — it would retry the
+            // whole batch, duplicating the siblings that already landed.
+            \Log::warning('[WABA-GROUPS] inbound ingest failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Status for a message sent to a GROUP.
+     *
+     * Meta emits one status row per participant per message, each carrying its
+     * own pricing block. Two consequences, both of which the 1-on-1 handler
+     * gets wrong if you let it near these:
+     *
+     *  1. **Billing is per delivery, not per message.** A send to 500 members
+     *     bills 500 times. We accumulate a per-participant tally on the bubble
+     *     so the charge can be reconciled against Meta's own count instead of
+     *     assuming one send equals one charge.
+     *  2. **The bubble must not flip-flop.** With N rows arriving out of order,
+     *     naively assigning `status` would let a late `sent` overwrite an
+     *     earlier `read`. The thread-level status therefore only ever moves
+     *     FORWARD (sent → delivered → read).
+     *
+     * `pricing.type = free_group_customer_service` marks a delivery Meta is not
+     * charging for — any member's message opens a free window for the whole
+     * group — so those are counted separately and never billed.
+     */
+    private function applyGroupStatus(int $workspaceId, array $st, $config): void
+    {
+        try {
+            $wamid = (string) ($st['id'] ?? '');
+            if ($wamid === '' || ! $workspaceId) {
+                return;
+            }
+
+            $msg = $this->wamidLookup(\App\Models\InboxMessage::query(), 'inbox_messages', $wamid)
+                ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $workspaceId))
+                ->orderByDesc('id')
+                ->first();
+            if (! $msg) {
+                return;   // status for a message we never stored — nothing to update
+            }
+
+            $status      = (string) ($st['status'] ?? '');
+            $participant = (string) ($st['recipient_participant_id'] ?? '');
+            $pricing     = (array) ($st['conversation']['pricing'] ?? []);
+            $category    = (string) ($st['conversation']['origin']['type'] ?? ($pricing['category'] ?? ''));
+            $isFree      = ($pricing['type'] ?? '') === 'free_group_customer_service'
+                || ($pricing['billable'] ?? true) === false;
+
+            $meta  = is_array($msg->meta) ? $msg->meta : [];
+            $group = (array) ($meta['group_delivery'] ?? []);
+
+            // Per-participant ledger. Keyed by participant so Meta's retries of
+            // the same row cannot inflate the count.
+            $seen = (array) ($group['participants'] ?? []);
+            if ($participant !== '') {
+                $prev = (array) ($seen[$participant] ?? []);
+                $seen[$participant] = [
+                    'status'   => $this->groupStatusRank($status) >= $this->groupStatusRank((string) ($prev['status'] ?? ''))
+                        ? $status : (string) $prev['status'],
+                    'billable' => $prev['billable'] ?? ! $isFree,
+                ];
+            }
+
+            $billable = count(array_filter($seen, fn ($p) => ! empty($p['billable'])));
+
+            $group['participants']   = $seen;
+            $group['category']       = $category ?: ($group['category'] ?? null);
+            $group['delivered_to']   = count($seen);
+            $group['billable_count'] = $billable;
+            $group['free_count']     = count($seen) - $billable;
+            $meta['group_delivery']  = $group;
+
+            // Thread-level status only ever advances, so an out-of-order `sent`
+            // can never undo a `read` already recorded.
+            $current = (string) $msg->status;
+            $next    = $this->groupStatusRank($status) > $this->groupStatusRank($current) ? $status : $current;
+
+            $fields = ['meta' => $meta, 'status' => $next];
+            if ($status === 'delivered' && ! $msg->delivered_at) $fields['delivered_at'] = now();
+            if ($status === 'read'      && ! $msg->read_at)      $fields['read_at']      = now();
+            $msg->forceFill($fields)->save();
+
+            \Log::info('[WABA-GROUPS] status', [
+                'wamid' => $wamid, 'status' => $status, 'participant' => $participant,
+                'delivered_to' => $group['delivered_to'], 'billable' => $billable, 'category' => $category,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('[WABA-GROUPS] status handler failed: ' . $e->getMessage());
+        }
+    }
+
+    /** Delivery progress ordering — a status may only ever move forward. */
+    private function groupStatusRank(string $status): int
+    {
+        return match ($status) {
+            'failed'    => -1,
+            'sent'      => 1,
+            'delivered' => 2,
+            'read'      => 3,
+            default     => 0,
+        };
+    }
+
+    private function applyGroupUpdate(string $field, array $value, $config): void
+    {
+        $groups = $value['groups'] ?? [];
+        if (! is_array($groups) || ! $groups) {
+            return;
+        }
+
+        foreach ($groups as $g) {
+            $groupId = (string) ($g['group_id'] ?? '');
+            if ($groupId === '') {
+                continue;
+            }
+
+            $type = (string) ($g['type'] ?? '');
+
+            // group_delete removes the group for everyone including us, so the
+            // row goes too — keeping it would leave a thread pointing at a
+            // group no API call can touch.
+            if ($type === 'group_delete') {
+                \App\Models\WabaGroup::where('provider_config_id', $config->id)
+                    ->where('group_id', $groupId)
+                    ->delete();
+                \Log::info('[WABA-GROUPS] deleted', ['group_id' => $groupId, 'cfg' => $config->id]);
+                continue;
+            }
+
+            $row = \App\Models\WabaGroup::firstOrNew([
+                'provider_config_id' => $config->id,
+                'group_id'           => $groupId,
+            ]);
+            $row->workspace_id = $config->workspace_id;
+
+            $meta = is_array($row->meta_json) ? $row->meta_json : [];
+
+            switch ($field) {
+                case 'group_lifecycle_update':
+                    // Creation. Meta reports failures here too, via errors[] —
+                    // a group that failed to create must not look healthy.
+                    if (! empty($g['subject']))            $row->subject = (string) $g['subject'];
+                    if (! empty($g['description']))        $row->description = (string) $g['description'];
+                    if (! empty($g['invite_link']))        $row->invite_link = (string) $g['invite_link'];
+                    if (! empty($g['join_approval_mode'])) $row->join_approval_mode = (string) $g['join_approval_mode'];
+                    if (! empty($g['timestamp']) && ! $row->creation_timestamp) {
+                        $row->creation_timestamp = \Carbon\Carbon::createFromTimestamp((int) $g['timestamp'], config('app.timezone'));
+                    }
+                    $meta['last_error'] = $g['errors'][0] ?? null;
+                    break;
+
+                case 'group_participants_update':
+                    // Keep a running count rather than re-fetching the group on
+                    // every join. added/removed arrive as arrays; a single
+                    // voluntary leave arrives as one wa_id.
+                    $added   = is_array($g['added_participants'] ?? null) ? count($g['added_participants']) : 0;
+                    $removed = is_array($g['removed_participants'] ?? null) ? count($g['removed_participants']) : 0;
+
+                    if ($type === 'group_participants_add') {
+                        $row->participant_count = max(0, (int) $row->participant_count + max(1, $added));
+                    } elseif ($type === 'group_participants_remove') {
+                        $row->participant_count = max(0, (int) $row->participant_count - max(1, $removed));
+                    }
+
+                    // Pending join requests drive an approval queue in the UI.
+                    $pending = (array) ($meta['join_requests'] ?? []);
+                    if ($type === 'group_join_request_created' && ! empty($g['join_request_id'])) {
+                        $pending[(string) $g['join_request_id']] = [
+                            'wa_id'      => (string) ($g['wa_id'] ?? ''),
+                            'created_at' => (string) ($g['timestamp'] ?? ''),
+                        ];
+                    }
+                    if ($type === 'group_join_request_revoked' && ! empty($g['join_request_id'])) {
+                        unset($pending[(string) $g['join_request_id']]);
+                    }
+                    $meta['join_requests'] = $pending;
+                    $meta['failed_participants'] = $g['failed_participants'] ?? null;
+                    break;
+
+                case 'group_settings_update':
+                    // Per-field success flags: a subject can land while the
+                    // picture fails. Only accept what actually applied.
+                    if (! empty($g['group_subject']['update_successful'])) {
+                        $row->subject = (string) ($g['group_subject']['text'] ?? $row->subject);
+                    }
+                    if (! empty($g['group_description']['update_successful'])) {
+                        $row->description = (string) ($g['group_description']['text'] ?? $row->description);
+                    }
+                    $meta['picture_update'] = $g['profile_picture'] ?? null;
+                    break;
+
+                case 'group_status_update':
+                    // A suspended group cannot be messaged until Meta clears it.
+                    $row->suspended = $type === 'group_suspend';
+                    $meta['suspended_at'] = $type === 'group_suspend' ? (string) ($g['timestamp'] ?? '') : null;
+                    break;
+            }
+
+            $meta['last_event'] = ['field' => $field, 'type' => $type, 'at' => now()->toIso8601String()];
+            $row->meta_json = $meta;
+            $row->synced_at = now();
+            $row->save();
+
+            \Log::info('[WABA-GROUPS] webhook applied', [
+                'field' => $field, 'type' => $type, 'group_id' => $groupId, 'cfg' => $config->id,
+            ]);
+        }
+    }
+
     private function applyTemplateUpdate(string $field, array $value, \App\Models\WaProviderConfig $cfg): void
     {
         $metaId = (string) ($value['message_template_id'] ?? '');
@@ -1164,6 +1592,7 @@ class WaWebhookController extends Controller
                 $workspaceId,
                 (string) $meta['waba_media_id'],
                 (string) ($meta['waba_mime_type'] ?? ''),
+                (string) ($meta['waba_filename'] ?? ''),
             );
             if ($localPath) {
                 $inboundMsg->forceFill(['media_path' => $localPath])->save();
@@ -1229,6 +1658,22 @@ class WaWebhookController extends Controller
                     \Log::info('[WA-webhook] campaign reply/tap linked', [
                         'row' => $campHit->id, 'campaign' => $campHit->campaign_id, 'tap' => $isBtnTap,
                     ]);
+                    // Campaign Follow-ups: fire "replied" / "clicked button" rules.
+                    // Deferred until AFTER the 200 response so the webhook stays fast.
+                    $fuRow   = (int) $campHit->id;
+                    $fuReply = isset($update['responded_at']);
+                    $fuTap   = isset($update['clicked']);
+                    app()->terminating(function () use ($fuRow, $fuReply, $fuTap) {
+                        try {
+                            $r = \App\Models\WpCampaignContact::find($fuRow);
+                            if (! $r) return;
+                            $svc = app(\App\Services\Campaign\CampaignFollowupService::class);
+                            if ($fuReply) $svc->onEvent($r, \App\Models\CampaignFollowup::EVENT_REPLIED);
+                            if ($fuTap)   $svc->onEvent($r, \App\Models\CampaignFollowup::EVENT_CLICKED_BUTTON);
+                        } catch (\Throwable $e) {
+                            \Log::warning('[CAMPAIGN-FOLLOWUP] reply/tap hook: ' . $e->getMessage());
+                        }
+                    });
                 }
             }
         } catch (\Throwable $e) {
@@ -1267,6 +1712,17 @@ class WaWebhookController extends Controller
                 $convo->forceFill(['routing_meta' => $rm])->save();
                 \Log::info('[WABA-INBOUND] captured wa username', ['convo' => $convo->id, 'username' => $waUsername]);
             }
+        }
+
+        // Click-to-WhatsApp attribution. Meta attaches `referral` to the FIRST
+        // message after someone taps a CTWA ad — the ad id, the creative, and the
+        // ctwa_clid that ties this conversation back to Ads Manager. Without this
+        // the workspace sees the conversations arrive but cannot tell which ad
+        // paid for them. Best-effort: attribution must never cost an inbound.
+        try {
+            $this->applyCtwaReferral($convo, $msg, $capturedContact ?? null);
+        } catch (\Throwable $e) {
+            \Log::warning('[WABA-INBOUND] CTWA referral capture failed: ' . $e->getMessage());
         }
 
         // Mirror Baileys-side broadcast so operators see new inbound
@@ -1478,6 +1934,18 @@ class WaWebhookController extends Controller
                             . $meta['location_latitude'] . ',' . $meta['location_longitude'];
                         $flowText = $flowText !== '' ? ($flowText . ' — ' . $mapLink) : $mapLink;
                     }
+                    // Forward any stored inbound media so an Ask node flagged
+                    // "accept upload" can capture it as a public URL (Phase 3).
+                    // media_path was set above (downloadWabaMediaToDisk); Twilio
+                    // inbound media also lands on media_path. Absolutise so Meta
+                    // (WABA header) can fetch it if the flow reuses the URL.
+                    $flowMediaUrl = '';
+                    if (!empty($inboundMsg->media_path)) {
+                        $flowMediaUrl = (string) media_storage()->url((string) $inboundMsg->media_path);
+                        if ($flowMediaUrl !== '' && !preg_match('#^https?://#i', $flowMediaUrl)) {
+                            $flowMediaUrl = url($flowMediaUrl);
+                        }
+                    }
                     $res = \Illuminate\Support\Facades\Http::withHeaders(['X-Node-Token' => node_token()])
                         ->timeout(12)->acceptJson()
                         ->post(rtrim($nodeBase, '/') . '/api/flow/provider-inbound', [
@@ -1488,6 +1956,8 @@ class WaWebhookController extends Controller
                             'text'          => $flowText,
                             'replyId'       => $replyId,
                             'pushName'      => (string) $senderName,
+                            'mediaUrl'      => $flowMediaUrl,
+                            'mediaType'     => (string) $mediaType,
                         ]);
                     $flowConsumed = (bool) $res->json('consumed');
                     \Log::info('[WABA-INBOUND] flow bridge', ['device' => $deviceNumber, 'customer' => $rawJid, 'consumed' => $flowConsumed]);
@@ -1512,9 +1982,22 @@ class WaWebhookController extends Controller
             // has no device_phone column; for WABA the workspace number
             // lives on the resolved Device row.
             $selfNumber = (string) ($device?->phone_number ?? '');
-            app(\App\Services\Inbox\KeywordReplyDispatcher::class)
+            $kwRule = app(\App\Services\Inbox\KeywordReplyDispatcher::class)
                 ->maybeDispatch($convo->fresh(), $body, $rawJid, $selfNumber ?: null);
             $convo = $convo->fresh();
+            // A keyword rule that LAUNCHED A FLOW (reply_type=flow — e.g. the
+            // "book appointment" keyword enrolling the contact into the booking
+            // flow) owns this turn. Mark the message consumed so the AI agent
+            // below does NOT reply on top of the flow — the client's "AI answers
+            // AND the booking slots appear on the same message" double-reply bug.
+            // Plain-text/media keyword replies are intentionally NOT gated here,
+            // so those still coexist with the AI exactly as before.
+            if (is_object($kwRule) && strtolower((string) ($kwRule->reply_type ?? '')) === 'flow') {
+                $flowConsumed = true;
+                \Log::info('[WABA-INBOUND] keyword-rule flow launched — AI agent suppressed for this turn', [
+                    'workspace' => $workspaceId, 'rule' => $kwRule->id ?? null, 'flow' => $kwRule->flow_id ?? null,
+                ]);
+            }
         } catch (\Throwable $e) {
             \Log::warning('[WABA-INBOUND] keyword reply dispatch failed: ' . $e->getMessage());
         }
@@ -1532,6 +2015,83 @@ class WaWebhookController extends Controller
                 \Log::warning('[WABA-INBOUND] ai agent failed: ' . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Persist Meta's Click-to-WhatsApp `referral` block onto the thread and the
+     * contact, so a conversation can be traced back to the ad that produced it.
+     *
+     * Meta sends this ONLY on the first message after an ad tap, so it is the
+     * one chance to record it — after that the conversation looks like any other
+     * inbound. `ctwa_clid` is the id Ads Manager reconciles against, which is
+     * what makes the round trip from ad spend to a closed deal possible.
+     *
+     * FIRST TOUCH IS NEVER OVERWRITTEN. A customer who returns through a second
+     * ad gets the newer click recorded alongside, not on top of, the original —
+     * "which ad first brought them in" and "which ad brought them back" are
+     * different questions and both get asked.
+     */
+    private function applyCtwaReferral(\App\Models\Conversation $convo, array $msg, $contact = null): void
+    {
+        $ref = $msg['referral'] ?? null;
+        if (! is_array($ref) || ! $ref) {
+            return;
+        }
+
+        $touch = array_filter([
+            // 'ad' or 'post' — a CTWA ad, or an organic post with a WA button.
+            'source_type' => trim((string) ($ref['source_type'] ?? '')),
+            'source_id'   => trim((string) ($ref['source_id'] ?? '')),
+            'source_url'  => trim((string) ($ref['source_url'] ?? '')),
+            // The id Ads Manager reconciles a conversation against.
+            'ctwa_clid'   => trim((string) ($ref['ctwa_clid'] ?? '')),
+            'headline'    => mb_substr(trim((string) ($ref['headline'] ?? '')), 0, 191),
+            'body'        => mb_substr(trim((string) ($ref['body'] ?? '')), 0, 300),
+            'media_type'  => trim((string) ($ref['media_type'] ?? '')),
+            'thumbnail'   => trim((string) ($ref['thumbnail_url'] ?? $ref['image_url'] ?? '')),
+            'at'          => now()->toIso8601String(),
+        ], fn ($v) => $v !== '' && $v !== null);
+
+        // A referral with no ad AND no post id carries nothing to attribute.
+        if (empty($touch['source_id']) && empty($touch['ctwa_clid'])) {
+            return;
+        }
+
+        // ── Thread ──
+        $rm = is_array($convo->routing_meta) ? $convo->routing_meta : [];
+        $prev = is_array($rm['ctwa'] ?? null) ? $rm['ctwa'] : null;
+        $rm['ctwa'] = $touch + ['first_at' => $prev['first_at'] ?? $touch['at']];
+        if ($prev && ($prev['source_id'] ?? '') !== ($touch['source_id'] ?? '')) {
+            // Came back through a DIFFERENT ad — keep the original as the
+            // first-touch record rather than losing it.
+            $rm['ctwa']['first'] = $prev['first'] ?? $prev;
+        }
+        $convo->forceFill(['routing_meta' => $rm])->save();
+
+        // ── Contact ──
+        // Resolved by the caller's rememberPhone; fall back to the thread's own
+        // link so a conversation that already had a contact still attributes.
+        if (! $contact && $convo->contact_id) {
+            $contact = \App\Models\Contact::query()
+                ->where('workspace_id', $convo->workspace_id)
+                ->find($convo->contact_id);
+        }
+        if ($contact) {
+            $attr  = is_array($contact->attribution) ? $contact->attribution : [];
+            $first = is_array($attr['first'] ?? null) ? $attr['first'] : $touch;
+            $contact->forceFill(['attribution' => [
+                'channel' => 'ctwa',
+                'first'   => $first,   // never overwritten once set
+                'last'    => $touch,
+            ]])->save();
+        }
+
+        \Log::info('[WABA-INBOUND] CTWA referral captured', [
+            'convo'       => $convo->id,
+            'source_type' => $touch['source_type'] ?? null,
+            'source_id'   => $touch['source_id'] ?? null,
+            'contact'     => $contact->id ?? null,
+        ]);
     }
 
     /**
@@ -1678,6 +2238,7 @@ class WaWebhookController extends Controller
                 $workspaceId,
                 (string) $meta['waba_media_id'],
                 (string) ($meta['waba_mime_type'] ?? ''),
+                (string) ($meta['waba_filename'] ?? ''),
             );
             if ($localPath) {
                 $outboundMsg->forceFill(['media_path' => $localPath])->save();
@@ -2012,15 +2573,16 @@ class WaWebhookController extends Controller
      * path or null on any failure (caller leaves media_path null →
      * graceful text-only reply).
      */
-    private function downloadWabaMediaToDisk(int $workspaceId, string $mediaId, string $mimeHint = ''): ?string
+    private function downloadWabaMediaToDisk(int $workspaceId, string $mediaId, string $mimeHint = '', string $filename = ''): ?string
     {
         // Logic lives in the shared WabaMediaFetcher so the operator "retry
         // download" endpoint (TeamInboxController::retryMedia) fetches media the
         // exact same way — including the MIME→extension map that lets voice
-        // notes actually play.
+        // notes actually play, and the ORIGINAL filename so documents keep their
+        // real name/extension instead of becoming a .bin.
         try {
             return app(\App\Services\Waba\WabaMediaFetcher::class)
-                ->downloadToDisk($workspaceId, $mediaId, $mimeHint);
+                ->downloadToDisk($workspaceId, $mediaId, $mimeHint, $filename);
         } catch (\Throwable $e) {
             \Log::warning('[WABA-INBOUND] media download failed: ' . $e->getMessage(), ['media_id' => $mediaId]);
             return null;
@@ -2396,17 +2958,32 @@ class WaWebhookController extends Controller
         // can't accidentally match a Baileys-sent row that happens to
         // share the same id-shape. Older rows with NULL provider still
         // match (back-compat).
-        $messages = Message::query()
-            ->where('workspace_id', $workspaceId)
-            ->where(function ($q) {
-                $q->where('provider', 'waba')->orWhereNull('provider');
-            })
-            ->where(function ($q) use ($wamid) {
-                $q->whereJsonContains('meta->wa_message_id', $wamid)
-                  ->orWhereJsonContains('meta->wamid',       $wamid)
-                  ->orWhere('from_number', $wamid); // legacy ChatController
-            })
-            ->get();
+        // Indexed lookup on the wa_message_id generated column (see the
+        // 2026_09_09 migration) — falls back to a JSON scan only on installs that
+        // haven't migrated. This is the hot per-webhook path; the old
+        // whereJsonContains full-scanned `messages` on every Meta status.
+        // (No `from_number` leg: Message casts it to encrypted/non-deterministic
+        // ciphertext, so it can never match a plaintext wamid — do not re-add it.)
+        $messages = $this->wamidLookup(
+            Message::query()
+                ->where('workspace_id', $workspaceId)
+                ->where(function ($q) {
+                    $q->where('provider', 'waba')->orWhereNull('provider');
+                }),
+            'messages', $wamid
+        )->get();
+        // Legacy alt-key rows keyed on meta->wamid (not meta->wa_message_id) are
+        // rare — scan for those ONLY when the indexed lookup found nothing, so the
+        // common path never pays the JSON-scan cost.
+        if ($messages->isEmpty()) {
+            $messages = Message::query()
+                ->where('workspace_id', $workspaceId)
+                ->where(function ($q) {
+                    $q->where('provider', 'waba')->orWhereNull('provider');
+                })
+                ->whereJsonContains('meta->wamid', $wamid)
+                ->get();
+        }
 
         foreach ($messages as $msg) {
             // Don't downgrade: read > delivered > sent > failed.
@@ -2515,6 +3092,23 @@ class WaWebhookController extends Controller
                 \DB::table('wp_campaign_contacts')->where('id', $row->id)
                     ->update($this->patchForTable('wp_campaign_contacts', $patch));
 
+                // Campaign Follow-ups: immediate "read" / "failed" rules. Deferred
+                // until after the 200 response so the status webhook stays fast.
+                if (in_array($status, ['read', 'failed'], true)) {
+                    $fuRowId = (int) $row->id;
+                    $fuEvent = $status === 'read'
+                        ? \App\Models\CampaignFollowup::EVENT_READ
+                        : \App\Models\CampaignFollowup::EVENT_FAILED;
+                    app()->terminating(function () use ($fuRowId, $fuEvent) {
+                        try {
+                            $r = \App\Models\WpCampaignContact::find($fuRowId);
+                            if ($r) app(\App\Services\Campaign\CampaignFollowupService::class)->onEvent($r, $fuEvent);
+                        } catch (\Throwable $e) {
+                            \Log::warning('[CAMPAIGN-FOLLOWUP] status hook: ' . $e->getMessage());
+                        }
+                    });
+                }
+
                 // Webhook: campaign_contact_status_updated (Meta delivered/
                 // read receipts for campaign recipients — the third status
                 // source besides the two Node callbacks).
@@ -2587,22 +3181,93 @@ class WaWebhookController extends Controller
 
         // --- 3c) inbox_messages (backup inbox table) -----------------
         try {
-            $inboxRows = \DB::table('inbox_messages')
-                ->whereJsonContains('meta->wa_message_id', $wamid)
-                ->get();
+            $inboxRows = $this->wamidLookup(
+                \DB::table('inbox_messages'), 'inbox_messages', $wamid
+            )->get();
+
+            // FALLBACK — reconcile a FLOW-sent bubble that carries a synthetic
+            // `flow_out_<ts>_<rand>` id instead of the real Meta wamid. The Node
+            // flow engine mirrors the outbound bubble optimistically with that
+            // placeholder id, so Meta's real sent/delivered/read/FAILED webhook —
+            // keyed on the true wamid — never matched it (the tell-tale
+            // "matched:0" in the logs) and a 131047-style failure stayed INVISIBLE
+            // in the inbox (no error, and a fake "delivered" tick). Adopt the most
+            // recent unreconciled outbound bubble to THIS recipient in THIS
+            // workspace, backfill the real wamid so later receipts match directly,
+            // then let the normal loop below apply the status/failure to it.
+            // GUARD (perf): only run this recipient recovery for a genuine FAILED
+            // flow bubble that NO other table already claimed. Skipping
+            // delivered/read drops it off ~2/3 of webhooks, and skipping wamids
+            // already matched by the messages / broadcast / campaign branches keeps
+            // the campaign+broadcast webhook FLOOD out of this scan entirely — that
+            // flood through a leading-wildcard LIKE was a CPU hazard on mysqld.
+            $matchedElsewhere = $messages->isNotEmpty()
+                || (isset($smcRows) && $smcRows->isNotEmpty())
+                || (isset($campRows) && $campRows->isNotEmpty());
+            if ($inboxRows->isEmpty() && $status === 'failed' && $workspaceId > 0 && ! $matchedElsewhere) {
+                $recipient = preg_replace('/\D+/', '', (string) ($st['recipient_id'] ?? ''));
+                $tail = substr($recipient, -10);   // national number (last 10 digits)
+                if ($tail !== '') {
+                    // EXACT match on the full + national forms (the flow mirror
+                    // stores to_number WITH or WITHOUT the country code) — never a
+                    // leading-wildcard LIKE, which cannot use an index and would
+                    // full-scan inbox_messages on every hit.
+                    $adopt = \App\Models\InboxMessage::query()
+                        ->where('direction', 'out')
+                        ->whereIn('to_number', array_values(array_unique([$recipient, $tail])))
+                        ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $workspaceId))
+                        ->where('created_at', '>=', now()->subMinutes(30))
+                        ->orderByDesc('id')->limit(25)->get()
+                        ->first(function ($m) use ($tail) {
+                            // Confirm the national suffix, and only adopt a bubble
+                            // with NO real wamid yet: the synthetic flow placeholder,
+                            // or none. Never hijack one keyed on a real wamid.
+                            $to  = preg_replace('/\D+/', '', (string) $m->to_number);
+                            if (substr($to, -10) !== $tail) return false;
+                            $wid = is_array($m->meta) ? (string) ($m->meta['wa_message_id'] ?? '') : '';
+                            return $wid === '' || str_starts_with($wid, 'flow_out_');
+                        });
+                    if ($adopt) {
+                        $m = is_array($adopt->meta) ? $adopt->meta : [];
+                        $synthetic = (string) ($m['wa_message_id'] ?? '');
+                        if ($synthetic !== '') $m['flow_out_id'] = $synthetic;   // keep the old id for audit
+                        $m['wa_message_id'] = $wamid;                            // backfill the REAL id
+                        $adopt->meta = $m;
+                        $adopt->save();
+                        \Log::info('[WABA-status] adopted flow bubble by recipient (synthetic id reconciled)', [
+                            'wamid' => $wamid, 'inbox_message_id' => $adopt->id,
+                            'recipient' => $recipient, 'was' => $synthetic, 'status' => $status,
+                        ]);
+                        // Re-query so the loop below applies status/failure to it.
+                        $inboxRows = \DB::table('inbox_messages')->where('id', $adopt->id)->get();
+                    }
+                }
+            }
+
             foreach ($inboxRows as $row) {
                 $patch = ['updated_at' => $now];
-                if ($status === 'delivered') $patch['delivered_at'] = $now;
-                if ($status === 'read')      $patch['read_at']      = $now;
+                // Same monotonic guard every sibling branch uses: a replayed or
+                // out-of-order Meta webhook must never demote read -> delivered ->
+                // sent or resurrect a failed row. The late-failed-over-read rule
+                // lives in shouldAdvance itself, so `messages` (/chat) and
+                // inbox_messages (team inbox) can't disagree about the terminal
+                // state of the same wamid.
+                $advance = $this->shouldAdvance($row->status, $status);
+                if ($advance) {
+                    // `status` was previously written only in the failed branch, so a
+                    // delivered/read receipt left the row on 'sent' and the team inbox
+                    // never drew the ticks /chat draws from the Baileys path
+                    // (ChatController::nodeChatMessageStatus).
+                    $patch['status'] = $status;
+                    if ($status === 'delivered' && !$row->delivered_at) $patch['delivered_at'] = $now;
+                    if ($status === 'read'      && !$row->read_at)      $patch['read_at']      = $now;
+                    // Read implies delivered: Meta can skip the `delivered` callback
+                    // entirely, and the double tick needs delivered_at stamped.
+                    if ($status === 'read'      && !$row->delivered_at) $patch['delivered_at'] = $now;
+                }
                 if ($status === 'failed') {
-                    // BEFORE: only failure_reason was stored — the row's `status`
-                    // stayed 'sent', so the team inbox kept showing the "sent" tick
-                    // and never surfaced the Meta rejection (e.g. #131042 payment/
-                    // eligibility). Now mark it failed (unless it already reached
-                    // delivered/read — never downgrade).
-                    if (!in_array((string) ($row->status ?? ''), ['delivered', 'read'], true)) {
-                        $patch['status'] = 'failed';
-                    }
+                    // Failure detail is recorded even when the status itself can't
+                    // advance, so the Meta reason is never lost.
                     // Embed Meta's typed error CODE directly in failure_reason
                     // (e.g. "#131042 — <message>") so even an OLD, un-rebuilt
                     // front-end — which only renders failure_reason on a failed
@@ -2618,11 +3283,16 @@ class WaWebhookController extends Controller
                     if ($errMsg  !== '') $metaCol['error_message'] = mb_substr($errMsg, 0, 512);
                     $patch['meta'] = json_encode($metaCol);
                 }
+                if (count($patch) < 2) continue;   // updated_at alone — nothing to write
                 \DB::table('inbox_messages')->where('id', $row->id)
                     ->update($this->patchForTable('inbox_messages', $patch));
             }
         } catch (\Throwable $e) {
-            // inbox_messages columns vary across installs — best-effort.
+            // inbox_messages columns vary across installs — best-effort, but log it:
+            // a silent swallow here is exactly what hid the missing status write.
+            \Log::warning('[WABA-status] inbox_messages patch failed', [
+                'wamid' => $wamid, 'status' => $status, 'error' => $e->getMessage(),
+            ]);
         }
 
         // --- 4) broadcast recipient rows (LEGACY path: broadcast_contacts) ----
@@ -2683,8 +3353,11 @@ class WaWebhookController extends Controller
     /**
      * Status state machine: once a message is `read`, we never demote
      * it back to `delivered` if Meta retries an older webhook out of
-     * order. `failed` is terminal and never overridden by anything
-     * other than another `failed` (in case Meta updates the error).
+     * order, and a LATE `failed` never overwrites it either — Meta already
+     * confirmed the customer read it. `failed` is otherwise terminal and never
+     * overridden by anything other than another `failed` (in case Meta updates
+     * the error). TwilioStatusController::shouldAdvance is the same machine and
+     * must be changed with this one.
      */
     /**
      * Drop patch keys whose column doesn't exist on $table before an update.
@@ -2790,7 +3463,20 @@ class WaWebhookController extends Controller
         if ($phoneNumberId === '') return false;
 
         $token = (string) ($cfg->creds()['access_token'] ?? '');
-        if ($token === '') return false;
+        if ($token === '') {
+            // Silent-fail here was invisible in logs: the ownership fallback
+            // looked like it "didn't run" when in fact the config held no token
+            // in creds() (empty/undecryptable blob), so inbound was rejected with
+            // no clue. Surface it so this exact case is traceable.
+            \Log::warning('[WA-webhook] ownership check SKIPPED — config has no access_token in creds()', [
+                'config_id'        => $cfg->id,
+                'workspace_id'     => $cfg->workspace_id,
+                'phone_number_id'  => $phoneNumberId,
+                'creds_blob_len'   => strlen((string) $cfg->credentials_json),
+                'creds_decoded_ok' => $cfg->creds() !== [],
+            ]);
+            return false;
+        }
 
         return (bool) \Cache::remember(
             'waba:own:' . $cfg->id . ':' . $phoneNumberId,
@@ -2861,6 +3547,25 @@ class WaWebhookController extends Controller
         return 0;
     }
 
+    /**
+     * Apply a wamid predicate using the INDEXED generated column
+     * `wa_message_id_g` (see the 2026_09_09 migration) when it exists, else fall
+     * back to the unindexed `whereJsonContains('meta->wa_message_id')` scan so a
+     * not-yet-migrated install still works. Works for both Eloquent and DB::table
+     * builders (it's a real column). Cached per table per request.
+     */
+    private function wamidLookup($query, string $table, string $wamid)
+    {
+        static $col = [];
+        if (! array_key_exists($table, $col)) {
+            try { $col[$table] = \Illuminate\Support\Facades\Schema::hasColumn($table, 'wa_message_id_g'); }
+            catch (\Throwable $e) { $col[$table] = false; }
+        }
+        return $col[$table]
+            ? $query->where('wa_message_id_g', $wamid)
+            : $query->whereJsonContains('meta->wa_message_id', $wamid);
+    }
+
     private function shouldAdvance(?string $current, string $incoming): bool
     {
         $rank = ['' => 0, 'pending' => 1, 'queued' => 1, 'sent' => 2, 'delivered' => 3, 'read' => 4, 'failed' => 5];
@@ -2869,8 +3574,8 @@ class WaWebhookController extends Controller
 
         // Don't undo a terminal failed state with a stale "sent".
         if ($current === 'failed' && $incoming !== 'failed') return false;
-        // Read is terminal-ish; ignore later delivered/sent.
-        if ($current === 'read' && in_array($incoming, ['delivered', 'sent'], true)) return false;
+        // Read is terminal; ignore later delivered/sent AND a late failed.
+        if ($current === 'read' && in_array($incoming, ['delivered', 'sent', 'failed'], true)) return false;
         return $incRank >= $curRank;
     }
 
@@ -2925,7 +3630,12 @@ class WaWebhookController extends Controller
             'status'       => $status,
             'timestamp'    => (int) ($st['timestamp'] ?? now()->timestamp),
             'error_code'   => $st['errors'][0]['code']    ?? null,
-            'error_reason' => $st['errors'][0]['message'] ?? null,
+            // Meta's short human-readable title (e.g. "Business eligibility payment
+            // issue") in addition to the raw message — so monitors can log a
+            // readable reason, not just a code. Requested by Kothari Tech.
+            'error_title'  => $st['errors'][0]['title']   ?? null,
+            'error_reason' => $st['errors'][0]['message']
+                ?? ($st['errors'][0]['error_data']['details'] ?? null),
             'pricing'      => $st['pricing']      ?? null,
             'conversation' => $st['conversation'] ?? null,
         ], $msg->user_id);
@@ -2962,12 +3672,30 @@ class WaWebhookController extends Controller
 
     private function receiveTwilio(Request $request): JsonResponse
     {
-        // Twilio signs every webhook with X-Twilio-Signature. Require
-        // a configured TWILIO_AUTH_TOKEN so forged form-encoded posts
-        // can't impersonate a Twilio number's inbound traffic.
-        $authToken = (string) env('TWILIO_AUTH_TOKEN', '');
+        // Twilio signs every webhook with X-Twilio-Signature. Resolve the
+        // candidate config FIRST (by the "To" number, which is our own sending
+        // number) so the signature is verified against the operator's OWN
+        // AuthToken — the one saved per workspace by WaConnectController::saveTwilio.
+        // Same fallback chain outbound uses (WhatsAppDispatcher/InboxDispatcher):
+        // workspace creds → admin default → env. Reading env() alone made every
+        // UI-connected Twilio number reject its own inbound traffic with a 500.
+        // Selecting the candidate by an unverified field is safe: the signature
+        // still has to match THAT config's secret before any payload is trusted.
+        $to        = preg_replace('/^whatsapp:/', '', (string) $request->input('To', ''));
+        $config    = $this->twilioConfigForNumber($to);
+        $authToken = $config ? (string) ($config->creds()['auth_token'] ?? '') : '';
         if ($authToken === '') {
-            \Log::error('[WA-webhook] TWILIO_AUTH_TOKEN not set — refusing webhook');
+            $authToken = (string) SystemSetting::get('twilio_auth_token', env('TWILIO_AUTH_TOKEN', ''));
+        }
+        if ($authToken === '') {
+            // Fail closed — unsigned traffic is never accepted.
+            \Log::error('[WA-webhook] Twilio auth token unresolvable — refusing webhook', [
+                'to'        => $to,
+                'config_id' => $config?->id,
+                'reason'    => $config
+                    ? 'workspace Twilio config carries no auth_token in credentials_json'
+                    : 'no Twilio config matches the To number, and no admin default / env token is set',
+            ]);
             return response()->json(['ok' => false, 'error' => 'server misconfigured'], 500);
         }
         // Per Twilio: sort POST params by key, concat key+value pairs,
@@ -2995,14 +3723,20 @@ class WaWebhookController extends Controller
         $lng           = $request->input('Longitude');
         $messageSid    = (string) $request->input('MessageSid', '');
 
-        // Resolve workspace by Twilio "To" (which is our From number).
-        $to = preg_replace('/^whatsapp:/', '', (string) $request->input('To', ''));
-        $config = WaProviderConfig::query()
-            ->where('provider', 'twilio')
-            ->where('phone_number', $to)
-            ->first();
+        // Workspace comes from the Twilio "To" (our own sending number); $to and
+        // $config were resolved at the top so the signature could be checked
+        // against that workspace's token before any of this payload was trusted.
         $workspaceId = $config?->workspace_id;
-        if (!$workspaceId) return response()->json(['ok' => true]);
+        if (!$workspaceId) {
+            // Was a silent 200: an unmatched number made the message vanish with
+            // no trace at all. Still 200 so Twilio doesn't retry-storm.
+            \Log::warning('[TWILIO-INBOUND] no Twilio config matches the To number — message dropped', [
+                'to'          => $to,
+                'from'        => $from,
+                'message_sid' => $messageSid,
+            ]);
+            return response()->json(['ok' => true]);
+        }
 
         // Translate Twilio's form-encoded shape into the Meta-shape
         // $msg array that captureInboundMessage understands. This
@@ -3095,6 +3829,57 @@ class WaWebhookController extends Controller
         }
 
         return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Find the Twilio provider config that owns an inbound "To" number.
+     *
+     * `wa_provider_configs.phone_number` is free text as the operator typed it
+     * ("+1 415-555-0000"), while Twilio always posts E.164 ("+14155550000"), so
+     * an exact string match silently missed and the message was dropped. Try
+     * exact first, then compare digits-only — the normalisation every other
+     * resolver in the codebase uses (see WaInboundController).
+     *
+     * CONNECTED rows only, and a deterministic winner (primary → newest
+     * connection → lowest id) when several match: disconnecting leaves the row
+     * and its credentials in place, and Twilio's WhatsApp sandbox number is the
+     * same +1 415 523 8886 for every trial account, so an arbitrary ->first()
+     * could hand a tenant's inbound message — and the token its signature is
+     * verified against — to a different workspace. Same status filter the
+     * sibling resolvers use (InboxDispatcher::dispatchTwilio,
+     * WaConnectController).
+     */
+    private function twilioConfigForNumber(string $to): ?WaProviderConfig
+    {
+        if ($to === '') return null;
+
+        $configs = WaProviderConfig::query()
+            ->where('provider', 'twilio')
+            ->where('status', WaProviderConfig::STATUS_CONNECTED)
+            ->orderByDesc('is_primary')
+            ->orderByDesc('connected_at')
+            ->orderBy('id')
+            ->get();
+
+        $matches = $configs->where('phone_number', $to)->values();
+        if ($matches->isEmpty()) {
+            $digits = preg_replace('/\D+/', '', $to);
+            if ($digits === '') return null;
+            $matches = $configs
+                ->filter(fn ($c) => preg_replace('/\D+/', '', (string) $c->phone_number) === $digits)
+                ->values();
+        }
+
+        if ($matches->count() > 1) {
+            \Log::warning('[TWILIO-INBOUND] several connected Twilio configs share this number', [
+                'to'            => $to,
+                'config_ids'    => $matches->pluck('id')->all(),
+                'workspace_ids' => $matches->pluck('workspace_id')->all(),
+                'chosen'        => $matches->first()->id,
+            ]);
+        }
+
+        return $matches->first();
     }
 
     /**

@@ -26,6 +26,34 @@ use Illuminate\Support\Facades\Log;
  */
 class BookingApiController extends Controller
 {
+    /**
+     * Turn an incoming `starts_at` into the true UTC instant.
+     *
+     * THE BUG THIS FIXES. Our own slot list emits full ISO strings carrying the
+     * business's offset ("2026-09-11T15:30:00+08:00"), so Carbon::parse() read
+     * them correctly. But the validator only requires `date`, which happily
+     * accepts a NAIVE datetime ("2026-09-11 15:30") — and any caller that sends
+     * one gets it interpreted in the APP's timezone (UTC), not the business's.
+     * For a Singapore workspace (UTC+8) a 3:30 PM booking was then stored as
+     * 15:30 UTC and rendered back as 11:30 PM — the exact eight-hour jump
+     * reported. An AI agent, a manual API call or any integration composing a
+     * time from the customer's words hits this; only our own picker did not.
+     *
+     * So: if the string carries an offset or Z, trust it. If it is naive, read
+     * it in the BOOKING TYPE's timezone, which is what the customer and the
+     * business both mean by "3:30 PM".
+     */
+    private static function toUtcInstant(string $raw, string $tz): Carbon
+    {
+        $raw = trim($raw);
+        // ...T15:30:00Z | +08:00 | +0800 — anything that pins a real offset.
+        $hasOffset = (bool) preg_match('/(?:Z|[+-]\d{2}:?\d{2})$/i', $raw);
+
+        return $hasOffset
+            ? Carbon::parse($raw)->utc()
+            : Carbon::parse($raw, $tz)->utc();
+    }
+
     public function __construct(private readonly SlotEngine $slots) {}
 
     private function guard(Request $request): bool
@@ -52,6 +80,14 @@ class BookingApiController extends Controller
             return response()->json($block);
         }
 
+        // The slugs the CLIENT has actually configured keys for (WaMerchantGateway,
+        // workspace-level). has_gateway must reflect THIS — not merely that the
+        // booking type names a slug — so the flow only routes to the pay-link when
+        // a real charge can happen (else it books without a deposit, no dead-end).
+        $configuredSlugs = \App\Models\WaMerchantGateway::query()->active()
+            ->where('workspace_id', $ws->id)->where('storefront_id', 0)->get()
+            ->filter->isConfigured()->pluck('slug')->flip();
+
         $types = BookingType::forWorkspace($ws->id)->active()->with('questions', 'financial')
             ->orderBy('sort_order')->orderBy('name')->get()
             ->map(fn ($t) => [
@@ -64,7 +100,8 @@ class BookingApiController extends Controller
                 // Payment: amount due to book (deposit or full), minor units.
                 'due_now'  => $t->financial ? $t->financial->dueNowMinor() : 0,
                 'currency' => $t->financial?->currency,
-                'has_gateway' => (bool) ($t->financial?->gateway_slug),
+                'has_gateway' => $t->financial && $t->financial->gateway_slug
+                    && isset($configuredSlugs[$t->financial->gateway_slug]),
                 'questions' => $t->questions->map(fn ($q) => [
                     'label' => $q->label, 'type' => $q->type, 'required' => (bool) $q->required,
                     'options' => is_array($q->options) ? $q->options : [], 'map' => $q->map_to_contact_field,
@@ -148,12 +185,16 @@ class BookingApiController extends Controller
             return response()->json(['ok' => false, 'error' => 'no_type'], 404);
         }
         $data = $request->validate([
+            // NOTE: 'date' accepts a NAIVE datetime (no offset). See
+            // toUtcInstant() for why that matters and how it is handled.
             'starts_at'   => ['required', 'date'],
             'session_ref' => ['nullable', 'string', 'max:191'],
             'channel'     => ['nullable', 'string', 'max:32'],
         ]);
 
-        $start = Carbon::parse($data['starts_at'])->utc();
+        // Same timezone rule as book() — a reservation that lands on a different
+        // instant than the booking would hold the wrong seat.
+        $start = self::toUtcInstant((string) $data['starts_at'], $type->effectiveTimezone());
         $end   = $start->copy()->addMinutes((int) $type->duration_minutes);
 
         // Verify the slot still has a seat (soft check; the hard guard is at book()).
@@ -216,7 +257,7 @@ class BookingApiController extends Controller
         // Normalize to UTC before persisting: Eloquent stores a Carbon in its own
         // tz's wall-clock, so a 09:00-IST time would otherwise be re-read as 09:00
         // UTC (a real offset shift). Store the true instant; render in $tz later.
-        $start = Carbon::parse($data['starts_at'])->utc();
+        $start = self::toUtcInstant((string) $data['starts_at'], $tz);
         $end   = $start->copy()->addMinutes((int) $type->duration_minutes);
         $cap   = max(1, (int) $type->capacity);
 
@@ -365,7 +406,7 @@ class BookingApiController extends Controller
         // ── Calendar event (+ Meet) ──
         try {
             $calendarId = $gcal->resolveCalendarId($ws);
-            if ($calendarId && $gcal->isEnabled()) {
+            if ($calendarId && $gcal->isEnabled($ws)) {
                 $email = (string) data_get($appt->meta, 'customer_email', '');
                 $name  = (string) data_get($appt->meta, 'customer_name', '');
                 $attendees = $email ? [['email' => $email, 'displayName' => $name ?: null]] : [];
@@ -488,19 +529,29 @@ class BookingApiController extends Controller
         $zero = in_array($currency, ['JPY', 'KRW', 'VND', 'CLP', 'PYG', 'UGX', 'RWF', 'XOF', 'XAF', 'IDR'], true);
         $amount = $zero ? $due : round($due / 100, 2);
 
+        // Build checkout on the MERCHANT's OWN gateway (workspace keys), so the
+        // deposit is collected into the CLIENT's account — not the platform
+        // owner's. Same mechanism the store checkout uses (WaMerchantGateway).
+        $merchant = \App\Models\WaMerchantGateway::query()->active()
+            ->where('workspace_id', $ws->id)
+            ->where('storefront_id', 0)
+            ->where('slug', $slug)
+            ->first();
+        if (! $merchant || ! $merchant->isConfigured()) {
+            return response()->json(['ok' => false, 'error' => 'gateway_not_configured']);
+        }
         try {
-            $manager = app(\App\Services\Payment\PaymentGatewayManager::class);
-            $driver  = $manager->driver($slug);
+            $driver = app(\App\Services\Payment\PaymentGatewayManager::class)
+                ->driverFromModel($merchant->toTransientPaymentGateway());
         } catch (\Throwable $e) {
             return response()->json(['ok' => false, 'error' => 'gateway_unavailable']);
         }
-        $gwId = optional(\App\Models\PaymentGateway::where('slug', $slug)->first())->id;
 
         $order = \App\Models\Order::create([
             'order_number'  => 'BK-'.strtoupper(\Illuminate\Support\Str::random(10)),
             'workspace_id'  => $ws->id,
             'user_id'       => $ws->owner_user_id,
-            'gateway_id'    => $gwId,
+            'gateway_id'    => null,
             'gateway_slug'  => $slug,
             'currency'      => $currency,
             'amount'        => $amount,

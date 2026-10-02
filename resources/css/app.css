@@ -105,3 +105,29 @@ img, video, canvas, iframe { max-width: 100%; }
    keep working. Desktop is unaffected (nothing exceeds the viewport there). */
 html { overflow-x: clip; }
 
+
+/* ──────────────────────────────────────────────────────────────────
+ * intl-tel-input (v28) RTL fix — Arabic UI.
+ * v28 pins the country/flag selector to `left: 0` and sets the input's
+ * padding-left inline via JS, with no RTL handling for the MAIN field
+ * (only the dropdown search is flipped). Under `dir="rtl"` that leaves the
+ * flag on the wrong side, overlapping the number the user types (the
+ * "oversized element obscuring the field" bug). Flip the selector to the
+ * right and mirror the input padding so the field reads cleanly in Arabic.
+ * ────────────────────────────────────────────────────────────────── */
+[dir="rtl"] .iti__country-container { left: auto; right: 0; }
+[dir="rtl"] .iti > input,
+[dir="rtl"] .iti > input[type="tel"],
+[dir="rtl"] .iti > input[type="text"] {
+  /* Undo the JS-set inline padding-left and mirror it to the right so the
+     flag/globe never sits on top of the typed number. !important beats the
+     inline style intl-tel-input writes on the element. */
+  padding-left: var(--iti-spacer-horizontal, 8px) !important;
+  padding-right: calc(var(--iti-spacer-horizontal, 8px) + var(--iti-globe-icon-size, 19px) + var(--iti-spacer-horizontal, 8px) + var(--iti-arrow-padding, 6px)) !important;
+}
+[dir="rtl"] .iti__arrow { margin-left: 0; margin-right: var(--iti-arrow-padding, 6px); }
+/* Dropdown + country rows read right-to-left, aligned to the right edge. */
+[dir="rtl"] .iti__dropdown-content { left: auto; right: 0; }
+[dir="rtl"] .iti__country { flex-direction: row-reverse; text-align: right; }
+[dir="rtl"] .iti__country-name,
+[dir="rtl"] .iti__dial-code { direction: rtl; }

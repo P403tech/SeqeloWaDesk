@@ -145,7 +145,7 @@ class InvoiceSettingsController extends Controller
             }
             $out[] = ['value' => 'waba:'.$c->id, 'label' => 'WABA · '.$waLabel, 'kind' => 'waba'];
         }
-        foreach (\App\Models\Device::where('workspace_id', $wsId)->get() as $d) {
+        foreach (\App\Models\Device::query()->forCurrentWorkspace()->get() as $d) {
             $num = trim(($d->country_code ? '+'.$d->country_code.' ' : '').$d->phone_number);
             $dLabel = $num ?: trim((string) $d->device_name) ?: ('#'.$d->id);
             if ($num && $d->device_name) {

@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /*
  * /meta-ads/{id} — Meta campaign detail page.
  *
@@ -66,14 +68,14 @@ async function refresh() {
     finally { inflight = false; }
 }
 
-function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(refresh, POLL_MS);
-}
-function stopPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
-}
+// Shared poller — overlap guard, hidden-tab pause, widening gap. Ad insights
+// update on Meta's own schedule (minutes at best), so there is nothing to gain
+// from a fixed 60s once the numbers stop moving.
+const poller = createPoller(async () => { await refresh(); return false; }, {
+    interval: POLL_MS, maxInterval: 300_000,
+});
+function startPolling() { poller.start(); }
+function stopPolling()  { poller.stop(); }
 
 function wireToggle() {
     document.querySelectorAll('[data-meta-toggle-btn]').forEach((btn) => {

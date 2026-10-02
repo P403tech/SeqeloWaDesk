@@ -80,7 +80,7 @@
                             <label class="space-y-1.5">
                                 <span class="text-[11.5px] font-semibold">{{ __('App URL') }}</span>
                                 <input name="app_url" value="{{ old('app_url', $settings['app_url']) }}"
-                                    placeholder="https://app.wadesk.in"
+                                    placeholder="https://app.example.com"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
                             </label>
                             <label class="space-y-1.5">
@@ -340,6 +340,21 @@
                             </h2>
                         </div>
                         <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {{-- Master switch: when OFF, signup assigns NO plan so a paid
+                                 default can never be granted for free — the owner picks +
+                                 pays on the plan step. --}}
+                            <label class="sm:col-span-2 flex items-start gap-3 rounded-xl border border-paper-200 bg-paper-50/60 p-3.5 cursor-pointer">
+                                <span class="relative inline-flex items-center w-10 h-5 shrink-0 mt-0.5">
+                                    <input type="checkbox" name="registration_assign_plan" value="1"
+                                        @checked(old('registration_assign_plan', $settings['registration_assign_plan'])) class="sr-only peer">
+                                    <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
+                                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
+                                </span>
+                                <span class="min-w-0">
+                                    <span class="block text-[12.5px] font-semibold text-ink-900">{{ __('Assign a plan on registration') }}</span>
+                                    <span class="block text-[11px] text-ink-500 mt-0.5">{{ __('On: new signups get the default plan below. Off: NO plan is assigned — the owner picks and pays for one on the plan step. Turn this OFF if a paid plan is being granted without payment.') }}</span>
+                                </span>
+                            </label>
                             <label class="space-y-1.5">
                                 <span
                                     class="text-[11.5px] font-semibold">{{ __('Default plan for new signups') }}</span>

@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+{{-- dir is required: postcss-rtlcss scopes every directional rule to
+     [dir=ltr] / [dir=rtl], so omitting it drops them all. --}}
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}"
+    dir="{{ \App\Support\LocaleSettings::directionFor(app()->getLocale()) }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">

@@ -41,6 +41,8 @@ class Contact extends Model
         'is_unsubscribed',
         'unsubscribed_at',
         'custom_attributes',
+        // Click-to-WhatsApp / lead-ad source: which ad brought this person in.
+        'attribution',
     ];
 
         protected $casts = [
@@ -49,6 +51,7 @@ class Contact extends Model
         'email'             => 'encrypted',
         'contact_group'     => 'encrypted:array',
         'custom_attributes' => 'array',
+        'attribution'       => 'array',
         'is_unsubscribed'   => 'boolean',
         'unsubscribed_at'   => 'datetime',
     ];
@@ -238,24 +241,65 @@ class Contact extends Model
     }
 
     /**
-     * Auto-capture a manually-entered number as a contact (dedup by phone hash
-     * within the workspace). Called from every place a raw number is typed to
-     * send — broadcasts, campaigns, scheduled, quick-send, chat — so numbers a
-     * user messages once are never lost. Returns the existing/created contact,
-     * or null when the input isn't a usable phone. Never throws.
+     * Find the existing workspace contact for a phone number — the ONE place
+     * every capture path asks "do we already have this number?" so a webhook,
+     * inbound message, campaign or flow can never spawn a duplicate.
+     *
+     * Two tiers:
+     *   1) exact canonical hash (indexed, the common case), then
+     *   2) an UNAMBIGUOUS trailing-9-digit match — the same national subscriber
+     *      digits stored in a different dialing shape (MX mobiles gain a "1"
+     *      after the cc, AR a "9", trunk "0"s appear/disappear, the cc lives in
+     *      a separate column). Accept it ONLY when exactly one contact shares
+     *      the tail, so two genuinely different customers are never merged.
+     */
+    public static function findByPhone(int $workspaceId, ?string $rawPhone, ?string $countryCode = null): ?self
+    {
+        if ($workspaceId <= 0) return null;
+        $incoming = static::canonicalizePhone($countryCode, $rawPhone);
+        if (strlen($incoming) < 6) return null;
+
+        $hash = static::hashPhone($countryCode, $rawPhone);
+        if ($hash) {
+            $c = static::query()
+                ->where('workspace_id', $workspaceId)
+                ->where('mobile_hash', $hash)
+                ->first();
+            if ($c) return $c;
+        }
+
+        // Fallback scan runs ONLY when the exact hash missed (i.e. this looks
+        // like a new number), so the hot path stays a single indexed lookup.
+        $tail = substr($incoming, -9);
+        if (strlen($tail) < 9) return null;
+        $hits = static::query()
+            ->where('workspace_id', $workspaceId)
+            ->get()
+            ->filter(function ($c) use ($tail) {
+                $stored = static::canonicalizePhone($c->country_code, $c->mobile);
+                return $stored !== '' && strlen($stored) >= 9 && substr($stored, -9) === $tail;
+            });
+        return $hits->count() === 1 ? $hits->first() : null;
+    }
+
+    /**
+     * Auto-capture a manually-entered number as a contact (dedup by phone within
+     * the workspace via findByPhone). Called from every place a raw number is
+     * typed to send — broadcasts, campaigns, scheduled, quick-send, chat, and
+     * inbound/webhook capture — so numbers a user messages once are never lost
+     * AND an already-existing number is REUSED, never duplicated. Returns the
+     * existing/created contact, or null when the input isn't a usable phone.
+     * Never throws.
      */
     public static function rememberPhone(int $workspaceId, ?int $userId, ?string $rawPhone, ?string $name = null, ?string $countryCode = null): ?self
     {
         try {
             $digits = preg_replace('/\D+/', '', (string) $rawPhone);
             if (strlen($digits) < 6) return null; // not a real phone
-            $hash = static::hashPhone($countryCode, $rawPhone);
-            if (!$hash) return null;
+            if (!static::hashPhone($countryCode, $rawPhone)) return null;
 
-            $existing = static::query()
-                ->where('workspace_id', $workspaceId)
-                ->where('mobile_hash', $hash)
-                ->first();
+            // Reuse an existing contact for this number in ANY dialing shape.
+            $existing = static::findByPhone($workspaceId, $rawPhone, $countryCode);
             if ($existing) return $existing;
 
             return static::create([
@@ -296,12 +340,21 @@ class Contact extends Model
             try { app(\App\Services\Flow\FlowEnrollmentService::class)->onContactCreated($contact); }
             catch (\Throwable $e) { \Log::warning('Flow onContactCreated: ' . $e->getMessage()); }
 
+            // Drip campaigns share this event point rather than adding their
+            // own, so the two systems can never disagree about when a contact
+            // "was created".
+            try { app(\App\Services\Drip\DripRunner::class)->onContactCreated($contact); }
+            catch (\Throwable $e) { \Log::warning('Drip onContactCreated: ' . $e->getMessage()); }
+
             $groups = is_array($contact->contact_group) ? $contact->contact_group : [];
             foreach ($groups as $gid) {
                 $gid = (int) $gid;
                 if ($gid > 0) {
                     try { app(\App\Services\Flow\FlowEnrollmentService::class)->onGroupJoin($contact, $gid); }
                     catch (\Throwable $e) { \Log::warning('Flow onGroupJoin (created): ' . $e->getMessage()); }
+
+                    try { app(\App\Services\Drip\DripRunner::class)->onGroupJoin($contact, $gid); }
+                    catch (\Throwable $e) { \Log::warning('Drip onGroupJoin (created): ' . $e->getMessage()); }
                 }
             }
         });
@@ -339,6 +392,9 @@ class Contact extends Model
                 if ($gid > 0) {
                     try { app(\App\Services\Flow\FlowEnrollmentService::class)->onGroupJoin($contact, $gid); }
                     catch (\Throwable $e) { \Log::warning('Flow onGroupJoin (updated): ' . $e->getMessage()); }
+
+                    try { app(\App\Services\Drip\DripRunner::class)->onGroupJoin($contact, $gid); }
+                    catch (\Throwable $e) { \Log::warning('Drip onGroupJoin (updated): ' . $e->getMessage()); }
                 }
             }
         });

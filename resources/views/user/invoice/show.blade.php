@@ -320,9 +320,14 @@
         <div class="hd">
             <div class="brand">
                 @if (!empty($brand['logo']))
-                    {{-- The logo already carries the brand name — don't repeat it as text. --}}
                     <img src="{{ $brand['logo'] }}" alt="{{ $brand['name'] }}"
                         style="max-height:48px;max-width:220px;width:auto;object-fit:contain;display:block;margin-bottom:8px;">
+                    {{-- Legal company name (Company & billing identity). A legal
+                         document must name the seller even when a logo is present —
+                         previously the name was suppressed whenever a logo existed. --}}
+                    @if (!empty($brand['name']))
+                        <div style="font-weight:600;font-size:14px;margin-bottom:2px;">{{ $brand['name'] }}</div>
+                    @endif
                 @else
                     <h1>{{ $brand['name'] }}</h1>
                 @endif
@@ -377,8 +382,8 @@
             </div>
             <div class="col">
                 <div class="lbl">{{ __('Payment') }}</div>
-                <div class="row">Method:
-                    {{ \Illuminate\Support\Str::title(str_replace('_', ' ', $order->gateway_slug ?: 'manual')) }}</div>
+                {{-- Payment-gateway name intentionally NOT shown to the buyer (a
+                     customer doesn't need to know which processor was used). --}}
                 @if ($order->gateway_payment_id)
                     <div class="row">{{ __('Reference:') }} <span class="ref"
                             style="font-family:'JetBrains Mono', monospace">{{ $order->gateway_payment_id }}</span>
@@ -448,16 +453,29 @@
                 <span class="val">{!! \App\Support\FormatSettings::formatIn($order->amount, $order->currency) !!}</span>
             </div>
         </div>
+        {{-- Unambiguous currency line so "$" is never mistaken for S$ / A$ / etc.
+             on a cross-border charge (the reported USD-vs-SGD dispute risk). --}}
+        <div style="text-align:right;font-size:11px;color:#6B807C;margin-top:8px;">
+            {{ __('All amounts shown in') }} {{ strtoupper((string) $order->currency) }}.
+        </div>
 
         <div class="ft">
             <div class="row">
-                {{-- Support address = the platform's billing/support email (same
-                     source as the company block above), NEVER $order->customer_email
-                     (that's the BUYER's own address — telling them to email themselves). --}}
-                <div>Thank you for your purchase. For support or refunds within
-                    {{ (int) \App\Models\SystemSetting::get('pricing.refund_days', 7) }} days, reply to
-                    {{ $brand['email'] ?: 'support@' . parse_url(config('app.url'), PHP_URL_HOST) }}.</div>
-                <div class="ref">Order ID: {{ $order->id }}</div>
+                @php
+                    // Support address = the configured billing/support email. NEVER
+                    // fabricate support@<APP_URL host> — on an IP-only / unset install
+                    // that produced the bogus "support@139.99.88.136". If nothing is
+                    // configured, drop the "reply to …" clause rather than print junk.
+                    $supportEmail = $brand['email']
+                        ?: (string) \App\Models\SystemSetting::get('support_email', '');
+                    $refundDays = (int) \App\Models\SystemSetting::get('pricing.refund_days', 7);
+                    $thankLine = 'Thank you for your purchase. For support or refunds within '
+                        . $refundDays . ' days'
+                        . ($supportEmail ? ', reply to ' . $supportEmail : '') . '.';
+                @endphp
+                {{-- Redundant raw DB "Order ID: <id>" removed — the invoice number
+                     above already identifies the order. --}}
+                <div>{{ $thankLine }}</div>
             </div>
         </div>
 

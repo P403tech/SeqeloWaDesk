@@ -89,6 +89,9 @@ class MessageBillingService
 
         // Admin-owned workspaces are never billed by their own product.
         if ($this->ownerIsAdmin($workspace)) {
+            Log::info('[BILLING] admin-skip — admin/Super-Admin workspace is never billed', [
+                'ws' => $workspaceId, 'wamid' => $wamid, 'provider' => $provider, 'source' => $source,
+            ]);
             return null;
         }
 
@@ -106,9 +109,25 @@ class MessageBillingService
         // quota entirely and always charge the wallet.
         $free = ($price === 0) || (! self::payPerMessageFor($workspace) && $this->withinFreeQuota($workspace));
 
+        Log::info('[BILLING] settle', [
+            'ws'              => $workspaceId,
+            'wamid'           => $wamid,
+            'provider'        => $provider,
+            'source'          => $source,
+            'to_country'      => $iso,
+            'category'        => $cat,
+            'price_credits'   => $price,
+            'pay_per_message' => self::payPerMessageFor($workspace),
+            'free'            => $free,
+        ]);
+
         try {
             return DB::transaction(function () use ($workspaceId, $ownerId, $wamid, $iso, $cat, $provider, $source, $price, $costMinor, $free) {
                 if ($free || $ownerId <= 0) {
+                    Log::info('[BILLING] free — not charged', [
+                        'ws' => $workspaceId, 'wamid' => $wamid,
+                        'reason' => $price === 0 ? 'rate_is_zero' : ($ownerId <= 0 ? 'no_wallet_owner' : 'within_plan_free_quota'),
+                    ]);
                     return $this->recordFree($workspaceId, $ownerId ?: null, $wamid, $iso, $cat, $provider, $source, $costMinor);
                 }
 
@@ -122,6 +141,9 @@ class MessageBillingService
                 $have    = (int) $owner->wallet_credits;
                 $charged = max(0, min($price, $have));
                 if ($charged === 0) {
+                    Log::warning('[BILLING] wallet-empty — nothing to deduct, recorded free', [
+                        'ws' => $workspaceId, 'wamid' => $wamid, 'owner' => $ownerId, 'have' => $have, 'price' => $price,
+                    ]);
                     // Wallet empty at delivery — record the message as unbilled-free
                     // rather than lose the row (still fires low-balance below).
                     $row = $this->recordFree($workspaceId, $ownerId, $wamid, $iso, $cat, $provider, $source, $costMinor);
@@ -174,6 +196,11 @@ class MessageBillingService
                     'wallet_tx_id' => $tx->id,
                 ]);
 
+                Log::info('[BILLING] charged', [
+                    'ws' => $workspaceId, 'wamid' => $wamid, 'owner' => $ownerId,
+                    'credits' => $charged, 'balance_after' => $newCredits,
+                    'provider' => $provider, 'source' => $source,
+                ]);
                 $this->afterSpend($owner, $newCredits);
                 return $row;
             });

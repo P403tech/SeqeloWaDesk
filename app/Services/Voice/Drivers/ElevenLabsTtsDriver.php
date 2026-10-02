@@ -51,7 +51,7 @@ class ElevenLabsTtsDriver implements TtsDriver
 
         $apiKey = AiKeyResolver::keyFor($this->workspace, 'elevenlabs');
         if (!$apiKey) {
-            throw new RuntimeException('No ElevenLabs key configured — set one in Admin → AI Keys.');
+            throw new RuntimeException(setup_hint('No ElevenLabs key configured — set one in Admin → AI Keys.', 'Voice replies are temporarily unavailable. Please contact support.'));
         }
 
         $endpoint = sprintf(

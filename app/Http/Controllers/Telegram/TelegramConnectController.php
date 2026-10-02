@@ -81,6 +81,15 @@ class TelegramConnectController extends Controller
         }
 
         $botId = (string) data_get($me, 'result.id', '');
+
+        // One bot = one workspace, platform-wide. Telegram allows only ONE
+        // webhook URL per bot, so a second workspace adopting the same token
+        // would repoint delivery at itself and silently cut the first
+        // workspace off from its own messages.
+        if (\App\Support\ChannelClaim::heldElsewhere(TelegramBot::class, 'bot_id', $botId, $wsId)) {
+            return ['ok' => false, 'error' => \App\Support\ChannelClaim::takenMessage(__('Telegram bot'))];
+        }
+
         $bot = TelegramBot::where('workspace_id', $wsId)->where('bot_id', $botId)->first()
             ?? new TelegramBot(['workspace_id' => $wsId]);
 

@@ -303,7 +303,7 @@ export default function init() {
                 // "notified" line) so the operator isn't left wondering.
                 result.innerHTML = `
                   <div class="font-semibold mb-1">${escape(data.member.name)} added.</div>
-                  <div class="text-[11.5px]">This email already has a WaDesk account, so they sign in with their <strong>existing password</strong>. If they’ve forgotten it, use the <strong>Reset password</strong> action on their row.</div>
+                  <div class="text-[11.5px]">This email already has a ${(window.WADESK_BRAND && window.WADESK_BRAND.appName) || 'WaDesk'} account, so they sign in with their <strong>existing password</strong>. If they’ve forgotten it, use the <strong>Reset password</strong> action on their row.</div>
                   <div class="font-mono text-[11.5px] bg-paper-0 border border-paper-200 rounded px-2 py-1.5 mt-1.5 select-all">
                     Email: ${escape(data.member.email)}
                   </div>`;

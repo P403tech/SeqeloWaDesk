@@ -108,14 +108,20 @@
                     </div>
 
                     <div>
-                        <label class="text-[11.5px] font-semibold text-ink-700 mb-1 block">{{ __('Mobile number') }}</label>
+                        <label class="text-[11.5px] font-semibold text-ink-700 mb-1 block" for="reg-phone">{{ __('Mobile number') }}</label>
                         @php $__u = auth()->user(); @endphp
-                        <div class="flex gap-2">
-                            <input type="text" name="country_code" maxlength="8" value="{{ old('country_code', ($__u->country_code ?? '') ?: app_default_country()['code']) }}"
-                                class="w-24 px-3 py-2.5 border border-paper-200 rounded-lg bg-paper-0 text-[13px] text-center focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10" placeholder="+91" />
-                            <input required type="tel" name="mobile" value="{{ old('mobile', $__u->mobile ?? '') }}" placeholder="{{ __('Mobile number') }}"
-                                class="flex-1 px-3 py-2.5 border border-paper-200 rounded-lg bg-paper-0 text-[13px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10" />
+                        {{-- Same dynamic flag / country-code picker as registration
+                             (intl-tel-input, initialised by auth-register-step2.js). The
+                             hidden #reg-country-code carries the +dial code; #reg-phone
+                             carries the national number. --}}
+                        <div class="wa-iti-wrap">
+                            <input id="reg-phone" required type="tel" name="mobile"
+                                value="{{ old('mobile', $__u->mobile ?? '') }}"
+                                placeholder="{{ __('Your number without country code') }}"
+                                class="px-3 py-2.5 border border-paper-200 rounded-lg bg-paper-0 text-[13px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10" />
                         </div>
+                        <input id="reg-country-code" type="hidden" name="country_code"
+                            value="{{ old('country_code', ($__u->country_code ?? '') ?: app_default_country()['code']) }}" />
                         <div class="text-[10.5px] text-ink-500 mt-1">
                             {{ __('Required — we use this to reach you for verification and important updates.') }}</div>
                     </div>

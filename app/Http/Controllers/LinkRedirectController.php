@@ -120,6 +120,23 @@ class LinkRedirectController extends Controller
                     ->where('campaign_id', $row->campaign_id)
                     ->where('contact_id',  $row->contact_id)
                     ->update(['clicked' => 1, 'clicked_at' => $now, 'updated_at' => $now]);
+
+                // Campaign Follow-ups: "clicked link" rule. Deferred until after the
+                // redirect response so the visitor is never held up.
+                $fuCampId    = (int) $row->campaign_id;
+                $fuContactId = (int) $row->contact_id;
+                app()->terminating(function () use ($fuCampId, $fuContactId) {
+                    try {
+                        $r = \App\Models\WpCampaignContact::where('campaign_id', $fuCampId)
+                            ->where('contact_id', $fuContactId)->orderByDesc('sent_at')->first();
+                        if ($r) {
+                            app(\App\Services\Campaign\CampaignFollowupService::class)
+                                ->onEvent($r, \App\Models\CampaignFollowup::EVENT_CLICKED_LINK);
+                        }
+                    } catch (\Throwable $e) {
+                        \Log::warning('[CAMPAIGN-FOLLOWUP] link-click hook: ' . $e->getMessage());
+                    }
+                });
             }
         }
     }

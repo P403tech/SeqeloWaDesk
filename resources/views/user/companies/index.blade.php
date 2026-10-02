@@ -7,7 +7,7 @@
 <x-layouts.user :title="__('Companies')" nav-key="companies" page="user-companies-index">
     <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7"
           data-companies
-          data-store-url="{{ route('companies.store') }}"
+          data-store-url="{{ route('user.companies.store') }}"
           data-csrf="{{ csrf_token() }}">
 
         {{-- Header --}}
@@ -55,6 +55,7 @@
                             <th class="px-4 py-3 font-medium text-right">{{ __('Contacts') }}</th>
                             <th class="px-4 py-3 font-medium text-right">{{ __('Open deals') }}</th>
                             <th class="px-4 py-3 font-medium text-right">{{ __('Won value') }}</th>
+                            <th class="px-4 py-3 font-medium text-right w-16"><span class="sr-only">{{ __('Actions') }}</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -65,9 +66,21 @@
                                 <td class="px-4 py-3 text-right font-mono">{{ number_format($co['contacts']) }}</td>
                                 <td class="px-4 py-3 text-right font-mono">{{ number_format($co['open_deals']) }}</td>
                                 <td class="px-4 py-3 text-right font-mono">{{ number_format($co['won_value'], 2) }}</td>
+                                {{-- Delete — stopPropagation so the row's navigate onclick doesn't also fire. --}}
+                                <td class="px-4 py-3 text-right" onclick="event.stopPropagation()">
+                                    <form method="POST" action="{{ url('/companies/'.$co['id']) }}"
+                                        onsubmit="return confirm('{{ __('Delete this company? Its contacts and deals are kept and just unlinked.') }}')">
+                                        @csrf
+                                        @method('DELETE')
+                                        <button type="submit" title="{{ __('Delete company') }}"
+                                            class="inline-grid place-items-center w-8 h-8 rounded-lg text-ink-400 hover:text-accent-coral hover:bg-accent-coral/10 transition">
+                                            <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6 4V2.5h4V4M4.3 4l.6 9.5h6.2l.6-9.5"/></svg>
+                                        </button>
+                                    </form>
+                                </td>
                             </tr>
                         @empty
-                            <tr><td colspan="5" class="px-4 py-10 text-center text-ink-400">{{ __('No companies yet. Create your first one.') }}</td></tr>
+                            <tr><td colspan="6" class="px-4 py-10 text-center text-ink-400">{{ __('No companies yet. Create your first one.') }}</td></tr>
                         @endforelse
                     </tbody>
                 </table>

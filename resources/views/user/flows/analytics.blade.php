@@ -381,6 +381,92 @@
                         </button>
                     </div>
                 </div>
+
+                {{-- ===== KEYWORD TRIGGERS — which flow ran on which keyword ===== --}}
+                <div class="bg-paper-0 border border-paper-200 rounded-2xl overflow-hidden shadow-card">
+                    <div class="px-5 py-4 border-b border-paper-200">
+                        <div class="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{{ __('Attribution') }}</div>
+                        <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Keyword triggers') }}</h2>
+                        <p class="text-[12px] text-ink-500 mt-1">{{ __('Which flow each keyword started, and how many times it fired in this period.') }}</p>
+                    </div>
+                    @php $kt = $stats['keyword_triggers'] ?? []; @endphp
+                    @if (count($kt))
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-[12.5px]">
+                                <thead>
+                                    <tr class="text-left text-ink-500 border-b border-paper-200 text-[11px] uppercase tracking-wide">
+                                        <th class="px-5 py-3 font-medium">{{ __('Trigger keyword(s)') }}</th>
+                                        <th class="px-5 py-3 font-medium">{{ __('Flow started') }}</th>
+                                        <th class="px-5 py-3 font-medium text-right">{{ __('Fires') }}</th>
+                                        <th class="px-5 py-3 font-medium text-right">{{ __('Last fired') }}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($kt as $row)
+                                        <tr class="border-b border-paper-100 last:border-0">
+                                            <td class="px-5 py-3">
+                                                @foreach (array_slice(array_filter(array_map('trim', explode(',', (string) $row['keyword']))), 0, 8) as $kw)
+                                                    <span class="inline-block bg-wa-deep/10 text-wa-deep rounded-full px-2 py-0.5 text-[11px] font-medium mr-1 mb-1">{{ $kw }}</span>
+                                                @endforeach
+                                            </td>
+                                            <td class="px-5 py-3 font-medium text-ink-900">{{ $row['flow_name'] }}</td>
+                                            <td class="px-5 py-3 text-right font-mono font-semibold text-wa-deep">{{ number_format($row['fires']) }}</td>
+                                            <td class="px-5 py-3 text-right text-ink-500 font-mono text-[11px]">{{ $row['last_fired'] ? \Illuminate\Support\Carbon::parse($row['last_fired'])->diffForHumans() : '—' }}</td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    @else
+                        <div class="px-5 py-10 text-center text-[12.5px] text-ink-500">
+                            {{ __('No keyword-triggered flow runs in this period. When a customer types a keyword that starts a flow, it appears here with the flow it launched.') }}
+                        </div>
+                    @endif
+                </div>
+
+                {{-- ===== DROP-OFF FUNNEL — where active runs are parked / abandoned ===== --}}
+                @php $do = $stats['drop_off'] ?? []; $doScoped = !empty($stats['flow_id']); @endphp
+                <div class="bg-paper-0 border border-paper-200 rounded-2xl overflow-hidden shadow-card">
+                    <div class="px-5 py-4 border-b border-paper-200">
+                        <div class="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">{{ __('Drop-off') }}</div>
+                        <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Where customers stop replying') }}</h2>
+                        <p class="text-[12px] text-ink-500 mt-1">{{ __('Active runs waiting at each question right now. A high count — especially “stalled” (no reply for 24h+) — is where the flow is losing people.') }}</p>
+                    </div>
+                    @if (count($do))
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-[12.5px]">
+                                <thead>
+                                    <tr class="text-left text-ink-500 border-b border-paper-200 text-[11px] uppercase tracking-wide">
+                                        <th class="px-5 py-3 font-medium">{{ __('Waiting at') }}</th>
+                                        @unless ($doScoped)
+                                            <th class="px-5 py-3 font-medium">{{ __('Flow') }}</th>
+                                        @endunless
+                                        <th class="px-5 py-3 font-medium text-right">{{ __('Waiting') }}</th>
+                                        <th class="px-5 py-3 font-medium text-right">{{ __('Stalled 24h+') }}</th>
+                                        <th class="px-5 py-3 font-medium text-right">{{ __('Last activity') }}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($do as $row)
+                                        <tr class="border-b border-paper-100 last:border-0">
+                                            <td class="px-5 py-3 text-ink-900">{{ $row['label'] ?: ('#' . $row['node_id']) }}</td>
+                                            @unless ($doScoped)
+                                                <td class="px-5 py-3 text-ink-600">{{ $row['flow_name'] }}</td>
+                                            @endunless
+                                            <td class="px-5 py-3 text-right font-mono font-semibold text-wa-deep">{{ number_format($row['waiting']) }}</td>
+                                            <td class="px-5 py-3 text-right font-mono {{ $row['stalled'] > 0 ? 'text-accent-coral font-semibold' : 'text-ink-500' }}">{{ number_format($row['stalled']) }}</td>
+                                            <td class="px-5 py-3 text-right text-ink-500 font-mono text-[11px]">{{ $row['last_at'] ? \Illuminate\Support\Carbon::parse($row['last_at'])->diffForHumans() : '—' }}</td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    @else
+                        <div class="px-5 py-10 text-center text-[12.5px] text-ink-500">
+                            {{ __('No customers are waiting mid-flow right now. When a run pauses at a question and the customer stops replying, it shows here so you can see exactly where the flow drops off.') }}
+                        </div>
+                    @endif
+                </div>
             </section>
 
             {{-- ========== EXECUTION HISTORY ========== --}}

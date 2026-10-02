@@ -60,10 +60,7 @@ class ConversationResolver
             return null;
         }
 
-        // Instagram / Facebook / Telegram / TikTok / SMS JIDs carry NO phone
-        // identity. Flattening them to digits collides parts into a number that
-        // can overflow contact_digits(32) and forge a WhatsApp phone match.
-        if (preg_match('/^(ig|fb|telegram|tg|tiktok|tt|sms):/i', $v)) {
+        if (preg_match('/^(ig|fb|telegram|tg|tiktok|tt|sms|email):/i', $v)) {
             return null;
         }
 

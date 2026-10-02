@@ -16,7 +16,14 @@
             @php
                 $__tiWsId = optional(auth()->user())->current_workspace_id;
                 $__tiChannels = ['wa'];
-                if ($__tiWsId && \App\Models\WorkspaceIgAccount::hasConnected($__tiWsId)) {
+                // Instagram tab — show it for BOTH connection paths: the Instaflow
+                // mirror (WorkspaceIgAccount) AND the native add-on, which stores
+                // accounts in instagram_accounts. Checking only the mirror hid the
+                // tab (and the chats) on native-add-on installs.
+                $__tiIgNative = $__tiWsId
+                    && class_exists(\App\Models\InstagramAccount::class)
+                    && \App\Models\InstagramAccount::where('workspace_id', $__tiWsId)->exists();
+                if ($__tiWsId && (\App\Models\WorkspaceIgAccount::hasConnected($__tiWsId) || $__tiIgNative)) {
                     $__tiChannels[] = 'ig';
                 }
                 // Facebook Pages → reuse the existing blue Messenger channel tab.
@@ -37,6 +44,13 @@
                     && \App\Models\WaProviderConfig::query()->forWorkspace($__tiWsId)->connected()->where('provider', 'sms')->exists()) {
                     $__tiChannels[] = 'sms';
                 }
+                // Email (bridge) → its own channel tab. Shown when the channel is
+                // on and this workspace has a linked mail account, so email
+                // threads are filterable.
+                if ($__tiWsId && (bool) \App\Models\SystemSetting::get('email_enabled', false)
+                    && \App\Models\WorkspaceEmailAccount::hasConnected((int) $__tiWsId)) {
+                    $__tiChannels[] = 'em';
+                }
             @endphp
             <div id="ti-rail-channels" class="ti-rl-channels" data-channels="{{ implode(',', $__tiChannels) }}">
                 {{-- Skeleton placeholders (All + each connected channel) so the rail
@@ -47,7 +61,12 @@
                 @endforeach
             </div>
             <hr class="ti-rl-div">
-            <div class="ti-rl-nav">
+            {{-- Feature icons live INLINE in the rail; whatever doesn't fit is
+                 moved into the Tools flyout below by layoutRailFeatures() (JS), so
+                 connecting more channels automatically pushes the extra features
+                 into Tools. REVERT: wrap these back in the single <details> flyout
+                 and drop the layoutRailFeatures() JS + .ti-rl-tools CSS. --}}
+            <div class="ti-rl-nav" id="ti-rl-nav">
                 <a href="{{ url('/team-chat') }}" class="ti-rl-btn" title="{{ __('Team chat') }}">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                         <path d="M2 4c0-1 .8-2 2-2h8c1.2 0 2 1 2 2v6c0 1-.8 2-2 2H7l-3 3v-3H4c-1.2 0-2-1-2-2z" />
@@ -180,6 +199,20 @@
                 </a>
                 @endcanWorkspace
             </div>
+            {{-- Tools flyout — the OVERFLOW target. layoutRailFeatures() moves any
+                 feature icons that don't fit the rail into here and un-hides this
+                 button; if everything fits, this stays hidden. --}}
+            <details class="ti-rl-tools" id="ti-rl-tools" hidden>
+                <summary class="ti-rl-btn ti-rl-tools-btn" title="{{ __('More tools') }}">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="2" y="2" width="5" height="5" rx="1" />
+                        <rect x="9" y="2" width="5" height="5" rx="1" />
+                        <rect x="2" y="9" width="5" height="5" rx="1" />
+                        <rect x="9" y="9" width="5" height="5" rx="1" />
+                    </svg>
+                </summary>
+                <div class="ti-rl-nav-pop" id="ti-rl-nav-pop"></div>
+            </details>
             <div class="ti-rl-sp"></div>
             @canWorkspace('member.invite')
             <button type="button" data-open-invite class="ti-rl-btn" title="{{ __('Invite teammate') }}">
@@ -328,25 +361,27 @@
                     <input id="search" type="search" placeholder="{{ __('Search…') }}"
                         class="w-full pl-8 pr-3 py-1.5 border border-paper-200 rounded-md bg-paper-50 text-[12.5px] focus:outline-none focus:bg-paper-0 focus:border-wa-deep" />
                 </div>
-                {{-- Omni segmented quick-filter (All / Unread / …) with a sliding
-                     thumb — matches the mockup's .seg. JS positions #seg-thumb
-                     under the active button; solo workspaces see just All+Unread
-                     (Mine/Unassigned/@me hidden by syncQueueTabsVisibility). --}}
-                {{-- Mine/Unassigned/@me start HIDDEN so a solo workspace's first
-                     paint already matches its final state (just All + Unread) —
-                     no flash of extra tabs before syncQueueTabsVisibility() runs.
-                     JS reveals them (display:'') only when the workspace has >1
-                     member; the common solo case needs no post-load reflow. --}}
-                <div class="ti-seg" id="queue-tabs">
+                {{-- Omni segmented quick-filter with a sliding thumb — JS
+                     positions #seg-thumb under the active button.
+
+                     THREE tabs only: All / Mine / Unread. The Unassigned icon and
+                     @me were removed on request — five tabs crowded the bar and
+                     the two triage filters were rarely used. Their data is still
+                     collected (state.counts.unassigned / .mentions) and the queue
+                     values remain valid server-side, so restoring a tab is a
+                     markup change, not a rebuild.
+
+                     `Mine` starts HIDDEN and is revealed by
+                     syncQueueTabsVisibility() only in a multi-member workspace —
+                     a solo operator has nobody to assign to, so they see a clean
+                     All + Unread bar with no flash of a third tab on first paint.
+                     `is-duo` stretches those two to fill the bar for that case. --}}
+                <div class="ti-seg is-duo" id="queue-tabs">
                     <span class="ti-seg-thumb" id="seg-thumb"></span>
                     <button data-queue="all" class="on">{{ __('All') }} <span class="n"
                             data-count="all"></span></button>
                     <button data-queue="mine" style="display:none">{{ __('Mine') }} <span class="n"
                             data-count="mine"></span></button>
-                    <button data-queue="unassigned" style="display:none">{{ __('Unassigned') }} <span class="n"
-                            data-count="unassigned"></span></button>
-                    <button data-queue="mentions" style="display:none">@me <span class="n"
-                            data-count="mentions"></span></button>
                     <button data-queue="unread">{{ __('Unread') }} <span class="n"
                             data-count="unread"></span></button>
                 </div>
@@ -986,20 +1021,16 @@
                                         </li>
                                         <li>{{ __('Click it to reply, or assign to a teammate from the right panel.') }}
                                         </li>
-                                        <li>{{ __('Use') }} <span class="font-mono">@me</span> to find threads
-                                            where you were tagged.</li>
                                     </ol>
                                 </div>
                             </div>
                         @else
                             <div class="mt-3 text-[11px] text-ink-500 leading-snug">
                                 <span class="font-semibold text-ink-700">{{ __('Tip:') }}</span> the queue on the
-                                left has 4 tabs.
-                                <span class="font-mono">{{ __('Mine') }}</span> shows what's assigned to you,
-                                <span class="font-mono">{{ __('Unassigned') }}</span> is the team's bucket,
+                                left has 3 tabs.
                                 <span class="font-mono">{{ __('All') }}</span> is everything,
-                                <span class="font-mono">@me</span> is conversations where someone tagged you in an
-                                internal note.
+                                <span class="font-mono">{{ __('Mine') }}</span> shows what's assigned to you, and
+                                <span class="font-mono">{{ __('Unread') }}</span> is what nobody has opened yet.
                             </div>
                         @endif
                         {{-- "What your team unlocks" — compact 4-column feature row so
@@ -1565,18 +1596,16 @@
                                                             rx="1" />
                                                     </svg>
                                                 </span>
-                                                <div class="font-semibold text-[13px]">{{ __('The four tabs') }}
+                                                <div class="font-semibold text-[13px]">{{ __('The three tabs') }}
                                                 </div>
                                             </div>
                                             <p class="text-[11.5px] text-ink-600 leading-relaxed">
                                                 <span class="font-mono text-[11px]">{{ __('All') }}</span>
                                                 {{ __('is every open thread on the workspace.') }}
                                                 <span class="font-mono text-[11px]">{{ __('Mine') }}</span>
-                                                {{ __('narrows to threads assigned to you.') }}
-                                                <span class="font-mono text-[11px]">{{ __('Unassigned') }}</span>
-                                                {{ __('is the shared bucket — anything nobody has picked up yet, which is where triage starts.') }}
-                                                <span class="font-mono text-[11px]">@me</span>
-                                                {{ __('collects threads where a teammate tagged you in an internal note.') }}
+                                                {{ __('narrows to threads assigned to you, and only appears once your workspace has more than one member.') }}
+                                                <span class="font-mono text-[11px]">{{ __('Unread') }}</span>
+                                                {{ __('is everything nobody has opened yet — where triage starts.') }}
                                             </p>
                                         </div>
                                         <div class="bg-paper-0 border border-paper-200 rounded-xl p-4 flex flex-col">
@@ -2275,6 +2304,23 @@ Starts @{{ meet_start }}</textarea>
                     {{ __('Channel') }}
                 </div>
                 <div id="ct-channels" class="ti-chanrow"></div>
+                {{-- Which of THIS workspace's business numbers the customer is
+                     chatting with. Filled per-conversation by renderActive() from
+                     device_phone/device_label. Essential for multi-number
+                     workspaces so the operator can see (and reply from) the right
+                     number — two threads for the same customer on two different
+                     business numbers are separate BY DESIGN, and this line is what
+                     makes that visible. Hidden when the number is unknown. --}}
+                <div id="ct-business-line"
+                     class="hidden mt-2 flex items-center gap-1.5 text-[11.5px] text-ink-600">
+                    <svg viewBox="0 0 16 16" class="w-3 h-3 shrink-0" fill="none" stroke="currentColor"
+                         stroke-width="1.5">
+                        <rect x="4.5" y="2" width="7" height="12" rx="1.5" />
+                        <path d="M7 12.5h2" />
+                    </svg>
+                    <span class="text-ink-500">{{ __('On your number') }}</span>
+                    <span id="ct-business-num" class="font-mono text-ink-900 font-semibold"></span>
+                </div>
             </div>
             {{-- Omni Attributes — contact profile fields (email / phone / language
                  / address) + any custom attributes. Rendered per-conversation by
@@ -3190,6 +3236,7 @@ Tips:
             </form>
         </div>
     </div>
+    @include('user.partials._ai_agent_form_modal')
     {{-- ======== API Keys Modal ================================ --}}
     <div id="ai-keys-modal" class="hidden fixed inset-0 z-50 grid place-items-center p-4">
         <div class="absolute inset-0 bg-ink-900/40" data-close-keys></div>
@@ -3219,6 +3266,32 @@ Tips:
                             <option value="gemini">{{ __('Google Gemini') }}</option>
                             <option value="muse">{{ __('Muse (Meta)') }}</option>
                             <option value="elevenlabs">{{ __('ElevenLabs (voice TTS)') }}</option>
+                            <optgroup label="{{ __('AI models') }}">
+                                <option value="openai">{{ __('OpenAI (GPT)') }}</option>
+                                <option value="anthropic">{{ __('Anthropic (Claude)') }}</option>
+                                <option value="gemini">{{ __('Google (Gemini)') }}</option>
+                                <option value="mistral">{{ __('Mistral') }}</option>
+                                <option value="deepseek">{{ __('DeepSeek') }}</option>
+                                <option value="xai">{{ __('xAI (Grok)') }}</option>
+                                <option value="perplexity">{{ __('Perplexity') }}</option>
+                                <option value="groq">{{ __('Groq') }}</option>
+                                <option value="qwen">{{ __('Alibaba Qwen') }}</option>
+                                <option value="moonshot">{{ __('Moonshot (Kimi)') }}</option>
+                                <option value="zai">{{ __('Z.ai (GLM)') }}</option>
+                                <option value="cohere">{{ __('Cohere') }}</option>
+                                <option value="nvidia">{{ __('NVIDIA') }}</option>
+                                <option value="llama">{{ __('Meta Llama') }}</option>
+                                <option value="huggingface">{{ __('Hugging Face') }}</option>
+                                <option value="baidu">{{ __('Baidu (Ernie)') }}</option>
+                                <option value="ai21">{{ __('AI21 (Jamba)') }}</option>
+                                <option value="reka">{{ __('Reka') }}</option>
+                                <option value="yi">{{ __('01.AI (Yi)') }}</option>
+                                <option value="openrouter">{{ __('OpenRouter') }}</option>
+                            </optgroup>
+                            <optgroup label="{{ __('Voice') }}">
+                                <option value="elevenlabs">{{ __('ElevenLabs (voice TTS)') }}</option>
+                                <option value="deepgram">{{ __('Deepgram (voice STT)') }}</option>
+                            </optgroup>
                         </select>
                     </div>
                     <div>
@@ -3790,6 +3863,48 @@ Why use it:
                 if (tel.replace(/\D/g, '').length < 7) return;
                 window.location.href = 'tel:' + tel; // opens the dialer on mobile
             });
+        })();
+    </script>
+
+    {{-- Business-number line in the contact panel — which of THIS workspace's
+         numbers the open chat belongs to. Deliberately INLINE (not in the JS
+         bundle) so this feature ships by replacing ONLY this Blade file, no
+         asset rebuild. It reads the value from the DOM: the active thread row
+         (.conv-row.bg-paper-100) carries a device chip (span with a
+         'bg-wa-bubble' class) whose title is the business phone. Fully
+         defensive — if the chip isn't present (older build / single-device),
+         the line just stays hidden. --}}
+    <script>
+        (function () {
+            function sync() {
+                var line = document.getElementById('ct-business-line');
+                var numEl = document.getElementById('ct-business-num');
+                if (!line || !numEl) return;
+                var row = document.querySelector('.conv-row.bg-paper-100');
+                var chip = row ? row.querySelector('[class*="bg-wa-bubble"]') : null;
+                var num = '';
+                if (chip) {
+                    // title = "919867909333 · Status: connected" → take the phone part;
+                    // fall back to the chip's visible label (device name).
+                    var title = (chip.getAttribute('title') || '').split('·')[0].trim();
+                    num = title || (chip.textContent || '').trim();
+                }
+                if (num) { numEl.textContent = num; line.classList.remove('hidden'); }
+                else { line.classList.add('hidden'); }
+            }
+            // Re-run whenever the panel's channel chip re-renders — that happens on
+            // every conversation switch (renderActive rewrites #ct-channels).
+            var chans = document.getElementById('ct-channels');
+            if (chans && 'MutationObserver' in window) {
+                new MutationObserver(sync).observe(chans, { childList: true, subtree: true });
+            }
+            // Belt-and-braces: also sync shortly after a thread row is clicked.
+            document.addEventListener('click', function (e) {
+                if (e.target && e.target.closest && e.target.closest('.conv-row')) {
+                    setTimeout(sync, 150);
+                }
+            });
+            setTimeout(sync, 800);
         })();
     </script>
 </x-layouts.user>

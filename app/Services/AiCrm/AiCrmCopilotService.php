@@ -328,6 +328,19 @@ class AiCrmCopilotService
     /** @return array{0:string,1:string,2:?string} provider, model, key */
     private function resolveProvider(Workspace $ws): array
     {
+        // Pass 1 — prefer a provider the WORKSPACE has its OWN key for (BYOK).
+        // Without this, an admin key for a higher-priority provider (e.g. an
+        // admin Anthropic key) is returned FIRST and silently SHADOWS the user's
+        // correctly-connected OpenAI/Gemini BYOK key.
+        foreach (self::PROVIDER_ORDER as $provider) {
+            $r = AiKeyResolver::resolve($ws, $provider);
+            if (!empty($r['key']) && ($r['source'] ?? '') === 'workspace') {
+                $model = $r['model'] ?: $this->defaultModel($provider);
+                return [$provider, $model, $r['key']];
+            }
+        }
+        // Pass 2 — no BYOK key: fall back to the first provider that has any
+        // (admin/global) key.
         foreach (self::PROVIDER_ORDER as $provider) {
             $r = AiKeyResolver::resolve($ws, $provider);
             if (!empty($r['key'])) {
@@ -345,6 +358,7 @@ class AiCrmCopilotService
             'anthropic' => 'claude-haiku-4-5-20251001',
             'gemini'    => 'gemini-1.5-flash',
             'muse'      => 'muse-spark-1.3',
+            'gemini'    => 'gemini-3.5-flash',
             default     => '',
         };
     }

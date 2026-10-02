@@ -29,7 +29,7 @@
                             </span>
                         </div>
                         <div class="text-[12.5px] text-paper-0/75 mt-1.5">
-                            {{ __('Resets :date · :days days left in this cycle', ['date' => $u['cycle_reset'], 'days' => $u['days_left']]) }}
+                            {{ __('Message quota resets :date · :days days left this cycle', ['date' => $u['cycle_reset'], 'days' => $u['days_left']]) }}
                         </div>
                         {{-- Plan VALIDITY — the subscription's own expiry, separate from the
                              monthly message cycle above. For a yearly plan this reads a year

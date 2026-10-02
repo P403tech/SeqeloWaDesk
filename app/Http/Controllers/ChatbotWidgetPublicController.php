@@ -254,9 +254,127 @@ JS;
             'visitor_uuid'     => $visitor->visitor_uuid,
         ]);
 
-        // AI reply, if the widget runs an assistant.
+        // Human handoff — once a team-inbox agent has replied in this thread,
+        // the bot stands down so the visitor talks to the human, not both at
+        // once. Discriminate on the NON-encrypted meta.source: the widget's own
+        // AI replies stamp meta.source='ai_chat_assistant'; a human team-inbox
+        // reply (compose/reply path) never does. So an outbound whose source is
+        // anything other than 'ai_chat_assistant' means a human has taken over.
+        //
+        // BUG FIX: the old check compared `from_number` against 'widget-{id}'.
+        // from_number is SafeEncrypted (AES, random IV), so the stored ciphertext
+        // never equals the plaintext literal — the comparison was ALWAYS true the
+        // moment any outbound existed, so the bot's OWN first reply flipped
+        // $humanTookOver=true and silenced it after exactly one message. meta is a
+        // plain JSON column (not encrypted), so it's safe to filter in SQL.
+        $humanTookOver = InboxMessage::query()
+            ->where('conversation_id', $convo->id)
+            ->where('direction', 'out')
+            ->where(function ($q) {
+                $q->whereNull('meta->source')
+                  ->orWhere('meta->source', '!=', 'ai_chat_assistant');
+            })
+            ->exists();
+
+        // ── AUTO-REPLY RULES ───────────────────────────────────────────────
+        // The widget used to jump straight to the AI assistant, so /auto-reply
+        // rules — keyword replies, welcome messages, and rules whose reply_type
+        // is `flow` — never ran here. A merchant saw the same rules work on
+        // WhatsApp and do nothing in the widget, with no error to explain it.
+        //
+        // Precedence is FLOW/RULE first, AI second: a rule is an explicit
+        // instruction and the assistant is the catch-all. Running both would
+        // answer one visitor message twice.
+        //
+        // The dispatcher writes its own outbound row and hands it to
+        // InboxDispatcher, which already short-circuits `chatbot_widget` to
+        // local delivery — the visitor picks it up on the next /history poll,
+        // exactly like a team-inbox reply.
+        // ── BOUND FLOW ─────────────────────────────────────────────────────
+        // A widget bound to a flow hands the message to the Node engine first.
+        // Node answers synchronously whether the flow CONSUMED it: true means
+        // the flow is driving this turn, so the rules and the assistant below
+        // must both stand down or the visitor gets two or three answers at once.
+        //
+        // `consumed = false` is the normal, expected case for anything the flow
+        // has no branch for — and for Node being unreachable. Either way we fall
+        // straight through to the behaviour the widget had before flows existed,
+        // so a flow problem degrades rather than silencing the widget.
+        $flowConsumed = false;
+        if (! $humanTookOver && $widget->usesFlow()) {
+            $flow = $widget->activeFlow();
+            if ($flow) {
+                try {
+                    $flowConsumed = \App\Services\Widget\WidgetFlowBridge::handoff(
+                        $widget,
+                        $convo,
+                        $data['body'],
+                        // flow_data STARTS a run; omitted on resume so the Node
+                        // session keeps the node it is parked on.
+                        is_array($flow->flow_data) ? $flow->flow_data : null,
+                        $flow->id,
+                        [
+                            'visitor_name'  => (string) ($visitor->name ?? ''),
+                            'visitor_email' => (string) ($visitor->email ?? ''),
+                            'visitor_phone' => (string) ($visitor->phone ?? ''),
+                            'text'          => (string) $data['body'],
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    Log::error('[WIDGET-INBOX] flow handoff threw: ' . $e->getMessage(), [
+                        'widget_id' => $widget->id, 'flow_id' => $flow->id,
+                    ]);
+                }
+            } else {
+                // Bound to a flow that was deleted, unpublished or deactivated.
+                // Log it loudly: from the visitor's side this is indistinguishable
+                // from the widget being broken.
+                Log::warning('[WIDGET-INBOX] widget is flow-bound but the flow is not runnable', [
+                    'widget_id' => $widget->id, 'flow_id' => $widget->flow_id,
+                ]);
+            }
+        }
+
+        $ruleFired = null;
+        if (! $humanTookOver && ! $flowConsumed) {
+            try {
+                $ruleFired = app(\App\Services\Inbox\KeywordReplyDispatcher::class)
+                    ->maybeDispatch($convo, $data['body'], $visitor->autoReplyKey());
+            } catch (\Throwable $e) {
+                // Never let a rule problem cost the visitor their answer — fall
+                // through to the assistant below.
+                Log::error('[WIDGET-INBOX] auto-reply dispatch threw: ' . $e->getMessage(), [
+                    'widget_id'       => $widget->id,
+                    'conversation_id' => $convo->id,
+                ]);
+            }
+        }
+
+        // AI reply, if the widget runs an assistant AND no human has taken over.
         $assistantReply = null;
-        if ($widget->usesAi() && $widget->assistant) {
+        if ($humanTookOver) {
+            Log::info('[WIDGET-INBOX] message(): bot silenced — human agent has taken over', [
+                'widget_id'       => $widget->id,
+                'conversation_id' => $convo->id,
+            ]);
+        } elseif ($flowConsumed) {
+            // The flow owns this turn. Its reply is written by /api/widget/flow-send
+            // once Node walks the graph (Node answers 202 and runs it detached),
+            // so there is deliberately nothing to return synchronously here —
+            // the widget's /history poll picks it up, same as a human reply.
+            Log::info('[WIDGET-INBOX] message(): flow consumed the message — rules + AI skipped', [
+                'widget_id'       => $widget->id,
+                'conversation_id' => $convo->id,
+                'flow_id'         => $widget->flow_id,
+            ]);
+        } elseif ($ruleFired) {
+            Log::info('[WIDGET-INBOX] message(): auto-reply rule answered — AI assistant skipped', [
+                'widget_id'       => $widget->id,
+                'conversation_id' => $convo->id,
+                'rule_id'         => $ruleFired->id,
+                'reply_type'      => (string) $ruleFired->reply_type,
+            ]);
+        } elseif ($widget->usesAi() && $widget->assistant) {
             try {
                 $assistantReply = $this->ai->reply($widget->assistant, $convo, $data['body']);
             } catch (\Throwable $e) {
@@ -296,6 +414,35 @@ JS;
                 'conversation_id'  => $convo->id,
                 'inbox_message_id' => $outbound->id,
             ]);
+        }
+
+        // AI conversational lead capture — when enabled, extract the visitor's
+        // details from the chat and merge them onto the linked Contact. Runs
+        // AFTER the HTTP response is sent (dispatch()->afterResponse), so it
+        // never adds latency to the reply the visitor is waiting for.
+        if ($widget->ai_capture_enabled && $assistantReply && $widget->assistant_id) {
+            $wId = (int) $widget->id;
+            $cId = (int) $convo->id;
+            dispatch(function () use ($wId, $cId) {
+                $w = \App\Models\ChatbotWidget::with('assistant')->find($wId);
+                $c = \App\Models\Conversation::find($cId);
+                if ($w && $c) {
+                    app(\App\Services\AiChat\WidgetLeadCaptureService::class)->capture($w, $c);
+                }
+            })->afterResponse();
+        }
+
+        // A rule's reply is written by the dispatcher, not by us, so $outbound is
+        // still null on that path. Hand the row back in THIS response instead of
+        // leaving the visitor staring at nothing until the next /history poll —
+        // the AI path answers instantly and a keyword rule should feel the same.
+        if (! $outbound && $ruleFired) {
+            $outbound = InboxMessage::query()
+                ->where('conversation_id', $convo->id)
+                ->where('direction', 'out')
+                ->where('id', '>', $inbound->id)
+                ->orderByDesc('id')
+                ->first();
         }
 
         return response()->json([
@@ -452,6 +599,37 @@ JS;
         ]);
         $visitor->conversation_id = $convo->id;
         $visitor->save();
+
+        // #57 — create/link a Contact so the visitor's name/email/phone show in
+        // the inbox contact panel AND in /contacts. Previously they lived only
+        // on the widget-visitor row + routing_meta, so the chat had NO contact.
+        // Match an existing contact by phone when we have one, else keep a stable
+        // per-visitor row keyed by the widget channel_uid.
+        try {
+            $wsId  = (int) $widget->workspace_id;
+            $phone = preg_replace('/\D+/', '', (string) ($visitor->phone ?? ''));
+            $contact = null;
+            if ($phone !== '') {
+                $hash = \App\Models\Contact::hashPhone(null, $phone);
+                $contact = \App\Models\Contact::where('workspace_id', $wsId)->where('mobile_hash', $hash)->first();
+            }
+            if (!$contact) {
+                $contact = \App\Models\Contact::firstOrNew([
+                    'workspace_id' => $wsId,
+                    'channel'      => 'chatbot_widget',
+                    'channel_uid'  => (string) $visitor->visitor_uuid,
+                ]);
+            }
+            $contact->user_id      = $contact->user_id ?: $widget->user_id;
+            $contact->workspace_id = $wsId;
+            if (!empty($visitor->name))  { $contact->name = $contact->name ?: $visitor->name; $contact->first_name = $contact->first_name ?: $visitor->name; }
+            if (!empty($visitor->email)) { $contact->email = $contact->email ?: $visitor->email; }
+            if ($phone !== '') { $contact->mobile = $contact->mobile ?: $phone; $contact->mobile_hash = \App\Models\Contact::hashPhone(null, $phone); }
+            $contact->save();
+            $convo->forceFill(['contact_id' => $contact->id])->save();
+        } catch (\Throwable $e) {
+            Log::warning('[WIDGET-INBOX] contact upsert failed: ' . $e->getMessage());
+        }
 
         // The 4 fields the Team Inbox list query filters on. If a chat is saved
         // but never appears, cross-check these against the inbox diagnostic log:

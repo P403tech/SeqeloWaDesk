@@ -24,6 +24,7 @@ class LegalPage extends Model
     public const SLUGS = [
         'terms'           => 'Terms of Service',
         'privacy'         => 'Privacy Policy',
+        'data-deletion'   => 'User Data Deletion',
         'refund'          => 'Refund Policy',
         'cookies'         => 'Cookie Policy',
         'acceptable-use'  => 'Acceptable Use',

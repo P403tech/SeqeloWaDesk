@@ -218,6 +218,15 @@ class KeywordReply extends Model
             && \App\Models\TelegramBot::hasConnected($workspaceId)) {
             $engines[] = 'telegram';
         }
+        // Email is engine-agnostic too (never in enginesFor) — the sender picker
+        // at /auto-reply stamps provider='email', so without this leg every rule
+        // an operator saves for a mailbox vanishes from the manager AND from the
+        // dashboard counters that share this scope.
+        if ((bool) \App\Models\SystemSetting::get('email_enabled', false)
+            && class_exists(\App\Models\WorkspaceEmailAccount::class)
+            && \App\Models\WorkspaceEmailAccount::hasConnected($workspaceId)) {
+            $engines[] = 'email';
+        }
         $engines = array_values(array_unique($engines));
 
         return $q->where('workspace_id', $workspaceId)

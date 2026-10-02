@@ -313,7 +313,10 @@
                 </button>
                 <button type="button" data-tab="failures"
                     class="tab-btn shrink-0 whitespace-nowrap px-4 py-2 rounded-full text-[13px] font-semibold text-ink-600 hover:bg-paper-50 transition">{{ __('Failures') }}</button>
-                
+                @if (!empty($followupStats))
+                <button type="button" data-tab="followups"
+                    class="tab-btn shrink-0 whitespace-nowrap px-4 py-2 rounded-full text-[13px] font-semibold text-ink-600 hover:bg-paper-50 transition">{{ __('Follow-ups') }}</button>
+                @endif
             </div>
         </section>
 
@@ -1199,6 +1202,63 @@
                 </div>
             </div>
         </section>
+
+        @if (!empty($followupStats))
+        <section data-panel="followups" class="tab-panel hidden space-y-5">
+            <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
+                <div class="px-5 py-4 border-b border-paper-200">
+                    <div class="font-serif text-[16px] text-ink-900">{{ __('Follow-up performance') }}</div>
+                    <p class="text-[11.5px] text-ink-500 mt-1">{{ __('How each automation rule performed for this campaign\'s recipients.') }}</p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-[12.5px]">
+                        <thead>
+                            <tr class="text-left text-ink-500 border-b border-paper-200 text-[11px] uppercase tracking-wide">
+                                <th class="px-4 py-3 font-medium">{{ __('When') }}</th>
+                                <th class="px-4 py-3 font-medium">{{ __('Then') }}</th>
+                                <th class="px-4 py-3 font-medium text-center">{{ __('Fired') }}</th>
+                                <th class="px-4 py-3 font-medium text-center">{{ __('Pending') }}</th>
+                                <th class="px-4 py-3 font-medium text-center">{{ __('Skipped') }}</th>
+                                <th class="px-4 py-3 font-medium text-center">{{ __('Failed') }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @php
+                                $fuEventLabels = [
+                                    'replied' => __('Replied'), 'clicked_button' => __('Tapped a button'),
+                                    'clicked_link' => __('Clicked a link'), 'read' => __('Read'),
+                                    'read_no_reply' => __('Read, no reply'), 'delivered_no_read' => __('Delivered, not read'),
+                                    'sent_no_reply' => __('No reply'), 'not_delivered' => __('Not delivered'), 'failed' => __('Send failed'),
+                                ];
+                                $fuActionLabels = [
+                                    'send_template' => __('Send template'), 'start_flow' => __('Start flow'),
+                                    'enroll_drip' => __('Enroll drip'), 'add_tag' => __('Add tag'),
+                                    'remove_tag' => __('Remove tag'), 'assign_agent' => __('Assign agent'), 'opt_out' => __('Opt out'),
+                                ];
+                            @endphp
+                            @foreach ($followupStats as $s)
+                                <tr class="border-b border-paper-100 last:border-0">
+                                    <td class="px-4 py-3">
+                                        <span class="font-medium text-ink-900">{{ $fuEventLabels[$s['event']] ?? $s['event'] }}</span>
+                                        @if (!empty($s['delay']))
+                                            <span class="text-ink-400 text-[11px]">· {{ __('after') }} {{ $s['delay'] >= 1440 ? ($s['delay'] / 1440) . 'd' : ($s['delay'] >= 60 ? ($s['delay'] / 60) . 'h' : $s['delay'] . 'm') }}</span>
+                                        @endif
+                                    </td>
+                                    <td class="px-4 py-3 text-ink-700">
+                                        {{ $fuActionLabels[$s['action']] ?? $s['action'] }}@if (!empty($s['target'])) <span class="text-ink-400">· {{ $s['target'] }}</span>@endif
+                                    </td>
+                                    <td class="px-4 py-3 text-center font-mono font-semibold text-wa-deep">{{ number_format($s['fired']) }}</td>
+                                    <td class="px-4 py-3 text-center font-mono text-ink-500">{{ number_format($s['pending']) }}</td>
+                                    <td class="px-4 py-3 text-center font-mono text-ink-400">{{ number_format($s['skipped']) }}</td>
+                                    <td class="px-4 py-3 text-center font-mono {{ $s['failed'] ? 'text-accent-coral' : 'text-ink-400' }}">{{ number_format($s['failed']) }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        @endif
 
         
     </main>

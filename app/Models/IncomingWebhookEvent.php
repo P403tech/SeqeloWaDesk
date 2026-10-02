@@ -11,7 +11,7 @@ class IncomingWebhookEvent extends Model
     protected $fillable = [
         'incoming_webhook_id', 'method', 'source_ip', 'content_type',
         'headers', 'payload', 'forwarded', 'forward_status', 'forward_error', 'lead_contact_id',
-        'received_at',
+        'template_send_status', 'received_at',
     ];
 
     protected $casts = [

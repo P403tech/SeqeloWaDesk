@@ -134,7 +134,7 @@ class WorkspacesController extends Controller
             $inviteNotice = $this->sendInviteEmail($invitedUser, $plainPassword);
         }
 
-        $ws = Workspace::create([
+        $ws = Workspace::createWithUniqueSlug([
             'name'                    => $data['name'],
             'slug'                    => $data['slug'],
             'custom_domain'           => $data['custom_domain'] ?? null,
@@ -157,9 +157,32 @@ class WorkspacesController extends Controller
             'last_active_at'          => now(),
         ]);
 
-        $owner = User::find($ownerId);
-        if (!$owner->current_workspace_id) {
-            $owner->update(['current_workspace_id' => $ws->id]);
+        // Link the selected owner as an actual workspace MEMBER with the Owner
+        // role. Setting workspaces.owner_user_id alone is NOT membership — the
+        // workspace_user pivot is the source of truth the app reads (the owner's
+        // workspace list, seat counts, "which workspace do I belong to"). Without
+        // this row the chosen owner/email is never actually assigned to the
+        // workspace and can't see it. updateOrInsert because workspace_user has
+        // no unique index on (workspace_id, user_id) — mirrors AdminWorkspaceProvisioner.
+        if ($ownerId) {
+            \Illuminate\Support\Facades\DB::table('workspace_user')->updateOrInsert(
+                ['workspace_id' => $ws->id, 'user_id' => $ownerId],
+                ['role' => 'owner', 'joined_at' => now(), 'updated_at' => now(), 'created_at' => now()]
+            );
+            $owner = User::find($ownerId);
+            // Land the owner on the new workspace only if they aren't already
+            // working inside one (don't yank an existing user out of theirs).
+            if ($owner && !$owner->current_workspace_id) {
+                $owner->update(['current_workspace_id' => $ws->id]);
+            }
+        }
+
+        // Optional workspace logo upload → public disk; path saved to
+        // brand_logo_path (rendered as the workspace white-label logo in the
+        // header + sidebar).
+        if ($request->hasFile('logo')) {
+            $request->validate(['logo' => 'image|mimes:png,jpg,jpeg,svg,webp|max:2048']);
+            $ws->update(['brand_logo_path' => $request->file('logo')->store('workspace-logos', 'public')]);
         }
 
         Audit::log('admin.workspace.created', [
@@ -273,7 +296,10 @@ class WorkspacesController extends Controller
             'campaigns'  => $this->safeCount('campaigns',   'workspace_id', $ws->id),
             'broadcasts' => $this->safeCount('broadcasts',  'workspace_id', $ws->id),
             'contacts'   => $this->safeCount('contacts',    'workspace_id', $ws->id),
-            'users'      => $this->safeCount('users',       'current_workspace_id', $ws->id),
+            // Count real MEMBERS (workspace_user pivot), not users whose currently-
+            // selected workspace happens to be this one — the latter under/mis-counts
+            // multi-workspace members.
+            'users'      => $this->safeCount('workspace_user', 'workspace_id', $ws->id),
         ];
 
         // MRR + LTV. LTV = MRR × months since created (rough proxy).
@@ -299,6 +325,10 @@ class WorkspacesController extends Controller
             'limitColumns' => \App\Http\Controllers\AdminPagesController::PLAN_LIMIT_COLUMNS,
             'effLimits'    => $effLimits,
             'users'        => User::query()->orderBy('name')->get(['id', 'name', 'email']),
+            // Real members of THIS workspace + their pivot role, so an admin can
+            // change a member's role from the workspace page (drives the nav
+            // tier + permissions — see UserNav::userRank / workspaceRole).
+            'members'      => $ws->members()->orderBy('name')->get(),
             'plans'        => Package::query()->plans()->orderBy('plan_amount')->get(),
             'volume'       => ['labels' => $labels, 'sent' => $sentSeries, 'delivered' => $delSeries],
             'stats'        => [
@@ -314,6 +344,30 @@ class WorkspacesController extends Controller
             'counts'       => $counts,
             'recentOrders' => $recentOrders,
         ]);
+    }
+
+    /**
+     * Change a member's ROLE in this workspace (the workspace_user pivot). The
+     * role drives the user's nav tier + permissions per workspace, so this is
+     * the UI equivalent of an admin editing the pivot directly. The workspace
+     * owner is never demoted here — owner is a separate concept
+     * (workspaces.owner_user_id), changed on the main edit form.
+     */
+    public function updateMemberRole(Request $request, string $id): RedirectResponse
+    {
+        $ws = Workspace::findOrFail($id);
+        $data = $request->validate([
+            'user_id' => 'required|integer',
+            'role'    => 'required|string|in:owner,admin,manager,agent,viewer',
+        ]);
+
+        if (! $ws->members()->where('users.id', (int) $data['user_id'])->exists()) {
+            return back()->with('error', __('That user is not a member of this workspace.'));
+        }
+
+        $ws->members()->updateExistingPivot((int) $data['user_id'], ['role' => $data['role']]);
+
+        return back()->with('success', __('Member role updated.'));
     }
 
     /** Safely count rows in a table by column = value, skipping the query when the table/column doesn't exist. */
@@ -379,6 +433,30 @@ class WorkspacesController extends Controller
             'admin_note'              => $data['admin_note'] ?? null,
         ])->save();
 
+        // Keep workspace_user membership in lock-step with an owner CHANGE.
+        // Setting owner_user_id alone neither makes the new owner a member nor
+        // demotes the old one — the pivot is the source of truth. Mirrors admin
+        // store() / AdminWorkspaceProvisioner.
+        if ((int) $ws->owner_user_id !== (int) $previousOwner) {
+            if ($ws->owner_user_id) {
+                \Illuminate\Support\Facades\DB::table('workspace_user')->updateOrInsert(
+                    ['workspace_id' => $ws->id, 'user_id' => $ws->owner_user_id],
+                    ['role' => 'owner', 'joined_at' => now(), 'updated_at' => now(), 'created_at' => now()]
+                );
+                $newOwner = User::find($ws->owner_user_id);
+                if ($newOwner && !$newOwner->current_workspace_id) {
+                    $newOwner->update(['current_workspace_id' => $ws->id]);
+                }
+            }
+            // Downgrade the previous owner to admin (keep their access, drop
+            // ownership) rather than detach, so they don't silently lose the workspace.
+            if ($previousOwner) {
+                \Illuminate\Support\Facades\DB::table('workspace_user')
+                    ->where('workspace_id', $ws->id)->where('user_id', $previousOwner)
+                    ->update(['role' => 'admin', 'updated_at' => now()]);
+            }
+        }
+
         // Granting a plan from admin must ACTIVATE it, not just record it.
         //
         // Setting `plan` alone left `trial_ends_at` in the past and
@@ -434,6 +512,12 @@ class WorkspacesController extends Controller
             ])->save();
         }
 
+        // Optional logo replacement — same handling as store().
+        if ($request->hasFile('logo')) {
+            $request->validate(['logo' => 'image|mimes:png,jpg,jpeg,svg,webp|max:2048']);
+            $ws->update(['brand_logo_path' => $request->file('logo')->store('workspace-logos', 'public')]);
+        }
+
         Audit::log('admin.workspace.updated', [
             'resource' => $ws,
             'meta'     => [
@@ -454,6 +538,70 @@ class WorkspacesController extends Controller
         return redirect()->route('admin.workspaces.index')->with('success', 'Workspace moved to trash.');
     }
 
+    /** Trashed-workspaces listing — makes the promised "recoverable" state real (#21). */
+    public function trash(\Illuminate\Http\Request $request): \Illuminate\View\View
+    {
+        $filter = (string) $request->query('filter', 'all');
+        $q      = trim((string) $request->query('q', ''));
+
+        $base = Workspace::onlyTrashed()->orderByDesc('deleted_at');
+        if ($q !== '') {
+            $base->where(fn ($x) => $x->where('name', 'like', "%{$q}%")->orWhere('slug', 'like', "%{$q}%"));
+        }
+        if ($filter === 'recent') {
+            $base->where('deleted_at', '>=', now()->subDays(7));
+        } elseif ($filter === 'expiring') {
+            // Trashed > 23 days ago → < 7 days until auto-delete.
+            $base->where('deleted_at', '<=', now()->subDays(23));
+        }
+        $workspaces = $base->paginate(12)->withQueryString();
+
+        // Owners for the rows (soft-deleted workspaces keep owner_user_id).
+        $owners = \App\Models\User::whereIn('id', $workspaces->pluck('owner_user_id')->filter()->all())
+            ->get(['id', 'name', 'email'])->keyBy('id');
+
+        $kpi = [
+            'total'    => Workspace::onlyTrashed()->count(),
+            'recent'   => Workspace::onlyTrashed()->where('deleted_at', '>=', now()->subDays(7))->count(),
+            'expiring' => Workspace::onlyTrashed()->where('deleted_at', '<=', now()->subDays(23))->count(),
+        ];
+
+        return view('admin.workspaces.trash', compact('workspaces', 'owners', 'kpi', 'filter', 'q'));
+    }
+
+    /** Restore a soft-deleted workspace. */
+    public function restore(string $id): RedirectResponse
+    {
+        $ws = Workspace::onlyTrashed()->findOrFail($id);
+        $ws->restore();
+        Audit::log('admin.workspace.restored', ['resource' => $ws, 'meta' => ['name' => $ws->name]]);
+        return redirect()->route('admin.workspaces.detail', $ws->id)->with('success', 'Workspace restored.');
+    }
+
+    /** Permanently delete a trashed workspace (no further recovery). */
+    public function forceDelete(string $id): RedirectResponse
+    {
+        $ws = Workspace::onlyTrashed()->findOrFail($id);
+        $snapshot = ['id' => $ws->id, 'name' => $ws->name, 'slug' => $ws->slug];
+        $ws->forceDelete();
+        Audit::log('admin.workspace.force_deleted', ['meta' => $snapshot]);
+        return redirect()->route('admin.workspaces.trash')->with('success', 'Workspace permanently deleted.');
+    }
+
+    /** Permanently delete every trashed workspace past the 30-day grace window. */
+    public function emptyTrash(): RedirectResponse
+    {
+        $expired = Workspace::onlyTrashed()->where('deleted_at', '<', now()->subDays(30))->get();
+        $count = $expired->count();
+        foreach ($expired as $ws) {
+            $ws->forceDelete();
+        }
+        Audit::log('admin.workspace.empty_trash', ['meta' => ['count' => $count]]);
+        return back()->with('success', $count > 0
+            ? "Permanently deleted {$count} expired workspaces (older than 30 days)."
+            : 'Nothing to empty — no trashed workspaces are past the 30-day grace window.');
+    }
+
     public function toggleStatus(string $id): RedirectResponse
     {
         $ws = Workspace::findOrFail($id);
@@ -463,6 +611,73 @@ class WorkspacesController extends Controller
             'resource' => $ws,
         ]);
         return back()->with('success', $ws->status ? 'Workspace reactivated.' : 'Workspace suspended.');
+    }
+
+    /**
+     * DNS-verify the workspace's custom domain (Phase 1 white-label). Mirrors the
+     * storefront domain check: look up the CNAME and confirm it points at our
+     * platform host, then flip cname_verified. Once verified, the public host
+     * resolver (StorefrontPublicController::resolveStorefront) serves THIS
+     * workspace's store on that domain — scoped to the host, never the platform.
+     */
+    public function verifyDomain(string $id): RedirectResponse
+    {
+        $ws = Workspace::findOrFail($id);
+        if (! $ws->custom_domain) {
+            return back()->with('error', 'No custom domain set for this workspace.');
+        }
+
+        $expected = config('storefront.cname_target', parse_url(config('app.url'), PHP_URL_HOST) ?: 'localhost');
+        $matched  = false;
+
+        // 1. CNAME → our platform host. Used for sub-domains (e.g. shop.brand.com),
+        //    where a CNAME is allowed.
+        foreach (@dns_get_record($ws->custom_domain, DNS_CNAME) ?: [] as $r) {
+            if (isset($r['target']) && stripos($r['target'], (string) $expected) !== false) {
+                $matched = true;
+                break;
+            }
+        }
+
+        // 2. A record → our platform IP. Root/apex domains cannot use a CNAME, so
+        //    the setup panel also offers an A record pointing at our server's IP
+        //    (gethostbyname of the platform host). Accept the domain when any of
+        //    its A records resolves to that same IP — otherwise A-record setups
+        //    (which the panel explicitly instructs) could never verify.
+        if (! $matched) {
+            $platformIp  = @gethostbyname((string) $expected);
+            $expectedIps = ($platformIp && $platformIp !== $expected) ? [$platformIp] : [];
+            $extraIp     = trim((string) config('storefront.a_target', ''));
+            if ($extraIp !== '') {
+                $expectedIps[] = $extraIp;
+            }
+            if ($expectedIps) {
+                foreach (@dns_get_record($ws->custom_domain, DNS_A) ?: [] as $r) {
+                    if (isset($r['ip']) && in_array($r['ip'], $expectedIps, true)) {
+                        $matched = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        $ws->cname_verified = $matched;
+        $ws->save();
+
+        Audit::log('admin.workspace.domain_verify', [
+            'resource' => $ws,
+            'meta'     => ['domain' => $ws->custom_domain, 'verified' => $matched],
+        ]);
+
+        $aTarget = @gethostbyname((string) $expected);
+        $aHint   = ($aTarget && $aTarget !== $expected) ? ' or an A record → ' . $aTarget : '';
+
+        return back()->with(
+            $matched ? 'success' : 'error',
+            $matched
+                ? 'Domain verified — it now serves on ' . $ws->custom_domain . '.'
+                : 'DNS not pointing here yet. Point ' . $ws->custom_domain . ' → ' . $expected . ' (CNAME)' . $aHint . ', then verify again.'
+        );
     }
 
     private function validatePayload(Request $request, ?int $wsId = null): array

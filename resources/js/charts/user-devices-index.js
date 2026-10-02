@@ -20,6 +20,7 @@ import 'intl-tel-input/styles';
 // Local QR renderer — no external service. Node returns the raw
 // WhatsApp pairing string; we draw it to a data URL in-browser.
 import QRCode from 'qrcode';
+import { createPoller } from '../lib/poller.js';
 // /devices is the unified provider-connection hub. The shared connect
 // JS (used by /connect?platform=wa-store too) is loaded here so the
 // WABA Embedded Signup, Baileys QR, and Twilio form all work on this
@@ -115,7 +116,21 @@ function applyCounts(counts, totals) {
 // "/devices" that would bounce the user off a "/public" install.
 const DEVICES_PATH = (window.location.pathname.replace(/\/+$/, '') || '/devices');
 
-async function fetchPartial(state) {
+// Fingerprint of the device set currently painted. Sent back on each poll so
+// the server can answer "nothing changed" without rebuilding the partial. The
+// server folds the active filters INTO the fingerprint, so a filter change
+// simply produces a different one and falls through to a full render — there
+// is nothing to reset here.
+let lastPartialSig = '';
+
+/**
+ * @param {object}  state
+ * @param {boolean} background  true for the silent status loop. Background
+ *        polls send the fingerprint and never dim the list; a user-initiated
+ *        fetch (filter, search, page) always repaints and shows the dim state,
+ *        because the operator just asked for it and expects feedback.
+ */
+async function fetchPartial(state, background = false) {
     const params = new URLSearchParams();
     if (state.status !== 'all') params.append('status', state.status);
     if (state.region !== 'all') params.append('region', state.region);
@@ -125,14 +140,28 @@ async function fetchPartial(state) {
     history.pushState({}, '', visible);
 
     params.append('partial', '1');
+    // Echo the fingerprint of what we already hold. When the workspace has not
+    // changed the server answers {unchanged:true} without touching the DB rows,
+    // decrypting them or rendering any Blade — an idle page then costs one
+    // aggregate query instead of a full re-render.
+    if (background && lastPartialSig) params.append('sig', lastPartialSig);
     const list = $('devices-list');
-    if (list) list.classList.add('opacity-60');
+    // Only dim when the operator asked for this. Dimming on every background
+    // poll made the whole table flicker every few seconds.
+    if (list && !background) list.classList.add('opacity-60');
     try {
         const res = await fetch(DEVICES_PATH + '?' + params.toString(), {
             headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
+        // Nothing moved — leave the DOM exactly as it is. No repaint, no
+        // scroll jump, no flicker.
+        if (data.unchanged) {
+            lastPartialSig = data.sig || lastPartialSig;
+            return;
+        }
+        if (data.sig) lastPartialSig = data.sig;
         if (list) list.innerHTML = data.cards;
         applyCounts(data.counts, data.totals);
         const totalCount = Number(data.total ?? 0);
@@ -501,36 +530,63 @@ async function checkStatus() {
  * clicking anything. Skipped while the connect modal is open (you
  * don't want the row to flip while you're pairing).
  */
-let bgStatusTimer = null;
+// Shared poller — gives this loop the in-flight guard, hidden-tab pause and
+// idle backoff for free. `shouldSkip` covers the one page-specific rule: never
+// refresh while the operator is mid-pair, or the row flips under them.
+const statusPoller = createPoller(silentStatusRefresh, {
+    interval: 10000,
+    maxInterval: 120000,
+    shouldSkip: () => !!connectActiveId,
+});
+
+/**
+ * Size the cadence to the workspace, using what the server just told us.
+ *
+ * `total` is how many numbers this workspace has; `degraded` means the bridge
+ * has no bulk endpoint so the server is only sampling a slice per cycle. A
+ * degraded sweep is cheap per call but needs several cycles to cover everyone,
+ * so there is no point hammering it either. 6 sweeps a minute is right for 5
+ * numbers and pointless for 200.
+ */
+function tuneStatusInterval(meta) {
+    const total = Number(meta?.total || 0);
+    let ms = 10000;                 // < 25 numbers — snappy
+    if (total >= 100) ms = 60000;   // 100+        — once a minute is plenty
+    else if (total >= 25) ms = 30000;
+    if (meta?.degraded && ms < 30000) ms = 30000;
+    statusPoller.setBase(ms, Math.max(ms * 2, 120000));
+}
+
+/**
+ * @returns {Promise<boolean>} true when a device actually changed state, so the
+ * poller keeps the fast cadence while anything is moving and relaxes when the
+ * fleet is settled.
+ */
 async function silentStatusRefresh() {
-    if (connectActiveId) return; // mid-pair — leave UI alone
-    if (document.hidden) return; // tab in background — save the bridge a call
     try {
         const res = await fetch(DEVICES_PATH + '/check', {
             method: 'POST',
             headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': getCsrf() },
         });
-        if (!res.ok) return;
-        await res.json();
-        await fetchPartial(readState());
+        if (!res.ok) return false;
+        const meta = await res.json();
+        tuneStatusInterval(meta);
+        await fetchPartial(readState(), true);   // background — fingerprinted, no dim
+        // `reset` counts rows demoted to disconnected this cycle. Anything
+        // non-zero means the fleet is still settling — stay responsive.
+        return Number(meta?.reset || 0) > 0;
     } catch (e) {
         // Silent — this is a background loop. If the bridge is down,
         // /devices/check itself marks rows disconnected; fetchPartial
         // will then render the truth.
+        return false;
     }
 }
 
 function startBackgroundStatusLoop() {
-    if (bgStatusTimer) clearInterval(bgStatusTimer);
-    // Fire once on load so the badge is correct before the operator
-    // can even read the header. Then every 10s.
-    silentStatusRefresh();
-    bgStatusTimer = setInterval(silentStatusRefresh, 10000);
-    // Pause when the tab is hidden (saves the Node bridge ~6 calls/min
-    // per inactive tab) and resume on focus.
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) silentStatusRefresh();
-    });
+    // Runs once immediately so the badge is correct before the operator can
+    // even read the header, then settles into a cadence sized to the workspace.
+    statusPoller.start();
 }
 
 /**
@@ -655,7 +711,9 @@ function wireAddModal() {
     // proxies to Node's /api/initialize-client/<phone>.
     const form = $('device-form');
     if (form) {
-        form.addEventListener('submit', async (e) => {
+    
+
+    form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const submitBtn = form.querySelector('button[type=submit]');
             const origLabel = submitBtn?.innerHTML;
@@ -916,6 +974,33 @@ function wireFacebookConnect() {
     }
 }
 
+/* ---- Instagram (native add-on) manual-token connect modal ----
+ * Opened by [data-instagram-native-connect]. The paste-token form is always
+ * visible (no OAuth, no toggle). No-op when the modal isn't on the page.
+ */
+function wireInstagramNativeConnect() {
+    const modal = $('instagram-native-modal');
+    if (!modal) return;
+    const open  = () => {
+        const chooser = $('add-device-chooser');
+        if (chooser) { chooser.classList.add('hidden'); chooser.classList.remove('flex'); }
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    };
+    const close = () => { modal.classList.add('hidden'); modal.classList.remove('flex'); };
+
+    document.querySelectorAll('[data-instagram-native-connect]').forEach((b) =>
+        b.addEventListener('click', (e) => { e.preventDefault(); open(); }));
+    modal.querySelectorAll('[data-ig-modal-close]').forEach((b) =>
+        b.addEventListener('click', close));
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+    });
+
+    if (modal.dataset.igOpenOnLoad === '1') open();
+}
+
 /* ---- Plan-limit pre-flight gate ----
  * Block opening ANY connect popup (WABA Embedded Signup, Baileys QR, Twilio,
  * the add-device chooser) when the workspace is already at its WhatsApp-number
@@ -978,6 +1063,7 @@ export default function init() {
     wireAddChooser();
     wireTwilioModal();
     wireFacebookConnect();
+    wireInstagramNativeConnect();
     wireAddModal();
     wireConnectModal();
     wireRowActions();
@@ -1096,6 +1182,18 @@ export default function init() {
         let fbReady = false;
         const appId    = baseBtn.dataset.appId;
         const configId = baseBtn.dataset.configId;
+        // Embedded Signup version. Meta deprecates v2 on 15 Oct 2026; v4 moves
+        // EVERY product / asset / permission / feature choice into the Facebook
+        // Login for Business configuration, so its extras object is deliberately
+        // EMPTY. Defaults to v2 so an install that has not yet built a v4
+        // configuration keeps working exactly as before.
+        const esVersion = (baseBtn.dataset.esVersion || 'v2').toLowerCase();
+        const isV4      = esVersion === 'v4';
+        // v2 selects coexistence at CALL time (featureType), so one Config ID
+        // serves both buttons. v4 selects it in the CONFIGURATION, so the
+        // coexistence button needs its own Config ID; falls back to the main one
+        // when the admin has not created a separate coexistence configuration.
+        const coexConfigId = baseBtn.dataset.coexConfigId || '';
         // Graph/SDK version from the admin "Graph API version" setting
         // (data-graph-version) so the embedded-signup dialog matches the
         // server-side REST version instead of a hardcoded one.
@@ -1235,20 +1333,26 @@ export default function init() {
                         console.warn('[WABA-embedded] FB.login cancelled or denied', response);
                     }
                 }, {
-                    config_id: configId,
+                    config_id: (isV4 && coexMode && coexConfigId) ? coexConfigId : configId,
                     response_type: 'code',
                     override_default_response_type: true,
-                    // sessionInfoVersion: '3' is REQUIRED for ES in 2026.
-                    // Without it, Meta's postMessage payload defaults to
-                    // the legacy v1 shape and waba_id won't be populated.
-                    // featureType 'whatsapp_business_app_onboarding' launches
-                    // Meta's Coexistence flow (link an existing Business App
-                    // number; app keeps working, Cloud API + webhooks run too).
+                    // EXTRAS ARE VERSION-SPECIFIC — EXCEPT featureType.
+                    //
+                    // Meta's official spec (Embedded Signup › Onboarding Business
+                    // App users): "featureType: 'whatsapp_business_app_onboarding'
+                    // MUST be passed in extras for the Coexistence screen to
+                    // appear, EVEN on a v4 configuration that has Coexistence
+                    // enabled." So featureType is sent on EVERY coexistence launch
+                    // regardless of version — omitting it on v4 (as before) makes
+                    // the coex button silently open the normal new-number flow.
+                    //
+                    // The version-only keys stay gated: v4 carries products/assets/
+                    // permissions in the Login-for-Business configuration, so its
+                    // base extras are empty; v2 (legacy, deprecated 8 Oct 2026)
+                    // still needs setup:{} + sessionInfoVersion:'3' so waba_id comes
+                    // back in the postMessage.
                     extras: {
-                        // setup:{} is the empty default Meta documents in every
-                        // ES example (a partner Solution ID would go in here).
-                        setup: {},
-                        sessionInfoVersion: '3',
+                        ...(isV4 ? {} : { setup: {}, sessionInfoVersion: '3' }),
                         ...(coexMode ? { featureType: 'whatsapp_business_app_onboarding' } : {}),
                     },
                 });

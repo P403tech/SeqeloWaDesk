@@ -72,12 +72,76 @@
                     class="text-[11px] text-ink-500">{{ __('Use a permanent System User token (never expires) for production. 24-hour tokens work but stop sending tomorrow.') }}</span>
             </label>
 
+            {{-- Bring-your-own Meta app credentials. Optional: leave blank to use the
+                 platform's configured app. Fill them in when this number lives under
+                 the customer's OWN Meta app — the App Secret lets us verify the
+                 X-Hub-Signature on that app's inbound webhooks, and the App ID is kept
+                 for reference. Stored encrypted per-connection (creds()). --}}
+            <div class="rounded-xl border border-paper-200 bg-paper-50/60 p-3 space-y-3">
+                <div class="text-[11px] font-semibold text-ink-700">{{ __('Using your own Meta app?') }}
+                    <span class="text-ink-500 font-normal">{{ __('(optional — leave blank to use the platform app)') }}</span>
+                </div>
+                <label class="block space-y-1.5">
+                    <span class="text-[11.5px] font-semibold">{{ __('Meta App ID') }}</span>
+                    <input name="app_id" maxlength="64" placeholder="e.g. 1486133033552760"
+                        class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
+                </label>
+                <label class="block space-y-1.5">
+                    <span class="text-[11.5px] font-semibold">{{ __('Meta App Secret') }}</span>
+                    <input type="password" name="app_secret" maxlength="128" autocomplete="new-password"
+                        placeholder="{{ __('from App Dashboard → Settings → Basic') }}"
+                        class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
+                    <span class="text-[11px] text-ink-500">{{ __('Needed so incoming messages from your own app are verified and delivered to your inbox.') }}</span>
+                </label>
+            </div>
+
             <label class="block space-y-1.5">
                 <span class="text-[11.5px] font-semibold">{{ __('Display label') }} <span
                         class="text-ink-500 font-normal">(optional)</span></span>
                 <input name="display_label" maxlength="120" placeholder="{{ __('auto-populates with verified name') }}"
                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
             </label>
+
+            {{-- Bring-your-own-app webhook wiring. When the number is on the
+                 customer's OWN Meta app, our automatic callback override can't force
+                 Meta to route its messages to us unless the app itself has the
+                 "messages" field subscribed. So we surface the Callback URL + Verify
+                 token here: paste them into the app's own webhook config and inbound
+                 starts flowing. Same values/pattern as the WABA Health page. Verify
+                 token auto-provisions on first use, so it's normally present. --}}
+            @php
+                $__cbUrl     = url('/webhooks/whatsapp/inbound');
+                // Mirror DevicesController::wabaWebhookVerifyToken() — auto-provision
+                // on first render so the token ALWAYS shows here (never overwrites an
+                // existing value; existing subscriptions already passed its challenge).
+                $__verifyTok = (string) \App\Models\SystemSetting::get('waba_webhook_verify_token', '');
+                if ($__verifyTok === '') {
+                    $__verifyTok = \Illuminate\Support\Str::random(40);
+                    \App\Models\SystemSetting::set('waba_webhook_verify_token', $__verifyTok, 'string', 'Webhook verify token Meta echoes on subscription (auto-generated).');
+                }
+            @endphp
+            <div class="rounded-xl border border-paper-200 bg-paper-50 p-3.5 space-y-2.5">
+                <div class="text-[11px] font-semibold text-ink-700">{{ __('Own-app webhook (set this in your Meta app)') }}</div>
+                <p class="text-[11px] text-ink-500 leading-snug">{{ __('If you pasted your own App ID / Secret above, also open your Meta App Dashboard → WhatsApp → Configuration, set the Callback URL and Verify token below, and subscribe the "messages" field. Otherwise you can skip this.') }}</p>
+                <div>
+                    <div class="text-[9.5px] font-mono uppercase tracking-wide text-ink-500 mb-0.5">{{ __('Callback URL') }}</div>
+                    <div class="flex items-center gap-1.5">
+                        <code class="flex-1 bg-paper-0 border border-paper-200 rounded px-2 py-1 text-[11px] break-all select-all">{{ $__cbUrl }}</code>
+                        <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText('{{ $__cbUrl }}')" class="shrink-0 px-2 py-1 rounded border border-paper-200 hover:border-wa-deep text-[11px] text-ink-600">{{ __('Copy') }}</button>
+                    </div>
+                </div>
+                @if ($__verifyTok !== '')
+                <div>
+                    <div class="text-[9.5px] font-mono uppercase tracking-wide text-ink-500 mb-0.5">{{ __('Verify token') }}</div>
+                    <div class="flex items-center gap-1.5">
+                        <code class="flex-1 bg-paper-0 border border-paper-200 rounded px-2 py-1 text-[11px] break-all select-all">{{ $__verifyTok }}</code>
+                        <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText('{{ $__verifyTok }}')" class="shrink-0 px-2 py-1 rounded border border-paper-200 hover:border-wa-deep text-[11px] text-ink-600">{{ __('Copy') }}</button>
+                    </div>
+                </div>
+                @else
+                <p class="text-[10.5px] text-ink-500">{{ __('Verify token not set yet — ask your administrator to configure it, or it auto-generates on first connect.') }}</p>
+                @endif
+            </div>
 
             {{-- Verify-token self-check: tests the pasted token LIVE (validity,
                  scopes, WABA + template read) BEFORE saving, so a broken token is
@@ -134,6 +198,8 @@
                 <button id="waba-launch-embedded-signup" type="button" data-app-id="{{ $wabaAppId ?? '' }}"
                     data-config-id="{{ $embeddedSignupConfigId ?? '' }}"
                     data-graph-version="{{ \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0') }}"
+                    data-es-version="{{ $embeddedSignupVersion ?? 'v2' }}"
+                    data-coex-config-id="{{ $embeddedSignupCoexConfigId ?? '' }}"
                     class="w-full px-4 py-3 rounded-xl bg-[#1877F2] hover:bg-[#0E60D4] text-white text-[14px] font-semibold inline-flex items-center justify-center gap-2">
                     <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor">
                         <path
@@ -155,6 +221,8 @@
                     <button id="waba-launch-embedded-coex" type="button" data-app-id="{{ $wabaAppId ?? '' }}"
                         data-config-id="{{ $embeddedSignupConfigId ?? '' }}"
                         data-graph-version="{{ \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0') }}"
+                    data-es-version="{{ $embeddedSignupVersion ?? 'v2' }}"
+                    data-coex-config-id="{{ $embeddedSignupCoexConfigId ?? '' }}"
                         class="w-full px-4 py-3 rounded-xl border-2 border-[#1877F2] text-[#1877F2] hover:bg-[#1877F2]/5 text-[14px] font-semibold inline-flex items-center justify-center gap-2">
                         <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5">
                             <rect x="2.3" y="2.3" width="4.4" height="4.4" rx="1" />

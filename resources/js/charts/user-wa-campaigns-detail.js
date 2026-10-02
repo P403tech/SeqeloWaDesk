@@ -1,5 +1,6 @@
 import ApexCharts from 'apexcharts';
 import { themeColor } from '../theme-colors.js';
+import { createPoller } from '../lib/poller.js';
 
 export default function init() {
     // -----------------------------------------------------------------
@@ -358,16 +359,14 @@ export default function init() {
       }
 
       const POLL_MS = 15_000;
-      let pollHandle = setInterval(() => {
-          if (document.hidden) return;
-          fetchStats();
-      }, POLL_MS);
-      document.addEventListener('visibilitychange', () => {
-          if (!document.hidden) fetchStats();
+      // Shared poller — overlap guard, hidden-tab pause (it fires immediately
+      // on return, which is what the old visibilitychange listener did), and a
+      // widening gap once the campaign's numbers stop moving.
+      const poller = createPoller(async () => { await fetchStats(); return false; }, {
+          interval: POLL_MS, maxInterval: 90_000,
       });
-      window.addEventListener('pagehide', () => {
-          if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
-      });
+      poller.start();
+      window.addEventListener('pagehide', () => poller.stop());
 
       // Message-log filter — hide recipient rows that don't match the
       // name / phone typed into the search box (client-side, instant).

@@ -458,7 +458,7 @@ export const sendMediaOnly = async (req, res, app) => {
 export const sendMediaMessage = async (req, res, app) => {
   const startTime = Date.now();
   const senderPhoneNumber = req.params.phoneNumber;
-  const { targetPhoneNumber, file, file_base64, filetype = "image/png", fileName, caption = "", buttons = [], footer = "" } = req.body.json || req.body;
+  const { targetPhoneNumber, targetJid, file, file_base64, filetype = "image/png", fileName, caption = "", buttons = [], footer = "" } = req.body.json || req.body;
   const appDomainName = process.env.APP_DOMAIN_NAME || "http://localhost:8000";
 
   console.log(`[NODE-MEDIA] ========== SEND MEDIA MESSAGE START ==========`);
@@ -559,7 +559,14 @@ export const sendMediaMessage = async (req, res, app) => {
       return res.status(404).json({ error: "CLIENT NOT FOUND" });
     }
     console.log(`[NODE-MEDIA] Client found, formatting number...`);
-    const jid = formatPhoneNumber(targetPhoneNumber);
+    // Prefer the explicit JID Laravel sends. formatPhoneNumber() strips every
+    // non-digit and appends @s.whatsapp.net, so a group target
+    // (120363…@g.us) became 120363…@s.whatsapp.net — a fabricated USER
+    // account — and the media silently went nowhere. Same rule the text
+    // sender already applies.
+    const jid = (targetJid && (targetJid.includes('@g.us') || targetJid.includes('@lid') || targetJid.includes('@s.whatsapp.net')))
+      ? targetJid
+      : formatPhoneNumber(targetPhoneNumber);
     console.log(`[NODE-MEDIA] Formatted number: ${jid}`);
     let buffer;
     let detectedMime = null; // the REAL mimetype the download/extension resolved
@@ -750,6 +757,7 @@ export const sendProductCatalog = async (req, res, app) => {
   const senderPhoneNumber = req.params.phoneNumber;
   const {
     targetPhoneNumber,
+    targetJid,
     products = [],
     type = 'multi',        // 'single', 'multi', or 'catalog'
     header_text = '',
@@ -844,7 +852,12 @@ export const sendProductCatalog = async (req, res, app) => {
       return res.status(404).send({ error: "CLIENT NOT FOUND" });
     }
 
-    const finalNumber = formatPhoneNumber(targetPhoneNumber);
+    // Honour an explicit JID (group / LID) for the same reason as the media
+    // sender — otherwise a catalog sent to a group is addressed to a
+    // non-existent user built from the group's digits.
+    const finalNumber = (targetJid && (targetJid.includes('@g.us') || targetJid.includes('@lid') || targetJid.includes('@s.whatsapp.net')))
+      ? targetJid
+      : formatPhoneNumber(targetPhoneNumber);
 
     if (!products || products.length === 0) {
       return res.status(400).send({ success: false, error: "No products provided for carousel" });

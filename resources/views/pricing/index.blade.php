@@ -1,6 +1,6 @@
 <x-layouts.user :title="__('Pricing')" nav-key="more" page="pricing-index">
 
-    <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-10 max-w-[1240px]">
+    <main class="mx-auto px-4 sm:px-6 lg:px-7 py-10 max-w-[1240px]">
 
         {{-- Hero --}}
         <div class="text-center mb-8">

@@ -7,6 +7,19 @@
         && (bool) \App\Models\SystemSetting::get('sms_enabled', false)
         && \App\Models\WaProviderConfig::query()->forWorkspace($__campWsId)->connected()->where('provider', 'sms')->exists();
 
+    // Email campaigns ride the same builder (a linked mailbox is just a sender).
+    // hasConnected() checks BOTH the live bridge and a connected mirror row, so a
+    // disconnected bridge takes the card away on the next render. The plan flag
+    // gates it too — the same one WorkspaceEngine::senders and the runner check,
+    // so a plan without Email can't reach the builder from here either.
+    $emailCampaign = $__campWsId > 0
+        && (bool) \App\Models\SystemSetting::get('email_enabled', false)
+        && \App\Services\PlanLimitGuard::hasFeature(auth()->user()?->currentWorkspace, 'access_email')
+        && \App\Models\WorkspaceEmailAccount::hasConnected($__campWsId);
+
+    // Any non-WhatsApp channel connected => "New campaign" opens the chooser.
+    $campChannelPicker = $smsCampaign || $emailCampaign;
+
     $stats = $stats ?? [
         'total' => 0,
         'queued' => 0,
@@ -178,7 +191,7 @@
                             </svg>
                             Refresh
                         </button>
-                        @if ($smsCampaign)
+                        @if ($campChannelPicker)
                             <button type="button" onclick="document.getElementById('camp-channel-modal').classList.remove('hidden')"
                                 class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
                                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10" /></svg>
@@ -193,9 +206,10 @@
                         @endif
                     </div>
 
-                    @if ($smsCampaign)
+                    @if ($campChannelPicker)
                         {{-- Channel chooser — WhatsApp (template/text to phone contacts)
-                             vs SMS (Twilio / MSG91 text). Same builder, SMS is a sender. --}}
+                             vs SMS (Twilio / MSG91 text) vs Email (a linked mailbox).
+                             Same builder every time; the channel is just a sender. --}}
                         <div id="camp-channel-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink-900/40"
                             onclick="if(event.target===this)this.classList.add('hidden')">
                             <div class="bg-paper-0 rounded-2xl shadow-soft border border-paper-200 max-w-xl w-full overflow-hidden">
@@ -220,16 +234,30 @@
                                         <div class="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-wa-deep group-hover:gap-2 transition-all">{{ __('Create WhatsApp campaign') }}
                                             <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4l4 4-4 4" /></svg></div>
                                     </a>
-                                    <a href="{{ route('user.wa-campaigns.create', ['channel' => 'sms']) }}"
-                                        class="group block border border-paper-200 rounded-xl p-4 hover:border-wa-deep hover:bg-wa-bubble/30 transition">
-                                        <div class="w-10 h-10 rounded-lg grid place-items-center mb-3 bg-wa-deep text-paper-0">
-                                            <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h12v7H8l-3 2.5V11.5H2z" /></svg>
-                                        </div>
-                                        <div class="font-serif text-[18px] leading-tight">{{ __('SMS') }}</div>
-                                        <p class="text-[11.5px] text-ink-600 mt-1.5 leading-relaxed">{{ __('Text your contacts via a connected Twilio or MSG91 number — no template approval.') }}</p>
-                                        <div class="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-wa-deep group-hover:gap-2 transition-all">{{ __('Create SMS campaign') }}
-                                            <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4l4 4-4 4" /></svg></div>
-                                    </a>
+                                    @if ($smsCampaign)
+                                        <a href="{{ route('user.wa-campaigns.create', ['channel' => 'sms']) }}"
+                                            class="group block border border-paper-200 rounded-xl p-4 hover:border-wa-deep hover:bg-wa-bubble/30 transition">
+                                            <div class="w-10 h-10 rounded-lg grid place-items-center mb-3 bg-wa-deep text-paper-0">
+                                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h12v7H8l-3 2.5V11.5H2z" /></svg>
+                                            </div>
+                                            <div class="font-serif text-[18px] leading-tight">{{ __('SMS') }}</div>
+                                            <p class="text-[11.5px] text-ink-600 mt-1.5 leading-relaxed">{{ __('Text your contacts via a connected Twilio or MSG91 number — no template approval.') }}</p>
+                                            <div class="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-wa-deep group-hover:gap-2 transition-all">{{ __('Create SMS campaign') }}
+                                                <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4l4 4-4 4" /></svg></div>
+                                        </a>
+                                    @endif
+                                    @if ($emailCampaign)
+                                        <a href="{{ route('user.wa-campaigns.create', ['channel' => 'email']) }}"
+                                            class="group block border border-paper-200 rounded-xl p-4 hover:border-wa-deep hover:bg-wa-bubble/30 transition">
+                                            <div class="w-10 h-10 rounded-lg grid place-items-center mb-3 bg-wa-mint text-wa-deep">
+                                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3.5" width="12" height="9" rx="1.5" /><path d="m2.5 5.5 5.5 4 5.5-4" /></svg>
+                                            </div>
+                                            <div class="font-serif text-[18px] leading-tight">{{ __('Email') }}</div>
+                                            <p class="text-[11.5px] text-ink-600 mt-1.5 leading-relaxed">{{ __('Write once and send from a linked mailbox to every contact with an email address.') }}</p>
+                                            <div class="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-wa-deep group-hover:gap-2 transition-all">{{ __('Create email campaign') }}
+                                                <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4l4 4-4 4" /></svg></div>
+                                        </a>
+                                    @endif
                                 </div>
                             </div>
                         </div>

@@ -29,12 +29,12 @@
         <h2 class="serif text-[44px] sm:text-[64px] lg:text-[88px] leading-[0.92] tracking-[-0.02em] mb-3 reveal" data-fc="feature-inbox.headline">
             {!! fc(
                 'feature-inbox.headline',
-                __('Slack-fast.') . '<br>' . __('For') . ' <span class="italic text-wa-deep">WhatsApp</span>.',
+                __('Slack-fast.') . '<br>' . __('For') . ' <span class="italic text-wa-deep">' . __('every channel') . '</span>.',
             ) !!}
         </h2>
         <p class="text-[15.5px] text-ink-700 max-w-2xl leading-relaxed reveal" style="--d:120ms"
             data-fc="feature-inbox.body">
-            {{ fc('feature-inbox.body', __("A shared inbox your agents won't quit over. Assign, escalate, snooze, resolve. Customer history, order data, and tags side-by-side. Keyboard-first.")) }}
+            {{ fc('feature-inbox.body', __("One shared inbox for WhatsApp, Instagram, Facebook, Telegram, TikTok and SMS — your agents won't quit over it. Assign, escalate, snooze, resolve. Customer history, order data, and tags side-by-side. Keyboard-first.")) }}
         </p>
 
         {{-- inbox layout --}}

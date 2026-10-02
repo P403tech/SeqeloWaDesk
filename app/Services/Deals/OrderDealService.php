@@ -61,7 +61,7 @@ class OrderDealService
         $digits = preg_replace('/\D+/', '', $phone);
         if ($digits === '' || !$workspaceId) return null;
         $contact = Contact::where('workspace_id', $workspaceId)->get()->first(function ($c) use ($digits) {
-            $stored = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
+            $stored = Contact::canonicalizePhone($c->country_code, $c->mobile);
             return $stored !== '' && $stored === $digits;
         });
         return $contact?->id;

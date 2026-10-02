@@ -35,7 +35,9 @@ class ExtensionService
     /** Never let an add-on overwrite these — that is an update's job, not an add-on's. */
     private const PROTECTED_PATHS = [
         '.env', 'composer.json', 'composer.lock',
-        'config/license.php', 'config/version.php',
+        // license.json carries the encrypted Envato token that license.php reads —
+        // protect it alongside, or an add-on could replace the licence material.
+        'config/license.php', 'config/license.json', 'config/version.php',
         'storage', 'vendor', 'node_modules',
     ];
 

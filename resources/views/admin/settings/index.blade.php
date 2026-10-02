@@ -689,6 +689,30 @@
                 </div>
             </a>
 
+            {{-- ─── 18 · Meta Ads — Click-to-WhatsApp fallback keys ─── --}}
+            @php
+                $__maToken = \App\Models\SystemSetting::get('meta_ads.token', '') !== '';
+            @endphp
+            <a href="{{ url('/admin/meta-ads/keys') }}"
+                class="group bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card hover:border-wa-deep transition">
+                <div class="flex items-start justify-between gap-3">
+                    <span class="w-11 h-11 rounded-2xl bg-[#E7F3FF] text-[#1877F2] grid place-items-center"><svg
+                            viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.6">
+                            <path d="M2 6l12-3v10L2 10z" />
+                            <path d="M2 6v4M5 7v4.5" />
+                        </svg></span>
+                    <span class="font-mono text-[10px] text-ink-500">18</span>
+                </div>
+                <h2 class="font-serif text-[24px] leading-tight mt-4">{{ __('Meta Ads') }}</h2>
+                <p class="text-[12.5px] text-ink-600 mt-2">
+                    {{ __('Click-to-WhatsApp fallback keys (System-User token, ad account, page) for workspaces that have not connected their own. Meta Ads is plan-gated (access_ctwa) and publishes automatically.') }}
+                </p>
+                <div class="mt-4 flex items-center justify-between text-[11px] font-mono text-ink-500">
+                    <span>{{ $__maToken ? __('token set') : __('no token') }}</span>
+                    <span class="text-wa-deep group-hover:underline">{{ __('Open') }}</span>
+                </div>
+            </a>
+
         </section>
 
         {{-- Provider toggles moved to /admin/settings/wadesk-message --}}

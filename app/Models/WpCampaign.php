@@ -220,6 +220,12 @@ class WpCampaign extends Model
         return $this->hasMany(WpCampaignContact::class, 'campaign_id');
     }
 
+    /** Follow-up automation rules attached to this campaign. */
+    public function followups(): HasMany
+    {
+        return $this->hasMany(CampaignFollowup::class, 'campaign_id');
+    }
+
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by')->withDefault();

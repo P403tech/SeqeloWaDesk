@@ -4,8 +4,8 @@ namespace App\Http\Controllers\Api\App;
 
 use App\Http\Controllers\Controller;
 use App\Models\Announcement;
+use App\Models\BlogPost;
 use App\Models\ContactCustomField;
-use App\Models\GuidebookArticle;
 use App\Models\LegalPage;
 use App\Models\Notification;
 use App\Models\Package;
@@ -22,8 +22,8 @@ use Illuminate\Http\Request;
  * onto OUR models:
  *
  *   - "Pages" CMS         → App\Models\LegalPage (global, published).
- *   - "Blog" CMS          → App\Models\GuidebookArticle (global, published) —
- *                           our nearest equivalent (we have no `blogs` table).
+ *   - "Blog" CMS          → App\Models\BlogPost (global, published) — the SAME
+ *                           blog_posts table the website blog renders.
  *   - "FAQ" CMS           → App\Models\PricingFaq (global, active).
  *   - "Banner"            → App\Models\Announcement (active marquee) + active
  *                           packages, mirroring the old banner() shape.
@@ -68,39 +68,76 @@ class ContentController extends Controller
     }
 
     /**
-     * GET /blog — published articles (PUBLIC).
-     * Contract: old Api\Main\BlogController::index. Sourced from
-     * guidebook_articles (we have no blogs table).
+     * GET /blog — published blog posts (PUBLIC). Reads the SAME blog_posts
+     * table the website blog renders (App\Models\BlogPost), so the app and the
+     * site always agree. (Previously sourced guidebook_articles — the demo help
+     * content — so the app showed stale seeded articles that didn't match the
+     * real blog.)
      */
     public function blog(Request $request): JsonResponse
     {
         try {
-            $posts = GuidebookArticle::query()
-                ->where('is_published', true)
-                ->orderBy('sort_order')->orderByDesc('published_at')
+            $posts = BlogPost::published()->with('category')
+                ->orderByDesc('published_at')->orderByDesc('id')
                 ->get()
-                ->map(fn (GuidebookArticle $a) => [
-                    'id' => $a->id,
-                    'title' => $a->title,
-                    'slug' => $a->slug,
-                    'category_id' => $a->category,
-                    't_image' => null,
-                    'b_image' => null,
-                    'status' => 1,
-                    'sticky' => 0,
-                    'approved' => 1,
-                    'is_featured' => 0,
-                    'desc' => $a->body,
-                    'excerpt' => $a->excerpt,
-                    'position' => $a->sort_order,
-                    'created_at' => $a->published_at ?: $a->created_at,
-                    'updated_at' => $a->updated_at,
-                ])->values();
+                ->map(fn (BlogPost $p) => $this->blogPostPayload($p))
+                ->values();
 
             return response()->json(['data' => $posts], 200);
         } catch (\Throwable $e) {
             return response()->json(['data' => [], 'error' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * GET /blog/{key} — a single published post by slug OR id (PUBLIC).
+     * Same source + shape as the list, so the app's detail screen matches the
+     * website. Bumps the view counter exactly like the web detail page.
+     */
+    public function blogShow(Request $request, string $key): JsonResponse
+    {
+        try {
+            $post = BlogPost::published()->with('category')
+                ->where(fn ($q) => $q->where('slug', $key)->orWhere('id', (int) $key))
+                ->first();
+            if (! $post) {
+                return response()->json(['data' => null, 'error' => 'not_found'], 404);
+            }
+            // Cheap view counter (no model events), mirrors FrontendController::blogShow.
+            BlogPost::whereKey($post->id)->update(['views' => (int) $post->views + 1]);
+
+            return response()->json(['data' => $this->blogPostPayload($post)], 200);
+        } catch (\Throwable $e) {
+            return response()->json(['data' => null, 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * One blog post → the app's legacy article shape. `category_id` carries the
+     * category NAME (the app renders it as a label, same as before); both image
+     * fields carry the featured image URL via the active media disk.
+     */
+    private function blogPostPayload(BlogPost $p): array
+    {
+        $img = $p->image_url;   // media_url(featured_image) or null
+
+        return [
+            'id'          => $p->id,
+            'title'       => $p->title,
+            'slug'        => $p->slug,
+            'category_id' => $p->category?->name ?? '',
+            't_image'     => $img,
+            'b_image'     => $img,
+            'status'      => 1,
+            'sticky'      => 0,
+            'approved'    => 1,
+            'is_featured' => (int) $p->is_featured,
+            'desc'        => $p->body,
+            'excerpt'     => $p->excerpt,
+            'position'    => 0,
+            'created_at'  => $p->published_at ?: $p->created_at,
+            'updated_at'  => $p->updated_at,
+        ];
     }
 
     /**
@@ -359,13 +396,26 @@ class ContentController extends Controller
                             ->where('direction', 'out')
                             ->where('created_at', '>=', $monthStart)
                             ->count();
-                    // All-time delivered. The old `->where('status', 1)` matched
-                    // NOTHING — Message.status is a string enum, not an int — so
-                    // delivered_count always read 0. Use the real string statuses.
-                    $deliveredCount = \App\Models\Message::query()
-                        ->where('workspace_id', $workspace->id)
-                        ->whereIn('status', ['sent', 'delivered', 'read'])
-                        ->count();
+                    // All-time DELIVERED (outbound). Outbound history is unified
+                    // in `inbox_messages` — every /chat, campaign, broadcast and
+                    // team-inbox send is mirrored there. The `messages` table on
+                    // its own holds only a handful of rows and is EMPTY for most
+                    // workspaces, so a Message-only count read 0 for nearly
+                    // everyone (the reported "always 0"). Count the inbox store
+                    // (scoped via conversation.workspace_id — inbox_messages has
+                    // no workspace_id column) plus any conversation-less `messages`
+                    // rows, which never get mirrored, so there is no double count.
+                    $deliveredCount = \App\Models\InboxMessage::query()
+                            ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $workspace->id))
+                            ->where('direction', 'out')
+                            ->whereIn('status', ['sent', 'delivered', 'read'])
+                            ->count()
+                        + \App\Models\Message::query()
+                            ->where('workspace_id', $workspace->id)
+                            ->whereNull('conversation_id')
+                            ->where('direction', 'out')
+                            ->whereIn('status', ['sent', 'delivered', 'read'])
+                            ->count();
                 }
             } catch (\Throwable $e) { $usedThisMonth = 0; $deliveredCount = 0; }
 
@@ -579,11 +629,13 @@ class ContentController extends Controller
                             if ($k === '' || isset($seen[$k])) continue;
                             $seen[$k] = true;
                             $discovered[] = [
-                                'id'    => 'discovered_' . $k,
+                                'id'    => 'custom_' . $k,
                                 'name'  => ucwords(str_replace(['_', '-'], ' ', $k)),
                                 'key'   => $k,
                                 'value' => null,
-                                'type'  => 'discovered',
+                                // Fold ad-hoc keys found in contact data INTO custom —
+                                // the app only ever sees two groups: fixed + custom.
+                                'type'  => 'custom',
                             ];
                         }
                     });
@@ -602,9 +654,10 @@ class ContentController extends Controller
                 'attributes' => $all,
                 'total'      => count($all),
                 'counts'     => [
-                    'fixed'      => count($fixed),
-                    'custom'     => count($custom),
-                    'discovered' => count($discovered),
+                    'fixed'  => count($fixed),
+                    // Ad-hoc keys discovered in contact data are folded into custom,
+                    // so the app sees exactly two groups: fixed + custom.
+                    'custom' => count($custom) + count($discovered),
                 ],
             ], 200);
         } catch (\Throwable $e) {

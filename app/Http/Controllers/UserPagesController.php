@@ -1922,10 +1922,220 @@ class UserPagesController extends Controller
             }
         }
 
+        // Payment-gateways tab: the merchant's OWN checkout-gateway keys
+        // (wa_merchant_gateways, workspace-level storefront_id=0). Same catalog
+        // + per-driver credential fields the /store/gateways page used — this
+        // is now the single home for those keys (store + booking both read them).
+        $wsIdForGw   = (int) ($user?->current_workspace_id ?? 0);
+        $configured  = \App\Models\WaMerchantGateway::forWorkspace($wsIdForGw)
+            ->where('storefront_id', 0)->get()->keyBy('slug');
+        $catalog     = \App\Services\Payment\PaymentGatewayManager::GATEWAY_META;
+        $fields      = [];
+        foreach (array_keys($catalog) as $gwSlug) {
+            $cls = \App\Services\Payment\PaymentGatewayManager::DRIVER_MAP[$gwSlug] ?? null;
+            $fields[$gwSlug] = ($cls && method_exists($cls, 'credentialFields')) ? $cls::credentialFields() : [];
+        }
+        $webhookBase = rtrim((string) config('app.url'), '/') . '/wa/checkout/webhook/';
+
+        // Custom-domain captcha tab shows ONLY when this workspace has a
+        // connected + verified white-label domain (the platform captcha key is
+        // invalid there, so the owner supplies their own).
+        $domainWs = ($ws && $ws->custom_domain && $ws->cname_verified) ? $ws : null;
+
+        // "Meta app" tab — shown only when the admin has enabled per-workspace
+        // manual Facebook/Instagram app keys.
+        $metaAllowManualApp = (bool) \App\Models\SystemSetting::get('meta_allow_manual_app', false);
+
+        // Current per-workspace app-key state for the "Meta app" pane.
+        $ws = $request->user()?->currentWorkspace;
+        $metaOwnAppId    = (string) ($ws?->meta_app_id ?? '');
+        $metaOwnSecretSet = trim((string) ($ws?->meta_app_secret ?? '')) !== '';
+        $igLoginAppId    = (string) ($ws?->ig_login_app_id ?? '');
+        $igLoginSecretSet = trim((string) ($ws?->ig_login_app_secret ?? '')) !== '';
+        $igOauthRedirect = url('/instagram/callback');
+
         return view('user.settings.index', compact(
             'byokKeys', 'twoFactorSecret', 'otpAuthUrl',
-            'sessions', 'workspaceMembers'
+            'sessions', 'workspaceMembers',
+            'catalog', 'configured', 'fields', 'webhookBase',
+            'domainWs', 'metaAllowManualApp',
+            'metaOwnAppId', 'metaOwnSecretSet', 'igLoginAppId', 'igLoginSecretSet', 'igOauthRedirect'
         ));
+    }
+
+    /**
+     * Save this workspace's OWN Meta app (manual App ID + Secret) for Facebook +
+     * Instagram connect — the client's own app instead of the platform admin's,
+     * like the WhatsApp "Using your own Meta app?" option. Gated: the admin must
+     * have enabled `meta_allow_manual_app`, and only the workspace owner may set
+     * it. Blank secret keeps the stored one. Blank id+secret = use the admin app.
+     */
+    public function settingsMetaApp(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $user = $request->user();
+        $ws   = $user?->currentWorkspace;
+        if (! $ws) abort(403);
+        // UNGATED: own-Meta-app is always available (needed while the platform app
+        // is in App Review). Owner-only still enforced below.
+        if ((int) $ws->owner_user_id !== (int) $user->id) {
+            abort(403, __('Only the workspace owner can change this.'));
+        }
+
+        $data = $request->validate([
+            'meta_app_id'     => ['nullable', 'string', 'max:64'],
+            'meta_app_secret' => ['nullable', 'string', 'max:128'],
+            // Instagram-Login app (SEPARATE Instagram App ID + secret) — used so
+            // Instagram DMs deliver via instagram_business_manage_messages
+            // without Advanced Access. Facebook keeps using the Meta app above.
+            'ig_login_app_id'     => ['nullable', 'string', 'max:64'],
+            'ig_login_app_secret' => ['nullable', 'string', 'max:128'],
+        ]);
+
+        $ws->meta_app_id = trim((string) ($data['meta_app_id'] ?? '')) ?: null;
+        $secret = trim((string) ($data['meta_app_secret'] ?? ''));
+        if ($secret !== '') {
+            $ws->meta_app_secret = $secret;         // encrypted cast
+        } elseif ($ws->meta_app_id === null) {
+            $ws->meta_app_secret = null;            // fully cleared → back to admin app
+        }
+
+        // Instagram-Login app keys (independent of the Facebook Meta app).
+        $ws->ig_login_app_id = trim((string) ($data['ig_login_app_id'] ?? '')) ?: null;
+        $igSecret = trim((string) ($data['ig_login_app_secret'] ?? ''));
+        if ($igSecret !== '') {
+            $ws->ig_login_app_secret = $igSecret;   // encrypted cast
+        } elseif ($ws->ig_login_app_id === null) {
+            $ws->ig_login_app_secret = null;
+        }
+        $ws->save();
+
+        // Self-serve: as soon as BOTH keys are set, auto-configure the app's
+        // App-level webhook (Page + Instagram) so events reach us — no manual
+        // Meta-dashboard step, no admin/tech needed. Best-effort; report the result.
+        $own = $ws->fresh()->ownMetaApp();
+        if ($own) {
+            $res = app(\App\Services\Meta\MetaAppWebhookSubscriber::class)->subscribeAll($own['id'], $own['secret']);
+            $okFb = (bool) ($res['page']['ok'] ?? false);
+            $okIg = (bool) ($res['instagram']['ok'] ?? false);
+            if ($okFb && $okIg) {
+                return back()->with('status', __('Meta app saved and webhooks auto-configured for Facebook + Instagram. Now connect your Page/account from Channels.'));
+            }
+            $parts = [];
+            if (! $okFb) $parts[] = 'Facebook: ' . ($res['page']['error'] ?? 'failed');
+            if (! $okIg) $parts[] = 'Instagram: ' . ($res['instagram']['error'] ?? 'failed');
+            return back()->with('status', __('Meta app keys saved.'))
+                ->withErrors(['meta_app' => __('Saved, but auto-webhook setup had an issue — :why. Add the Webhooks product to your Meta app and try again, or set the callback URL manually.', ['why' => implode(' · ', $parts)])]);
+        }
+
+        return back()->with('status', __('Meta app keys saved.'));
+    }
+
+    /**
+     * Live-test this workspace's saved Meta app keys against Meta — an app access
+     * token via the client_credentials grant. A success proves the App ID + Secret
+     * are valid (and, when possible, echoes the app name), so the client knows
+     * they're right BEFORE trying to connect Facebook/Instagram.
+     */
+    public function settingsMetaAppTest(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $user = $request->user();
+        $ws   = $user?->currentWorkspace;
+        if (! $ws) abort(403);
+        // UNGATED: own-Meta-app is always available (needed while the platform app
+        // is in App Review). Owner-only still enforced below.
+        if ((int) $ws->owner_user_id !== (int) $user->id) {
+            abort(403, __('Only the workspace owner can change this.'));
+        }
+
+        $id     = trim((string) ($ws->meta_app_id ?? ''));
+        $secret = trim((string) ($ws->meta_app_secret ?? ''));
+        if ($id === '' || $secret === '') {
+            return back()->withErrors(['meta_app' => __('Save your App ID and App Secret first, then test.')]);
+        }
+
+        $v = \App\Services\Facebook\FacebookPageClient::version();
+        try {
+            $r = \Illuminate\Support\Facades\Http::acceptJson()->timeout(15)
+                ->get("https://graph.facebook.com/{$v}/oauth/access_token", [
+                    'client_id'     => $id,
+                    'client_secret' => $secret,
+                    'grant_type'    => 'client_credentials',
+                ]);
+
+            if ($r->successful() && $r->json('access_token')) {
+                // Best-effort: fetch the app's name for a friendly confirmation.
+                $name = '';
+                try {
+                    $a = \Illuminate\Support\Facades\Http::acceptJson()->timeout(10)
+                        ->get("https://graph.facebook.com/{$v}/{$id}", ['fields' => 'name', 'access_token' => (string) $r->json('access_token')]);
+                    if ($a->successful()) $name = (string) $a->json('name', '');
+                } catch (\Throwable $e) { /* name is optional */ }
+
+                // Keys are valid → ALSO auto-wire the App-level webhook (Page +
+                // Instagram) in the same click, so "Test" both proves the keys and
+                // finishes the setup — nothing left to do in the Meta dashboard.
+                $hook = app(\App\Services\Meta\MetaAppWebhookSubscriber::class)->subscribeAll($id, $secret);
+                $okFb = (bool) ($hook['page']['ok'] ?? false);
+                $okIg = (bool) ($hook['instagram']['ok'] ?? false);
+
+                $base = $name !== ''
+                    ? __('Connection OK — verified Meta app: :n.', ['n' => $name])
+                    : __('Connection OK — your App ID and App Secret are valid.');
+
+                if ($okFb && $okIg) {
+                    return back()->with('status', $base . ' ' . __('Webhooks auto-configured for Facebook + Instagram — connect from Channels.'));
+                }
+                $parts = [];
+                if (! $okFb) $parts[] = 'Facebook: ' . ($hook['page']['error'] ?? 'failed');
+                if (! $okIg) $parts[] = 'Instagram: ' . ($hook['instagram']['error'] ?? 'failed');
+                return back()->with('status', $base)
+                    ->withErrors(['meta_app' => __('Keys are valid, but auto-webhook setup had an issue — :why. Add the Webhooks product to your Meta app, then Test again.', ['why' => implode(' · ', $parts)])]);
+            }
+
+            $err = (string) ($r->json('error.message') ?? $r->json('error') ?? ('HTTP ' . $r->status()));
+            return back()->withErrors(['meta_app' => __('Test failed: :e', ['e' => $err])]);
+        } catch (\Throwable $e) {
+            return back()->withErrors(['meta_app' => __('Test failed: :e', ['e' => $e->getMessage()])]);
+        }
+    }
+
+    /**
+     * Save this workspace's OWN reCAPTCHA keys for its white-label custom domain.
+     * Gated: the workspace must have a connected + verified custom domain, and
+     * only the owner may set it. The platform site key is invalid on that host,
+     * so the owner supplies keys registered for their own domain (or leaves it
+     * off, in which case the domain shows no captcha instead of an error).
+     */
+    public function settingsCaptcha(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $user = $request->user();
+        $ws   = $user?->currentWorkspace;
+        if (! $ws) abort(403);
+        if ((int) $ws->owner_user_id !== (int) $user->id) {
+            abort(403, __('Only the workspace owner can change this.'));
+        }
+        if (! $ws->custom_domain || ! $ws->cname_verified) {
+            return back()->withErrors(['captcha' => __('Connect and verify a custom domain first.')]);
+        }
+
+        $data = $request->validate([
+            'captcha_enabled'  => ['nullable', 'boolean'],
+            'captcha_version'  => ['nullable', 'in:v2,v3'],
+            'captcha_site_key' => ['nullable', 'string', 'max:255'],
+            'captcha_secret'   => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $ws->captcha_enabled  = $request->boolean('captcha_enabled');
+        $ws->captcha_version  = $data['captcha_version'] ?? 'v2';
+        $ws->captcha_site_key = trim((string) ($data['captcha_site_key'] ?? '')) ?: null;
+        // Blank secret keeps the stored one (never echoed back to the form).
+        $secret = trim((string) ($data['captcha_secret'] ?? ''));
+        if ($secret !== '') {
+            $ws->captcha_secret = $secret;
+        }
+        $ws->save();
+
+        return back()->with('status', __('Domain captcha settings saved.'));
     }
 
     /**

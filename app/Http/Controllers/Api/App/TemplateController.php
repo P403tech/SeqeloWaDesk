@@ -62,20 +62,97 @@ class TemplateController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $templates = WaTemplate::query()
-                ->forCurrentWorkspace()
+            $q = WaTemplate::query()->forCurrentWorkspace();
+
+            // ENGINE AWARENESS — mirror the web/extension pickers. On a WABA
+            // workspace only a genuinely Meta-approved template can be sent:
+            // `status` is SYNTHETIC on WABA (the Unofficial-API flow stamps
+            // every row 'approved'), so listing on `status` handed the app
+            // templates that Meta rejects at send time. approved() also drops
+            // templates whose WABA number was disconnected or removed.
+            // ?sendable=0 opts out for management screens that want them all.
+            $sendable = $request->boolean('sendable', true);
+            if ($sendable) {
+                $q->approved();
+            }
+
+            // ACCOUNT SCOPE — a template belongs to ONE WABA number
+            // (provider_config_id). A multi-WABA workspace was getting every
+            // account's templates mixed together, so picking account A could
+            // send a template that only exists on account B. Accepts either the
+            // provider-config id (?account_id=89) or the sender key the device
+            // list returns (?sender_key=waba:89). Templates with a NULL
+            // provider_config_id are legacy/non-WABA rows that belong to no
+            // single number — they stay visible.
+            $accountId = $this->resolveAccountId($request);
+            if ($accountId > 0) {
+                $q->where(function ($w) use ($accountId) {
+                    $w->where('provider_config_id', $accountId)
+                      ->orWhereNull('provider_config_id');
+                });
+            }
+
+            $templates = $q->with('provider:id,provider,phone_number')
                 ->orderByDesc('id')
                 ->get()
                 ->map(fn (WaTemplate $t) => $this->present($t))
                 ->values();
 
             return response()->json([
-                'success'   => true,
-                'templates' => $templates,
+                'success'    => true,
+                'account_id' => $accountId ?: null,
+                'sendable'   => $sendable,
+                'templates'  => $templates,
             ], 200);
         } catch (\Throwable $e) {
             return $this->fail($e, 'fetching templates');
         }
+    }
+
+    /**
+     * Which WABA/Twilio account the caller is asking about.
+     *
+     * Order: explicit ?account_id → ?sender_key / X-Device-Id in the
+     * `waba:89` form → the workspace's primary provider row. Always
+     * re-checked against the workspace so one tenant can never read
+     * another's account by guessing an id.
+     */
+    private function resolveAccountId(Request $request): int
+    {
+        $user = $request->user();
+        $wsId = (int) ($user->current_workspace_id ?? 0);
+        if ($wsId <= 0) {
+            return 0;
+        }
+
+        $candidate = (int) $request->input('account_id', 0);
+
+        if ($candidate <= 0) {
+            // Same composite key the device list hands out. A BARE number is
+            // deliberately NOT accepted here: devices.id and
+            // wa_provider_configs.id come from different tables and collide.
+            $key = (string) ($request->input('sender_key')
+                ?: $request->header('X-Sender-Key')
+                ?: $request->header('X-Device-Id'));
+            if (str_contains($key, ':')) {
+                [$engine, $id] = explode(':', $key, 2);
+                if (in_array($engine, ['waba', 'twilio'], true) && ctype_digit(trim($id))) {
+                    $candidate = (int) trim($id);
+                }
+            }
+        }
+
+        if ($candidate <= 0) {
+            return 0;
+        }
+
+        return \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', $wsId)
+            ->whereKey($candidate)
+            ->whereIn('provider', ['waba', 'twilio'])
+            ->exists()
+            ? $candidate
+            : 0;
     }
 
     // -----------------------------------------------------------------
@@ -486,6 +563,24 @@ class TemplateController extends Controller
             'language'             => $t->language,
             'status'               => $t->status,
             'meta_status'          => $t->meta_status,
+            // Which WABA/Twilio number this template lives on. NULL = a
+            // legacy/Unofficial row that isn't tied to one account. The app
+            // needs this to pair a template with the sender it picked —
+            // sending a template on the wrong WABA number is rejected by Meta.
+            'account_id'           => $t->provider_config_id,
+            // Prefix comes from the PROVIDER ROW, never from $engine above:
+            // $engine is inferred from meta_template_id/twilio_content_sid and
+            // falls back to baileys, which would emit `baileys:175` for what is
+            // actually provider-config 175 — the precise id collision this key
+            // exists to prevent. Null when the config was deleted (dangling
+            // pointer), because then there is no sender to address.
+            'sender_key'           => ($t->provider_config_id && $t->provider?->provider)
+                ? $t->provider->provider . ':' . $t->provider_config_id
+                : null,
+            // Meta's own id. Empty means the template was never actually
+            // submitted to Meta, so it CANNOT be sent on a WABA workspace
+            // however "approved" the local status column looks.
+            'meta_template_id'     => $t->meta_template_id,
             // Channel sign (Meta / Unofficial API / Twilio) for the app badge.
             'channel'              => $chan['channel'],   // meta | unofficial | twilio
             'channel_label'        => $chan['label'],     // Meta | Unofficial API | Twilio

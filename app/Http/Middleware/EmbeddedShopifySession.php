@@ -30,6 +30,17 @@ class EmbeddedShopifySession
     /** Plaintext (see EncryptCookies except) marker that carries the embed context forward. */
     public const MARKER = 'chatkar_embedded';
 
+    /**
+     * Public twin of isEmbed() so the layout can decide whether to emit the
+     * App Bridge script, and the session-token middleware can tell an embedded
+     * request from an ordinary one — without duplicating (and drifting from)
+     * the detection rules below.
+     */
+    public static function isEmbedded(Request $request): bool
+    {
+        return (new self)->isEmbed($request);
+    }
+
     public function handle(Request $request, Closure $next): Response
     {
         $embed = $this->isEmbed($request);

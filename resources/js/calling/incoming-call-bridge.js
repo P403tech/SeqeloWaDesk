@@ -16,6 +16,7 @@
 // sub-second pickup.
 
 import { WaCallPeer } from './webrtc-peer.js';
+import { createPoller } from '../lib/poller.js';
 
 const POLL_MS = 4000;
 const $ = (sel) => document.querySelector(sel);
@@ -292,16 +293,17 @@ async function pollOnce() {
     }
 }
 
-let pollHandle = null;
-function startPoll() {
-    if (pollHandle) return;
-    pollHandle = setInterval(pollOnce, POLL_MS);
-}
-function stopPoll() {
-    if (!pollHandle) return;
-    clearInterval(pollHandle);
-    pollHandle = null;
-}
+// Shared poller. NO BACKOFF — maxInterval is pinned to the interval because an
+// incoming call is the most latency-sensitive event in the product: the gap
+// would be widest after a quiet spell, which is exactly when a call is most
+// likely to arrive. What this DOES add is the overlap guard (a slow /pending
+// must not stack) and the hidden-tab pause that pollOnce checked by hand.
+const callPoller = createPoller(async () => { await pollOnce(); return true; }, {
+    interval: POLL_MS,
+    maxInterval: POLL_MS,
+});
+function startPoll() { callPoller.start(); }
+function stopPoll()  { callPoller.stop(); }
 
 /**
  * Start recording the live call.

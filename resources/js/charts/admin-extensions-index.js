@@ -130,6 +130,21 @@ export default function init() {
         if (ifModal.dataset.autoopen === '1') openIf();
     }
 
+    // ---- Email (MailTrixy) connect modal ----------------------------------
+    // Same deal as the Instaflow modal: the form is a plain POST, so JS only
+    // shows/hides — and re-opens after a failed attempt so the operator sees why.
+    const mtModal = document.getElementById('mailtrixy-modal');
+    if (mtModal) {
+        const openMt = () => { mtModal.classList.remove('hidden'); mtModal.classList.add('flex'); };
+        const closeMt = () => { mtModal.classList.add('hidden'); mtModal.classList.remove('flex'); };
+        root.querySelectorAll('[data-mailtrixy-open]').forEach((b) => b.addEventListener('click', openMt));
+        mtModal.querySelectorAll('[data-mailtrixy-close]').forEach((b) => b.addEventListener('click', closeMt));
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !mtModal.classList.contains('hidden')) closeMt();
+        });
+        if (mtModal.dataset.autoopen === '1') openMt();
+    }
+
     // ---- Installed list: enable / disable / remove ------------------------
     root.querySelectorAll('[data-ext-toggle]').forEach((b) => {
         b.addEventListener('click', async () => {

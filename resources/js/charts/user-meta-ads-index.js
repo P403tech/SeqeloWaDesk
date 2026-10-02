@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /*
  * /meta-ads page — AJAX glue.
  *
@@ -166,6 +168,62 @@ async function toggleCampaign(id) {
     }
 }
 
+// Push a local-only campaign (no facebook_id) to Meta — builds the full
+// campaign/adset/creative/ad tree. Surfaces Meta's real error on failure so
+// "not on Meta / everything 0" becomes diagnosable from the UI.
+async function pushCampaign(id, btn) {
+    const sticky = window.WaToaster?.info?.('Submitting to Meta…', { duration: 0 });
+    if (btn) { btn.disabled = true; btn.classList.add('opacity-60'); }
+    try {
+        const res = await fetch(`/meta-ads/${id}/retry`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': getCsrf() },
+        });
+        const data = await res.json();
+        sticky?.dismiss?.();
+        if (res.ok && data.ok) {
+            window.WaToaster?.success?.(`Submitted to Meta — campaign ${data.meta_ids?.campaign || ''}`, { title: 'On Meta now' });
+            await fetchPartial(readState());
+        } else {
+            window.WaToaster?.error?.(data.last_error || data.message || 'Meta rejected this campaign.', { title: 'Not submitted', duration: 12000 });
+        }
+    } catch (e) {
+        sticky?.dismiss?.();
+        window.WaToaster?.error?.('Push failed: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-60'); }
+    }
+}
+
+// Per-card sync — ONE insights call for a single campaign (not the whole 74).
+// On success re-renders the card list from the DB (no extra Meta calls), so
+// the refreshed numbers show with correct currency formatting.
+async function syncOneCampaign(id, btn) {
+    const icon = btn?.querySelector('svg');
+    icon?.classList.add('animate-spin');
+    if (btn) btn.disabled = true;
+    try {
+        const range = readState().range || 'all';
+        const res = await fetch(`/meta-ads/${id}/sync-one?range=` + encodeURIComponent(range), {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': getCsrf() },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        if (data.empty) {
+            window.WaToaster?.info?.(data.message || 'No delivery data for this campaign yet.', { title: 'Nothing to show', duration: 8000 });
+        } else {
+            window.WaToaster?.success?.('Campaign synced from Meta.');
+            await fetchPartial(readState());   // cheap DB re-render, no Meta calls
+        }
+    } catch (e) {
+        window.WaToaster?.error?.('Sync failed: ' + e.message);
+    } finally {
+        icon?.classList.remove('animate-spin');
+        if (btn) btn.disabled = false;
+    }
+}
+
 function deleteCampaign(id, name) {
     const run = async () => {
         try {
@@ -205,6 +263,16 @@ function wireRowActions() {
         b.__wired = true;
         b.addEventListener('click', () => deleteCampaign(b.dataset.metaDelete, b.dataset.name || ''));
     });
+    document.querySelectorAll('[data-meta-push]').forEach((b) => {
+        if (b.__wired) return;
+        b.__wired = true;
+        b.addEventListener('click', () => pushCampaign(b.dataset.metaPush, b));
+    });
+    document.querySelectorAll('[data-meta-sync]').forEach((b) => {
+        if (b.__wired) return;
+        b.__wired = true;
+        b.addEventListener('click', () => syncOneCampaign(b.dataset.metaSync, b));
+    });
 }
 
 function wirePagination() {
@@ -227,7 +295,10 @@ async function runSync() {
     if (btn) { btn.disabled = true; btn.classList.add('opacity-60'); }
     const sticky = window.WaToaster?.info?.('Syncing campaigns…', { duration: 0 });
     try {
-        const res = await fetch('/meta-ads/sync', {
+        // Follow the selected date tab (All time = lifetime) so the pulled
+        // insights match what the user is looking at.
+        const range = readState().range || 'all';
+        const res = await fetch('/meta-ads/sync?range=' + encodeURIComponent(range), {
             method: 'POST',
             headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': getCsrf() },
         });
@@ -293,19 +364,15 @@ function wireImagePreview() {
  * inline. Stops on backgrounded tab; resumes on foreground.
  */
 const AUTO_REFRESH_MS = 60_000;
-let __pollTimer = null;
-function startAutoRefresh() {
-    if (__pollTimer) return;
-    __pollTimer = setInterval(() => {
-        if (document.visibilityState === 'visible') {
-            fetchPartial(readState(), { silent: true });
-        }
-    }, AUTO_REFRESH_MS);
-}
-function stopAutoRefresh() {
-    if (__pollTimer) clearInterval(__pollTimer);
-    __pollTimer = null;
-}
+// Shared poller — overlap guard, hidden-tab pause, widening gap. Meta's own ad
+// numbers refresh on a multi-minute cadence, so polling faster than the data
+// changes only costs requests.
+const __poller = createPoller(async () => {
+    await fetchPartial(readState(), { silent: true });
+    return false;
+}, { interval: AUTO_REFRESH_MS, maxInterval: 300_000 });
+function startAutoRefresh() { __poller.start(); }
+function stopAutoRefresh()  { __poller.stop(); }
 
 /* ---- keys / connection modal ---- */
 function wireKeysModal() {

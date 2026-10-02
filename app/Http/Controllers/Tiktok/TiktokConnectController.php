@@ -25,7 +25,10 @@ class TiktokConnectController extends Controller
 {
     private function redirectUri(): string
     {
-        return url('/tiktok/callback');
+        // Canonical value (admin-set fixed URI → dynamic fallback). The authorize
+        // redirect and the code exchange BOTH read this, so they always match the
+        // portal registration and each other — avoiding the "redirect_uri" error.
+        return TiktokClient::redirectUri();
     }
 
     /** Plan-gate in code (start/callback are GET; callback writes). */
@@ -50,12 +53,47 @@ class TiktokConnectController extends Controller
         // Round-tripped `state` is validated on return to stop login-CSRF.
         $request->session()->put('tiktok_oauth_state', $state = bin2hex(random_bytes(16)));
 
-        return redirect()->away(TiktokClient::authorizeUrl($this->redirectUri(), $state));
+        // DEEP TRACE — TikTok's "Something went wrong … redirect_uri" page is shown
+        // DURING consent (before any callback), so this is the one log that explains
+        // that error: compare `redirect_uri` here to what's registered in the TikTok
+        // portal (Login Kit) for the SAME environment (sandbox vs production) as the
+        // client_key below. `is_https` flags the usual culprit (an IP / http APP_URL).
+        // The full `authorize_url` can even be opened directly to reproduce.
+        $redirectUri  = $this->redirectUri();
+        $fixed        = trim((string) \App\Models\SystemSetting::get('tiktok_redirect_uri', ''));
+        $authorizeUrl = TiktokClient::authorizeUrl($redirectUri, $state);
+        Log::info('[TIKTOK-OAUTH] start → redirecting user to TikTok consent', [
+            'redirect_uri'        => $redirectUri,
+            'redirect_uri_source' => $fixed !== '' ? 'admin_fixed (tiktok_redirect_uri)' : 'fallback url(/tiktok/callback)',
+            'app_url'             => (string) config('app.url'),
+            'is_https'            => str_starts_with($redirectUri, 'https://'),
+            'has_trailing_slash'  => str_ends_with($redirectUri, '/'),
+            'client_key_tail'     => substr(TiktokClient::clientKey(), -6),
+            'client_key_len'      => strlen(TiktokClient::clientKey()),
+            'scopes'              => TiktokClient::scopes(),
+            'workspace_id'        => Auth::user()?->current_workspace_id,
+            'authorize_url'       => $authorizeUrl,
+        ]);
+
+        return redirect()->away($authorizeUrl);
     }
 
     /** OAuth callback → exchange code, fetch profile, upsert the account. */
     public function callback(Request $request)
     {
+        // DEEP TRACE — what TikTok actually returned. If consent SUCCEEDED, `error`
+        // is empty and `has_code` is true; a redirect_uri/scope problem that still
+        // reaches the callback arrives as `error` + `error_description` here.
+        Log::info('[TIKTOK-OAUTH] callback received', [
+            'has_code'          => $request->filled('code'),
+            'error'             => (string) $request->query('error', ''),
+            'error_description' => (string) $request->query('error_description', ''),
+            'state_present'     => $request->filled('state'),
+            'redirect_uri'      => $this->redirectUri(),
+            'query_keys'        => array_keys($request->query()),
+            'workspace_id'      => Auth::user()?->current_workspace_id,
+        ]);
+
         if ($request->filled('error')) {
             return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => (string) $request->string('error_description', $request->string('error'))]);
         }
@@ -76,7 +114,10 @@ class TiktokConnectController extends Controller
 
         $tok = TiktokClient::exchangeCode($code, $this->redirectUri());
         if (empty($tok['ok'])) {
-            Log::warning('[TIKTOK-CONNECT] token exchange failed', ['err' => $tok['error'] ?? '']);
+            Log::warning('[TIKTOK-CONNECT] token exchange failed', [
+                'err'          => $tok['error'] ?? '',
+                'redirect_uri' => $this->redirectUri(),
+            ]);
 
             return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('Token exchange failed: ').($tok['error'] ?? 'unknown')]);
         }
@@ -84,6 +125,15 @@ class TiktokConnectController extends Controller
         $openId = (string) $tok['open_id'];
         if ($openId === '') {
             return redirect(ChannelSetupReturn::url('/tiktok/accounts'))->withErrors(['tiktok' => __('TikTok did not return an account id.')]);
+        }
+
+        // One TikTok account = one workspace, platform-wide. Inbound events
+        // resolve their workspace from open_id, so a duplicate would make
+        // routing ambiguous and land messages in whichever row is found first.
+        if (\App\Support\ChannelClaim::heldElsewhere(TiktokAccount::class, 'open_id', $openId, $wsId)) {
+            return redirect('/tiktok/accounts')->withErrors([
+                'tiktok' => \App\Support\ChannelClaim::takenMessage(__('TikTok account')),
+            ]);
         }
 
         $account = TiktokAccount::updateOrCreate(
@@ -145,7 +195,7 @@ class TiktokConnectController extends Controller
     /**
      * POST /tiktok/{id}/inbox — enable the Business Messaging (DM) inbox for a
      * connected account. Requires TikTok Messaging-Partner approval + the business
-     * app credentials the platform admin sets under Settings → WaDesk Message
+     * app credentials the platform admin sets under Admin → Channel Settings
      * (tiktok_business_app_id / tiktok_business_app_secret / tiktok_inbox_enabled).
      * The operator pastes the business_id + business access token issued by their
      * approved partner authorization; we store them on the account meta (the same
@@ -163,7 +213,7 @@ class TiktokConnectController extends Controller
             return back()->withErrors(['tiktok_inbox' => __('Account not found.')]);
         }
         if (! \App\Services\Tiktok\TiktokBusinessClient::enabled()) {
-            return back()->withErrors(['tiktok_inbox' => __('The TikTok DM inbox is not enabled. It needs TikTok Messaging-Partner approval and the business app credentials set by the platform admin under Settings → WaDesk Message.')]);
+            return back()->withErrors(['tiktok_inbox' => setup_hint(__('The TikTok DM inbox is not enabled — it needs TikTok Messaging-Partner approval and the business app credentials set under Admin → Channel Settings.'), __('The TikTok DM inbox is currently unavailable. Please contact support for assistance.'))]);
         }
 
         $data = $request->validate([

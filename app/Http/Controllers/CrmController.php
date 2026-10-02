@@ -31,7 +31,17 @@ class CrmController extends Controller
 
     private function currency(int $wsId): string
     {
-        return (string) (\App\Models\InvoiceSetting::forWorkspace($wsId)->currency ?? 'USD') ?: 'USD';
+        // setting -> workspace -> USD. The middle step used to be missing, so a
+        // workspace that never opened Invoice Settings fell straight to USD:
+        // forWorkspace() is a firstOrCreate() with no currency, so ->currency is
+        // null on that fresh row. An IDR workspace saw every CRM tile in $ while
+        // its wallet correctly showed Rp. The docblock above already says these
+        // amounts are in "the workspace's own currency" -- this makes the code
+        // match that.
+        $fromSetting = \App\Models\InvoiceSetting::forWorkspace($wsId)->currency;
+        $fromWorkspace = \App\Models\Workspace::find($wsId)?->currency;
+
+        return strtoupper((string) ($fromSetting ?: ($fromWorkspace ?: 'USD')));
     }
 
     /** Unified CRM home — one board of every KPI. */

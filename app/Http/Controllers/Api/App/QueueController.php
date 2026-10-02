@@ -52,6 +52,8 @@ use Illuminate\Support\Facades\Log;
  */
 class QueueController extends Controller
 {
+    use \App\Http\Controllers\Api\App\Concerns\ScopesToSelectedSender;
+
     /**
      * POST /create-queue — create a message queue (draft Broadcast).
      *
@@ -129,6 +131,10 @@ class QueueController extends Controller
                 'groups.*'        => 'integer',
                 'contact_numbers' => 'nullable',
                 'timezone'        => 'nullable|string|max:64',
+                // Send intent from the app: status=0 → create a PENDING/DRAFT queue
+                // ONLY (the app then calls /start-sending); status=1 / absent keeps
+                // the legacy send-now behaviour for message_type=Queue.
+                'status'          => 'nullable',
             ]);
 
             $user = $request->user();
@@ -239,7 +245,15 @@ class QueueController extends Controller
             // compose flow posts message_type='Template' (or other) and keeps the
             // two-step create → start-sending contract, so this never double-sends
             // the standard path.
-            if (strcasecmp((string) $request->input('message_type', ''), 'Queue') === 0) {
+            //
+            // BUT respect an EXPLICIT status=0 from the app: it means "create a
+            // pending/draft queue only, do NOT send" — the app then calls
+            // /start-sending itself. Previously the Queue branch dispatched on
+            // create regardless of status, so the queue was already `processing`
+            // and the follow-up /start-sending 409'd with queue_in_flight. When
+            // `status` is absent the legacy send-now behaviour is unchanged.
+            $explicitDraft = $request->has('status') && (string) $request->input('status') === '0';
+            if (!$explicitDraft && strcasecmp((string) $request->input('message_type', ''), 'Queue') === 0) {
                 $dispatch = $this->dispatchBroadcastToBridge($broadcast->refresh(), true);
                 $ok = (bool) ($dispatch['ok'] ?? false);
 
@@ -314,7 +328,7 @@ class QueueController extends Controller
             }
             $queues = Broadcast::query()
                 ->forCurrentWorkspace()
-                ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
+                ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
                 ->when($since, fn ($q) => $q->where('updated_at', '>=', $since))
                 ->when(! $includeArchived, fn ($q) => $q->where(function ($w) {
                     $w->where('archived', false)->orWhereNull('archived');
@@ -370,7 +384,7 @@ class QueueController extends Controller
 
             $messages = $pivot->map(function ($r) use ($contactMap) {
                 $c     = $contactMap->get($r->contact_id);
-                $phone = $c ? preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile)) : '';
+                $phone = $c ? Contact::canonicalizePhone($c->country_code, $c->mobile) : '';
                 $name  = $c
                     ? (trim((string) ($c->name ?? '')) ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: $phone)
                     : ('Contact #' . $r->contact_id);
@@ -873,7 +887,7 @@ class QueueController extends Controller
         $deviceId = $this->deviceIdFromRequest($request);
         $rows = Broadcast::query()
             ->forCurrentWorkspace()
-            ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
+            ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
             ->where('archived', true)
             ->orderByDesc('id')
             ->limit(500)
@@ -933,7 +947,7 @@ class QueueController extends Controller
             $deviceId = $this->deviceIdFromRequest($request);
             $queues = Broadcast::query()
                 ->forCurrentWorkspace()
-                ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
+                ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
                 ->where('pinned', true)
                 ->orderByDesc('id')
                 ->get()
@@ -1054,7 +1068,7 @@ class QueueController extends Controller
             $rows[] = ['contact_id', 'name', 'phone', 'status'];
             foreach ($pivot as $p) {
                 $c     = $contactMap->get($p->contact_id);
-                $phone = $c ? preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile)) : '';
+                $phone = $c ? Contact::canonicalizePhone($c->country_code, $c->mobile) : '';
                 $name  = $c
                     ? (trim((string) ($c->name ?? '')) ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: $phone)
                     : ('Contact #' . $p->contact_id);
@@ -1474,6 +1488,23 @@ class QueueController extends Controller
             $ids = $ids->merge($valid);
         }
 
+        // Existing queues (recipient_type=existing_queues) — reuse the recipients
+        // of one or more already-created queues (Broadcasts). The app posts
+        // `queue_ids` as a single id, CSV, JSON string, or array. Scoped to the
+        // workspace so a queue id from another workspace can't leak its contacts.
+        // Without this, an app "send to existing queue" flow always 400'd with
+        // "No recipients found" because only contacts[]/groups[]/contact_numbers
+        // were resolved.
+        $queueIds = $this->queueIdsFromRequest($request);
+        if (! empty($queueIds)) {
+            $members = DB::table('broadcast_contacts')
+                ->join('broadcasts', 'broadcasts.id', '=', 'broadcast_contacts.broadcast_id')
+                ->where('broadcasts.workspace_id', $wsId)
+                ->whereIn('broadcast_contacts.broadcast_id', $queueIds)
+                ->pluck('broadcast_contacts.contact_id');
+            $ids = $ids->merge($members);
+        }
+
         // Group ids — the contact_group column is encrypted-array-cast, so
         // hydrate and filter in PHP (same as BroadcastsController@store).
         $rawGroups = collect($request->input('groups', []))->map(fn ($v) => (string) (int) $v)->filter()->values();
@@ -1515,7 +1546,7 @@ class QueueController extends Controller
             // which is what produced "No new recipients resolved").
             $matchedNumbers = collect();
             $matched = $wsContacts->filter(function (Contact $c) use ($numbers, $matchedNumbers) {
-                $digits = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
+                $digits = Contact::canonicalizePhone($c->country_code, $c->mobile);
                 $bare   = preg_replace('/\D+/', '', (string) $c->mobile);
                 if ($numbers->contains($digits)) { $matchedNumbers->push($digits); return true; }
                 if ($numbers->contains($bare))   { $matchedNumbers->push($bare);   return true; }

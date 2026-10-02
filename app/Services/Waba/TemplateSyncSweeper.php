@@ -129,6 +129,23 @@ class TemplateSyncSweeper
             'last_synced_at'        => now(),
         ];
 
+        // Meta OWNS a template's identity — its NAME + LANGUAGE are immutable on
+        // Meta and are what a send keys on. If a local edit renamed the row (or
+        // changed its language), the send went out under a name Meta never had →
+        // 132001 "template name does not exist". Sync fetches by the stable
+        // meta_template_id, so pull Meta's real name + language back and correct
+        // the drift. (The edit form now locks these, but existing drift still
+        // needs healing here.)
+        if (!empty($body['name'])     && (string) $body['name']     !== (string) $tpl->template_name) {
+            $patch['template_name'] = (string) $body['name'];
+            Log::info('[WABA-template-sweep] corrected drifted name from Meta', [
+                'tpl' => $tpl->id, 'from' => $tpl->template_name, 'to' => $body['name'],
+            ]);
+        }
+        if (!empty($body['language']) && (string) $body['language'] !== (string) $tpl->language) {
+            $patch['language'] = (string) $body['language'];
+        }
+
         $patch['status'] = match ($newStatus) {
             'APPROVED'                 => 'approved',
             'REJECTED'                 => 'rejected',

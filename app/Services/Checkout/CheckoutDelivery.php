@@ -66,14 +66,14 @@ class CheckoutDelivery
             return false;
         }
 
-        $msg = Message::create([
+        $msg = Message::create(array_merge([
             'user_id'      => $this->ownerUserId($order),
             'workspace_id' => $order->workspace_id,   // dispatcher routes by the workspace's engine
             'direction'    => 'out',
             'to_number'    => $to,
             'body'         => $body,
             'status'       => 'pending',
-        ]);
+        ], $order->shopSenderFields()));   // ...FROM the shop's own chosen number
 
         try {
             $result = $this->dispatcher->send($msg);

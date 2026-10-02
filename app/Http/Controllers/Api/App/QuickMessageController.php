@@ -53,6 +53,58 @@ class QuickMessageController extends Controller
     }
 
     /**
+     * Resolve {{merge tags}} in a normal/quick message body against the RECIPIENT
+     * contact — the same way templates + campaigns do. Without this a quick send
+     * with {{name}} shipped the literal braces to the customer. Looks the contact
+     * up by phone (indexed mobile_hash), builds the recipient row every send path
+     * uses, and resolves via TemplateOverrideResolver (contact → custom_attributes
+     * → workspace → system). Unknown/blank tokens resolve to '' — never raw braces.
+     * Best-effort: a lookup failure or an unknown number just leaves the tags empty
+     * and never blocks the send.
+     */
+    private function resolveMergeTags(string $body, string $toDigits, int $wsId): string
+    {
+        if ($body === '' || strpos($body, '{{') === false) {
+            return $body;
+        }
+        $row = ['custom_attributes' => []];
+        try {
+            $hash    = \App\Models\Contact::hashPhone(null, $toDigits);
+            $contact = $hash
+                ? \App\Models\Contact::query()
+                    ->where('workspace_id', $wsId)
+                    ->where('mobile_hash', $hash)
+                    ->first()
+                : null;
+            if ($contact) {
+                $cc  = preg_replace('/\D+/', '', (string) $contact->country_code);
+                $loc = preg_replace('/\D+/', '', (string) $contact->mobile);
+                $row = [
+                    'name'              => (string) $contact->name,
+                    'first_name'        => (string) $contact->first_name,
+                    'last_name'         => (string) $contact->last_name,
+                    'title'             => (string) $contact->title,
+                    'phone'             => ($cc && $loc && strpos($loc, $cc) !== 0) ? $cc . $loc : $loc,
+                    'mobile'            => $loc,
+                    'country_code'      => $cc,
+                    'email'             => (string) $contact->email,
+                    'address'           => (string) $contact->address,
+                    'language'          => (string) $contact->language,
+                    'custom_attributes' => is_array($contact->custom_attributes) ? $contact->custom_attributes : [],
+                ];
+            }
+        } catch (\Throwable $e) {
+            // resolution is best-effort — never block a send on it
+        }
+        $resolver = app(\App\Services\TemplateOverrideResolver::class);
+        return preg_replace_callback(
+            '/\{\{\s*([^}]+?)\s*\}\}/',
+            fn ($m) => $resolver->lookup($m[1], $row, $wsId),
+            $body
+        );
+    }
+
+    /**
      * Download a PUBLIC media URL into the workspace media disk so the
      * dispatcher can ship it (base64 for Unofficial, public URL for WABA/Twilio).
      * SSRF-guarded: only http(s) to a public host, 16 MB cap. Returns
@@ -201,6 +253,20 @@ class QuickMessageController extends Controller
             $device      = $sender['device'];
             $engine      = $sender['engine'];
             $devicePhone = $sender['from'];
+
+            // Quick-send is a WhatsApp path — it routes through WhatsAppDispatcher.
+            // A Telegram / LINE / WeChat / Viber / Instagram / Facebook / SMS /
+            // email sender cannot be served here, and silently sending it over
+            // WhatsApp instead (what happened before the sender keys resolved) is
+            // the worst outcome. Fail loudly and point at the endpoint that can.
+            if (! in_array($engine, ['baileys', 'waba', 'twilio'], true)) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'wrong_channel',
+                    'message' => 'That sender is a ' . $engine . ' account. Quick send delivers WhatsApp messages — '
+                        . 'pick a WhatsApp number, or send from the chat thread for this channel.',
+                ], 422);
+            }
             $legacy = \App\Enums\WaProvider::tryFrom($engine)?->legacyCode() ?? 'W';
 
             // Find or open the quick-message thread for this recipient so the
@@ -254,6 +320,12 @@ class QuickMessageController extends Controller
             }
 
             $body = trim((string) ($validated['message_text'] ?? ''));
+            // Personalise {{merge tags}} against the RECIPIENT contact — a normal
+            // quick message must fill {{name}}, {{order_id}}, {{loyalty_tier}}, etc.
+            // too, not only templates/campaigns. Previously the literal braces
+            // shipped to the customer. Resolved BEFORE the empty-body check so an
+            // all-tag body that resolves to nothing is correctly treated as empty.
+            $body = $this->resolveMergeTags($body, $toNumber, $wsId);
             // A text send needs a body; media + location carry their own payload.
             if ($body === '' && !$mediaPath && !$hasLocation) {
                 return response()->json([
@@ -836,6 +908,44 @@ class QuickMessageController extends Controller
             return $this->configSender($cfg);
         }
 
+        // Any OTHER channel picker key (telegram:1, line:1, wechat:1, viber:1,
+        // sms:98, instagram:x, facebook:1, email:x). These used to match none of
+        // the branches here and fell through to "default to a Baileys device",
+        // so choosing a Telegram bot silently sent the message over WhatsApp
+        // Unofficial. Resolve it for real and return its OWN engine; the caller
+        // decides whether it can serve that channel.
+        if ($raw !== '' && str_contains($raw, ':') && $wsId > 0) {
+            [$keyEngine, $keyId] = array_pad(explode(':', $raw, 2), 2, '');
+            $keyId = trim($keyId);
+
+            // baileys:<id> is resolved against the devices table directly, NOT
+            // senderForKey — that only yields CONNECTED senders, so an explicitly
+            // picked offline number would fall through to the fallbacks below and
+            // silently send from a different number. An explicit pick must stay
+            // the pick and fail on its own merits.
+            if ($keyEngine === \App\Services\WorkspaceEngine::ENGINE_BAILEYS && ctype_digit($keyId)) {
+                if ($d = Device::query()->forCurrentWorkspace()->find((int) $keyId)) {
+                    return ['engine' => \App\Services\WorkspaceEngine::ENGINE_BAILEYS, 'device' => $d, 'from' => $this->fullPhone($d)];
+                }
+            }
+
+            $picked = \App\Services\WorkspaceEngine::senderForKey($wsId, $raw);
+            if ($picked && !empty($picked['engine'])) {
+                return [
+                    'engine' => (string) $picked['engine'],
+                    'device' => null,
+                    'from'   => $picked['phone'] ?: null,
+                ];
+            }
+
+            // Same rule for a provider account that is real but not connected.
+            if (ctype_digit($keyId) && in_array($keyEngine, ['waba', 'twilio'], true)) {
+                if ($cfg = $this->findProviderConfig((int) $keyId, $wsId)) {
+                    return $this->configSender($cfg);
+                }
+            }
+        }
+
         $numeric = ($raw !== '' && ctype_digit($raw)) ? (int) $raw : null;
         if ($numeric) {
             // Baileys device first…
@@ -858,9 +968,14 @@ class QuickMessageController extends Controller
             }
         }
 
-        // Nothing explicit → default to the workspace's connected Baileys device
-        // so the API works with just { to, text }.
-        if ($d = Device::query()->forCurrentWorkspace()->orderByDesc('active')->orderByDesc('id')->first()) {
+        // Nothing explicit → default to a CONNECTED Baileys device so the API
+        // works with just { to, text }. Status matters: this used to take the
+        // newest device whatever its state, so a workspace whose only Unofficial
+        // number was disconnected sent through that dead session instead of its
+        // live WABA/Twilio number below.
+        if ($d = Device::query()->forCurrentWorkspace()
+            ->where('status', 'connected')
+            ->orderByDesc('active')->orderByDesc('id')->first()) {
             return ['engine' => \App\Services\WorkspaceEngine::ENGINE_BAILEYS, 'device' => $d, 'from' => $this->fullPhone($d)];
         }
 
@@ -869,8 +984,24 @@ class QuickMessageController extends Controller
         // engine, not just the bare default engine string with no sender.
         $cfg = \App\Models\WaProviderConfig::query()
             ->primaryForWorkspace($wsId ?: null)
-            ->whereIn('provider', ['waba', 'twilio'])->first();
+            ->whereIn('provider', ['waba', 'twilio'])->first()
+            // Primary is only set when someone connected through a flow that
+            // stamps it. A workspace can have a perfectly live WABA number with
+            // is_primary=0, so fall back to ANY connected one before giving up.
+            ?: \App\Models\WaProviderConfig::query()
+                ->where('workspace_id', $wsId)
+                ->whereIn('provider', ['waba', 'twilio'])
+                ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+                ->orderByDesc('connected_at')->first();
         if ($cfg) return $this->configSender($cfg);
+
+        // Still nothing live — accept a disconnected Unofficial device rather
+        // than returning no sender at all, so the caller gets the same
+        // "attempted and failed" behaviour it had before instead of a silent
+        // engine-only result with no from-number.
+        if ($d = Device::query()->forCurrentWorkspace()->orderByDesc('active')->orderByDesc('id')->first()) {
+            return ['engine' => \App\Services\WorkspaceEngine::ENGINE_BAILEYS, 'device' => $d, 'from' => $this->fullPhone($d)];
+        }
 
         // Truly nothing configured → the workspace default engine, no device row.
         return ['engine' => \App\Services\WorkspaceEngine::for($wsId ?: null), 'device' => null, 'from' => $target !== '' ? $target : null];

@@ -305,6 +305,68 @@
                                     <button type="submit" class="mt-3 w-full px-3 py-2 rounded-lg bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Save lead capture') }}</button>
                                     <p class="text-[10.5px] text-ink-500 mt-2 leading-relaxed">{{ __('Field names match your payload keys (dot notation for nested, e.g. data.phone). Leave blank to auto-detect common keys. The contact is tagged and, if set, enrolled in the flow.') }}</p>
                                 </form>
+
+                                {{-- Send template — fire an approved template on each payload (Phase 2) --}}
+                                @php $tc = is_array($hook->template_config) ? $hook->template_config : []; @endphp
+                                <form method="POST" action="{{ route('user.webhooks.incoming.template-send', $hook->id) }}"
+                                    class="mt-4 rounded-2xl border border-paper-200 bg-paper-50/40 p-4" data-tpl-form>
+                                    @csrf
+                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Send template') }}</div>
+                                    <h3 class="font-serif text-[16px] leading-tight mt-0.5 mb-2">{{ __('Fire a template on each request') }}</h3>
+                                    <label class="flex items-center gap-2 text-[12px] font-semibold text-ink-800 mb-3">
+                                        <input type="checkbox" name="tpl_enabled" value="1" class="accent-wa-deep" @checked(!empty($tc['enabled']))>
+                                        {{ __('Send an approved template for each request') }}
+                                    </label>
+
+                                    <div class="space-y-2">
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <span class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('Sender') }}</span>
+                                                <select name="tpl_sender"
+                                                    class="mt-0.5 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] focus:outline-none focus:border-wa-deep">
+                                                    <option value="">{{ __('— pick a connected number —') }}</option>
+                                                    @foreach (($senders ?? []) as $s)
+                                                        <option value="{{ $s['value'] }}" @selected(($tc['sender'] ?? '') === $s['value'])>{{ $s['label'] }}</option>
+                                                    @endforeach
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <span class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('Template') }}</span>
+                                                <select name="tpl_template_id" data-tpl-select
+                                                    class="mt-0.5 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] focus:outline-none focus:border-wa-deep">
+                                                    <option value="" data-vars="0" data-header="0">{{ __('— pick a template —') }}</option>
+                                                    @foreach (($templates ?? []) as $t)
+                                                        <option value="{{ $t['id'] }}" data-vars="{{ $t['vars'] }}" data-header="{{ $t['header_media'] ? 1 : 0 }}"
+                                                            @selected((int)($tc['template_id'] ?? 0) === (int)$t['id'])>{{ $t['name'] }}{{ $t['vars'] ? ' (' . $t['vars'] . ' var)' : '' }}</option>
+                                                    @endforeach
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <span class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('Recipient number field') }}</span>
+                                                <input type="text" name="tpl_to_field" value="{{ $tc['to_field'] ?? '' }}" placeholder="phone"
+                                                    class="mt-0.5 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                            </div>
+                                            <div>
+                                                <span class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('Default country code') }}</span>
+                                                <input type="text" name="tpl_cc" value="{{ $tc['country_code'] ?? '' }}" placeholder="e.g. 91"
+                                                    class="mt-0.5 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                            </div>
+                                        </div>
+                                        {{-- Header media field — shown by JS only for media-header templates. --}}
+                                        <div data-tpl-header-wrap class="hidden">
+                                            <span class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('Header media URL field (optional)') }}</span>
+                                            <input type="text" name="tpl_header_field" value="{{ $tc['header_field'] ?? '' }}" placeholder="invoice_url"
+                                                class="mt-0.5 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                        </div>
+                                        {{-- Variable-map inputs — rendered by JS from the picked template's slot count. --}}
+                                        <div data-tpl-vars data-saved='@json($tc['var_map'] ?? (object)[])' class="space-y-2"></div>
+                                    </div>
+
+                                    <button type="submit" class="mt-3 w-full px-3 py-2 rounded-lg bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Save template send') }}</button>
+                                    <p class="text-[10.5px] text-ink-500 mt-2 leading-relaxed">{{ __('Map the recipient number and each numbered template variable to a payload field (dot notation for nested, e.g. order.id). Sends through the same engine as your inbox — WABA, Twilio or Unofficial.') }}</p>
+                                </form>
                             </aside>
                         </div>
                     </div>

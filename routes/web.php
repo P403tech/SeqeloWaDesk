@@ -142,6 +142,7 @@ Route::prefix('legal')->name('frontend.legal.')->middleware(\App\Http\Middleware
     $fc = \App\Http\Controllers\FrontendController::class;
     Route::get('/terms',           [$fc, 'terms'])->name('terms');
     Route::get('/privacy',         [$fc, 'privacy'])->name('privacy');
+    Route::get('/data-deletion',   [$fc, 'dataDeletion'])->name('data-deletion');
     Route::get('/refund',          [$fc, 'refund'])->name('refund');
     Route::get('/cookies',         [$fc, 'cookies'])->name('cookies');
     Route::get('/acceptable-use',  [$fc, 'acceptableUse'])->name('acceptable-use');
@@ -198,8 +199,11 @@ Route::match(['get', 'post'], '/b/pay/callback/{gateway}', [\App\Http\Controller
 // is what the WhatsApp invoice button links to; no auth, no window issue.
 Route::middleware('throttle:120,1')->group(function () {
     $iv = \App\Http\Controllers\InvoicesController::class;
-    Route::get('/i/{token}',     [$iv, 'publicShow'])->name('invoice.public.show');
-    Route::get('/i/{token}/pdf', [$iv, 'publicPdf'])->name('invoice.public.pdf');
+    Route::get('/i/{token}',            [$iv, 'publicShow'])->name('invoice.public.show');
+    Route::get('/i/{token}/pdf',        [$iv, 'publicPdf'])->name('invoice.public.pdf');
+    // Pay an invoice through the merchant's own gateway (token-only).
+    Route::get('/i/{token}/pay/{gateway}', [$iv, 'publicPay'])->name('invoice.public.pay');
+    Route::match(['get', 'post'], '/i/pay/callback/{gateway}', [$iv, 'payCallback'])->name('invoice.pay.callback');
     // AI-CRM Phase 5 — public Client Brief deck + PDF (token-only, shareable).
     $br = \App\Http\Controllers\BriefsController::class;
     Route::get('/b/{token}',     [$br, 'publicShow'])->name('brief.public.show');
@@ -210,6 +214,26 @@ Route::middleware('throttle:120,1')->group(function () {
     Route::post('/q/{token}/accept',  [$sd, 'publicAccept'])->name('salesdoc.public.accept');
     Route::post('/q/{token}/decline', [$sd, 'publicDecline'])->name('salesdoc.public.decline');
 });
+/*
+ * Support diagnostic for WABA template failures. A ROUTE, not a file in
+ * public/ — hardened nginx setups only hand index.php to PHP-FPM, so a
+ * dropped-in script 404s or downloads as source.
+ *
+ * Gated on a key stored in system settings (`waba_diag_key`). Unset or
+ * mismatched => 404, so the URL cannot be found by probing. Read-only.
+ *
+ * Enable:   php artisan tinker --execute="App\Models\SystemSetting::set('waba_diag_key','SOME-RANDOM-STRING','string','temp support diagnostic');"
+ * Visit:    /waba-diag/SOME-RANDOM-STRING
+ * Disable:  php artisan tinker --execute="App\Models\SystemSetting::set('waba_diag_key','','string','off');"
+ */
+Route::get('/waba-diag/{key}', function (string $key) {
+    $expected = (string) \App\Models\SystemSetting::get('waba_diag_key', '');
+    abort_if($expected === '' || ! hash_equals($expected, $key), 404);
+
+    return response(app(\App\Support\WabaDiagnostic::class)->run(), 200)
+        ->header('Content-Type', 'text/plain; charset=utf-8');
+})->name('waba.diag');
+
 // Razorpay webhook for storefront payment links (auth = HMAC signature).
 Route::post('/webhooks/storefront-pay', [\App\Http\Controllers\StorefrontPaymentController::class, 'razorpayWebhook'])
     ->name('storefront.pay.webhook');
@@ -524,6 +548,17 @@ Route::middleware('auth')->group(function () {
     Route::post('/quick-access', [\App\Http\Controllers\QuickAccessController::class, 'update'])
         ->name('quick-access.update');
 
+    // Client Support Bot — the floating help widget any logged-in user can ask.
+    // The server-side ladder (docs → AI → web → contact) decides the answer.
+    Route::middleware('throttle:60,1')->prefix('support-bot')->name('support-bot.')->group(function () {
+        Route::post('/ask',     [\App\Http\Controllers\SupportBotController::class, 'ask'])->name('ask');
+        Route::get('/history',  [\App\Http\Controllers\SupportBotController::class, 'history'])->name('history');
+        Route::get('/sessions', [\App\Http\Controllers\SupportBotController::class, 'sessions'])->name('sessions');
+        Route::post('/rate',    [\App\Http\Controllers\SupportBotController::class, 'rate'])->name('rate');
+        Route::post('/clear',   [\App\Http\Controllers\SupportBotController::class, 'clear'])->name('clear');
+        Route::get('/articles', [\App\Http\Controllers\SupportBotController::class, 'articles'])->name('articles');
+    });
+
     // Guided product tour — mark the current user as having seen the first-run
     // tour (users.has_seen_intro) so it never auto-runs again. Called by the
     // tour JS on finish/skip. Idempotent + tiny.
@@ -631,6 +666,8 @@ Route::middleware('auth')->group(function () {
             Route::get('/contacts/sample-csv',            [ContactsController::class, 'sampleCsv'])->name('contacts.sample-csv');
 
             Route::get('/contact-groups',                 [ContactsController::class, 'groupIndex'])->name('contact-groups');
+            // JSON groups list for pickers (flow builder "Tag contact" group action).
+            Route::get('/contacts/api/groups',            [ContactsController::class, 'apiGroups'])->name('contacts.api.groups');
             Route::post('/contact-groups',                [ContactsController::class, 'groupStore'])->name('contact-groups.store');
             Route::put('/contact-groups/{id}',            [ContactsController::class, 'groupUpdate'])->name('contact-groups.update');
             Route::delete('/contact-groups/{id}',         [ContactsController::class, 'groupDestroy'])->name('contact-groups.destroy');
@@ -657,7 +694,7 @@ Route::middleware('auth')->group(function () {
          * `whereNumber('id')` keeps `/meta-ads/analytics` and
          * `/meta-ads/sync` from being captured by `/{id}/edit`.
          */
-        Route::prefix('meta-ads')->middleware('workspace.role:admin')->name('meta-ads.')->group(function () {
+        Route::prefix('meta-ads')->middleware(['workspace.role:admin', 'plan:access_ctwa'])->name('meta-ads.')->group(function () {
             Route::get('/',                 [MetaAdsController::class, 'index'])->name('index');
             Route::get('/create',           [MetaAdsController::class, 'create'])->name('create');
             Route::post('/',                [MetaAdsController::class, 'store'])->name('store');
@@ -689,12 +726,42 @@ Route::middleware('auth')->group(function () {
             // {id}/edit pattern so /meta-ads/{numeric} hits show first.
             Route::get('/{id}',             [MetaAdsController::class, 'show'])->whereNumber('id')->name('show');
             Route::post('/{id}/refresh',    [MetaAdsController::class, 'refresh'])->whereNumber('id')->name('refresh');
+            Route::post('/{id}/sync-one',   [MetaAdsController::class, 'syncOne'])->whereNumber('id')->name('sync-one');
             Route::get('/{id}/estimate',    [MetaAdsController::class, 'estimate'])->whereNumber('id')->name('estimate');
             Route::post('/{id}/retry',      [MetaAdsController::class, 'retry'])->whereNumber('id')->name('retry');
             Route::get('/{id}/edit',        [MetaAdsController::class, 'edit'])->whereNumber('id')->name('edit');
             Route::put('/{id}',             [MetaAdsController::class, 'update'])->whereNumber('id')->name('update');
             Route::post('/{id}/toggle',     [MetaAdsController::class, 'toggleStatus'])->whereNumber('id')->name('toggle');
             Route::delete('/{id}',          [MetaAdsController::class, 'destroy'])->whereNumber('id')->name('destroy');
+        });
+
+        /*
+         * OpenAI (ChatGPT) Ads — the workspace connects its OWN Ads API key
+         * (WaProviderConfig provider=openai_ads) and manages campaigns. Mirrors
+         * the meta-ads group. P1 = connect / verify / read-only list.
+         */
+        Route::prefix('openai-ads')->middleware('workspace.role:admin')->name('openai-ads.')->group(function () {
+            Route::get('/',         [\App\Http\Controllers\OpenAiAdsController::class, 'index'])->name('index');
+            Route::get('/connect',  [\App\Http\Controllers\OpenAiAdsController::class, 'connect'])->name('connect');
+            Route::post('/keys',    [\App\Http\Controllers\OpenAiAdsController::class, 'saveKeys'])->name('keys.save');
+            Route::delete('/keys',  [\App\Http\Controllers\OpenAiAdsController::class, 'disconnect'])->name('keys.destroy');
+            Route::post('/verify',  [\App\Http\Controllers\OpenAiAdsController::class, 'verify'])->name('verify');
+            // Campaign create flow (P2). Fixed paths declared BEFORE /{id}.
+            Route::get('/create',   [\App\Http\Controllers\OpenAiAdsController::class, 'create'])->name('create');
+            Route::post('/',        [\App\Http\Controllers\OpenAiAdsController::class, 'store'])->name('store');
+            // Conversions (P3) — pixels, Conversions API keys, event settings.
+            Route::get('/conversions',               [\App\Http\Controllers\OpenAiAdsController::class, 'conversions'])->name('conversions');
+            Route::post('/conversions/pixels',        [\App\Http\Controllers\OpenAiAdsController::class, 'storePixel'])->name('conversions.pixels');
+            Route::post('/conversions/api-keys',      [\App\Http\Controllers\OpenAiAdsController::class, 'storeApiKey'])->name('conversions.api-keys');
+            Route::post('/conversions/event-settings', [\App\Http\Controllers\OpenAiAdsController::class, 'storeEventSetting'])->name('conversions.events');
+            // Analytics (P4) — delivery insights.
+            Route::get('/analytics', [\App\Http\Controllers\OpenAiAdsController::class, 'analytics'])->name('analytics');
+            // Build with AI (P5) — ad-copy generation.
+            Route::get('/api/ai-models',   [\App\Http\Controllers\OpenAiAdsController::class, 'apiAiModels'])->name('api.ai-models');
+            Route::post('/api/ai-generate', [\App\Http\Controllers\OpenAiAdsController::class, 'apiAiGenerate'])->name('api.ai-generate');
+            Route::get('/{id}',          [\App\Http\Controllers\OpenAiAdsController::class, 'show'])->whereNumber('id')->name('show');
+            Route::post('/{id}/activate', [\App\Http\Controllers\OpenAiAdsController::class, 'activate'])->whereNumber('id')->name('activate');
+            Route::post('/{id}/pause',    [\App\Http\Controllers\OpenAiAdsController::class, 'pause'])->whereNumber('id')->name('pause');
         });
 
         Route::prefix('wa-campaigns')->middleware('workspace.role:admin')->name('wa-campaigns.')->group(function () {
@@ -708,6 +775,8 @@ Route::middleware('auth')->group(function () {
             // whereNumber('id') constraint doesn't try to capture "api".
             Route::get('/api/ai-models',    [WaCampaignsController::class, 'apiAiModels'])->name('api.ai-models');
             Route::post('/api/ai-generate', [WaCampaignsController::class, 'apiAiGenerate'])->name('api.ai-generate');
+            // Best-time-to-send engagement heatmap (Schedule step). Statistics only.
+            Route::get('/api/best-time',    [WaCampaignsController::class, 'bestTime'])->name('api.best-time');
             Route::get('/{id}/edit', [WaCampaignsController::class, 'edit'])->whereNumber('id')->name('edit');
             Route::get('/{id}/export', [WaCampaignsController::class, 'exportRecipients'])->whereNumber('id')->name('export');
             Route::get('/{id}',      [WaCampaignsController::class, 'show'])->whereNumber('id')->name('detail');
@@ -773,11 +842,20 @@ Route::middleware('auth')->group(function () {
             Route::post('/{id}/subscribers/{cid}/pause',    [\App\Http\Controllers\FlowsController::class, 'apiSubscriberPause'])->whereNumber('id')->whereNumber('cid')->name('subscribers.pause');
             Route::post('/{id}/subscribers/{cid}/resume',   [\App\Http\Controllers\FlowsController::class, 'apiSubscriberResume'])->whereNumber('id')->whereNumber('cid')->name('subscribers.resume');
 
+            // Flow analytics — execution history, error logs and retry records.
+            // The page works workspace-wide (/flows/analytics) or scoped to one
+            // automation (/flows/analytics/{id}); every JSON endpoint below
+            // takes the same ?flow_id= / ?range= filters. Declared BEFORE the
+            // numeric {id} routes is not required (those are whereNumber'd), but
+            // the fixed 'analytics' segment is kept together for readability.
             Route::get ('/analytics',                  [\App\Http\Controllers\FlowsController::class, 'analytics'])->name('analytics');
             Route::get ('/analytics/data',             [\App\Http\Controllers\FlowsController::class, 'apiAnalytics'])->name('analytics.data');
             Route::get ('/analytics/runs',             [\App\Http\Controllers\FlowsController::class, 'apiRuns'])->name('analytics.runs');
             Route::get ('/analytics/errors',           [\App\Http\Controllers\FlowsController::class, 'apiErrors'])->name('analytics.errors');
             Route::get ('/analytics/retries',          [\App\Http\Controllers\FlowsController::class, 'apiRetries'])->name('analytics.retries');
+            // Bulk retry takes an EXPLICIT list of run ids (capped server-side)
+            // — declared before the {subscriber} route so 'retry' is not read
+            // as an id.
             Route::post('/analytics/runs/retry',       [\App\Http\Controllers\FlowsController::class, 'retryFailed'])->name('analytics.retry-bulk');
             Route::post('/analytics/runs/{subscriber}/retry', [\App\Http\Controllers\FlowsController::class, 'retryRun'])->whereNumber('subscriber')->name('analytics.retry');
             Route::get ('/analytics/{id}',             [\App\Http\Controllers\FlowsController::class, 'analytics'])->whereNumber('id')->name('analytics.show');
@@ -834,6 +912,12 @@ Route::middleware('auth')->group(function () {
             Route::get('/',                       [DevicesController::class, 'index'])->name('index');
             Route::post('/',                      [DevicesController::class, 'store'])->name('store');
             Route::post('/check',                 [DevicesController::class, 'check'])->name('check');
+            // Chunked "Check status" sweep — verifies the whole device list a
+            // small batch at a time so a 300-number workspace can't crash it.
+            Route::post('/status-sweep',          [DevicesController::class, 'statusSweep'])->name('status-sweep');
+            // Bulk check (GET, CSRF-exempt) — same chunked logic; used by the
+            // "Bulk check" button. GET avoids a silent 419 before the controller.
+            Route::get('/bulk-check',             [DevicesController::class, 'bulkCheck'])->name('bulk-check');
             // Pairing flow — proxies the Node WhatsApp bridge endpoints
             // the old project's deviceadd.js called (generate-qr-code,
             // generate-pairing-code, get-device-status, kill-session,
@@ -850,6 +934,10 @@ Route::middleware('auth')->group(function () {
             Route::post  ('/waba/{id}/primary',    [DevicesController::class, 'wabaSetPrimary'])->whereNumber('id')->name('waba.primary');
             Route::delete('/waba/{id}/disconnect', [DevicesController::class, 'wabaDisconnect'])->whereNumber('id')->name('waba.disconnect');
             Route::delete('/waba/{id}/remove',     [DevicesController::class, 'wabaRemove'])->whereNumber('id')->name('waba.remove');
+            // Per-number default AI agent — auto-assign this agent to every new
+            // conversation on the number (no manual per-chat assignment).
+            Route::post  ('/waba/{id}/default-agent',   [DevicesController::class, 'wabaSetDefaultAgent'])->whereNumber('id')->name('waba.default-agent');
+            Route::post  ('/device/{id}/default-agent', [DevicesController::class, 'deviceSetDefaultAgent'])->whereNumber('id')->name('device.default-agent');
             // Twilio account remove — mirrors waba.remove (both are wa_provider_configs rows).
             Route::delete('/twilio/{id}/remove',   [DevicesController::class, 'twilioRemove'])->whereNumber('id')->name('twilio.remove');
             // Instagram (via the linked Instaflow install). The real IG engine
@@ -864,6 +952,18 @@ Route::middleware('auth')->group(function () {
             Route::post  ('/instagram/connect-start', [DevicesController::class, 'instagramConnectStart'])->name('instagram.connect-start');
             Route::get   ('/instagram/return',        [DevicesController::class, 'instagramReturn'])->name('instagram.return');
             Route::delete('/instagram/{id}/unlink',   [DevicesController::class, 'instagramUnlink'])->whereNumber('id')->name('instagram.unlink');
+            // Email (via the linked MailTrixy install). The real email engine
+            // stays on MailTrixy; these manage this workspace's mirror rows:
+            //   available   — email accounts on MailTrixy not yet linked (picker)
+            //   link        — upsert a mirror row (also the per-row Refresh)
+            //   {id}/unlink — drop this workspace's mirror row
+            Route::get   ('/email/available',     [DevicesController::class, 'emailAvailable'])->name('email.available');
+            Route::post  ('/email/link',          [DevicesController::class, 'emailLink'])->name('email.link');
+            Route::delete('/email/{id}/unlink',   [DevicesController::class, 'emailUnlink'])->whereNumber('id')->name('email.unlink');
+            //   {id}/sync — pull this mailbox's mail from MailTrixy. The live
+            //   push is fire-and-forget (8s timeout, no retry), so this both
+            //   backfills history and repairs anything the push dropped.
+            Route::post  ('/email/{id}/sync',     [DevicesController::class, 'emailSync'])->whereNumber('id')->name('email.sync');
             // Re-point THIS number's Meta webhook (override_callback_uri) at our
             // current inbound URL, reusing the stored token — one-click fix for
             // inbound going dead after a domain change (no disconnect / re-paste).
@@ -876,6 +976,10 @@ Route::middleware('auth')->group(function () {
             // quality, limits, permissions, webhook, templates, blocks/errors).
             Route::get   ('/waba/{id}/health',      [DevicesController::class, 'wabaHealth'])->whereNumber('id')->name('waba.health');
             Route::get   ('/waba/{id}/health.json', [DevicesController::class, 'wabaHealthJson'])->whereNumber('id')->name('waba.health.json');
+            // Live inbound-webhook diagnostic — asks Meta which apps this WABA is
+            // subscribed to + the exact override callback URL, compares to THIS
+            // server, and flags the App-Secret cause of "subscribed but no inbound".
+            Route::get   ('/waba/{id}/webhook-check', [DevicesController::class, 'wabaWebhookCheck'])->whereNumber('id')->name('waba.webhook-check');
             // Paste / replace this number's Meta access token directly — fast fix
             // when a connect left it empty (verified against Meta before saving).
             Route::post  ('/waba/{id}/set-token',   [DevicesController::class, 'setWabaToken'])->whereNumber('id')->name('waba.set-token');
@@ -889,7 +993,7 @@ Route::middleware('auth')->group(function () {
             Route::post  ('/waba/{id}/qr-codes',        [DevicesController::class, 'createWabaQrCode'])->whereNumber('id')->name('waba.qr.create');
             Route::delete('/waba/{id}/qr-codes/{code}', [DevicesController::class, 'deleteWabaQrCode'])->whereNumber('id')->where('code', '[A-Za-z0-9]+')->name('waba.qr.delete');
             Route::get('/{id}/qr-code',           [DevicesController::class, 'qrCode'])->whereNumber('id')->name('qr-code');
-            Route::get('/{id}/pairing-code',      [DevicesController::class, 'pairingCode'])->whereNumber('id')->name('pairing-code');
+            // Pairing-code removed — QR is the only Unofficial connect method.
             Route::get('/{id}/connection-status', [DevicesController::class, 'connectionStatus'])->whereNumber('id')->name('connection-status');
             Route::post('/{id}/kill-session',     [DevicesController::class, 'killSession'])->whereNumber('id')->name('kill-session');
             Route::post('/{id}/connection',       [DevicesController::class, 'updateDeviceStatus'])->whereNumber('id')->name('update-status');
@@ -1063,6 +1167,7 @@ Route::middleware('auth')->group(function () {
             Route::post  ('/incoming',              [\App\Http\Controllers\IncomingWebhookController::class, 'store'])->name('incoming.store');
             Route::post  ('/incoming/{id}/forward', [\App\Http\Controllers\IncomingWebhookController::class, 'forward'])->whereNumber('id')->name('incoming.forward');
             Route::post  ('/incoming/{id}/lead-capture', [\App\Http\Controllers\IncomingWebhookController::class, 'leadCapture'])->whereNumber('id')->name('incoming.lead-capture');
+            Route::post  ('/incoming/{id}/template-send', [\App\Http\Controllers\IncomingWebhookController::class, 'templateSend'])->whereNumber('id')->name('incoming.template-send');
             Route::post  ('/incoming/{id}/toggle',  [\App\Http\Controllers\IncomingWebhookController::class, 'toggle'])->whereNumber('id')->name('incoming.toggle');
             Route::post  ('/incoming/{id}/clear',   [\App\Http\Controllers\IncomingWebhookController::class, 'clear'])->whereNumber('id')->name('incoming.clear');
             Route::get   ('/incoming/{id}/events',  [\App\Http\Controllers\IncomingWebhookController::class, 'eventsJson'])->whereNumber('id')->name('incoming.events');
@@ -1100,14 +1205,26 @@ Route::middleware('auth')->group(function () {
             Route::get('/integrations',  [UserPagesController::class, 'integrations'])->name('integrations');
 
             // Shopify integration — live OAuth + webhook handling.
+            // `shopify.token` verifies the App Bridge session token when the
+            // request carries `Authorization: Bearer …` (what Shopify's embedded
+            // app check looks for). It is ADDITIVE: a request without that
+            // header still authenticates by session, so the existing connect
+            // flow and Blade form posts are unchanged.
             $sc = \App\Http\Controllers\ShopifyController::class;
-            Route::get('/shopify',                  [$sc, 'index'])->name('shopify');
-            Route::post('/shopify/connect',         [$sc, 'startOAuth'])->name('shopify.connect');
-            Route::post('/shopify/{id}/sync',       [$sc, 'sync'])->whereNumber('id')->name('shopify.sync');
-            Route::post('/shopify/{id}/disconnect', [$sc, 'disconnect'])->whereNumber('id')->name('shopify.disconnect');
-            Route::post('/shopify/{id}/events',     [$sc, 'saveEvents'])->whereNumber('id')->name('shopify.events');
-            Route::post('/shopify/{id}/offer',      [$sc, 'sendOffer'])->whereNumber('id')->name('shopify.offer');
-            Route::post('/shopify/{id}/winback',    [$sc, 'sendWinback'])->whereNumber('id')->name('shopify.winback');
+            Route::middleware('shopify.token')->group(function () use ($sc) {
+                Route::get('/shopify',                  [$sc, 'index'])->name('shopify');
+                // Self-serve BYO Shopify app — owner saves their own API keys.
+                Route::post('/shopify/own-app',         [$sc, 'saveOwnApp'])->name('shopify.own-app');
+                Route::post('/shopify/connect',         [$sc, 'startOAuth'])->name('shopify.connect');
+                Route::post('/shopify/{id}/sync',       [$sc, 'sync'])->whereNumber('id')->name('shopify.sync');
+                Route::post('/shopify/{id}/disconnect', [$sc, 'disconnect'])->whereNumber('id')->name('shopify.disconnect');
+                Route::post('/shopify/{id}/events',     [$sc, 'saveEvents'])->whereNumber('id')->name('shopify.events');
+                Route::post('/shopify/{id}/offer',      [$sc, 'sendOffer'])->whereNumber('id')->name('shopify.offer');
+                Route::post('/shopify/{id}/test-order', [$sc, 'testOrder'])->whereNumber('id')->name('shopify.test-order');
+                Route::post('/shopify/{id}/winback',    [$sc, 'sendWinback'])->whereNumber('id')->name('shopify.winback');
+                // Toggle the WaDesk chat widget on the Shopify storefront.
+                Route::post('/shopify/{id}/widget',     [$sc, 'saveWidget'])->whereNumber('id')->name('shopify.widget');
+            });
 
             // WooCommerce integration — Basic-Auth REST + webhook handling.
             $wc = \App\Http\Controllers\WoocommerceController::class;
@@ -1223,6 +1340,8 @@ Route::middleware('auth')->group(function () {
             // Dedicated Google account page — same OAuth tokens power
             // BookAppointment, GoogleMeet node, and inbox composer.
             Route::get('/google-account', [\App\Http\Controllers\GoogleAccountController::class, 'index'])->name('google-account');
+            // Self-serve BYO Google app — owner saves their own OAuth keys.
+            Route::post('/google-account/own-app', [\App\Http\Controllers\GoogleAccountController::class, 'saveOwnApp'])->name('google-account.own-app');
 
             // Flow-builder pickers — list the workspace's Sheets / Docs /
             // Forms so the node-config modals can render a dropdown.
@@ -1260,6 +1379,12 @@ Route::middleware('auth')->group(function () {
                 Route::get('/call-logs',          [$clc, 'index'])->name('call-logs.index');
                 Route::get('/call-logs/{id}',     [$clc, 'show'])->whereNumber('id')->name('call-logs.show');
             });
+
+            // ── WhatsApp Cloud API groups. Separate surface from
+            // /store/groups (Unofficial API): a Cloud API group is owned by a
+            // WABA number and addressed by an opaque group id, never a jid.
+            // Meta gates the whole feature behind an Official Business
+            // Account, so the page itself handles "not eligible".
 
             // ── WhatsApp Forms — builder + publish to Meta Flows API +
             // CRUD. The flow-builder `wa_form` node references published
@@ -1365,6 +1490,20 @@ Route::middleware('auth')->group(function () {
                 Route::delete('/{lead}',        [$lf, 'destroy'])->whereNumber('lead')->name('destroy');
                 Route::post('/clear',           [$lf, 'clear'])->name('clear');
             });
+        // AI SDR — cadence-flow-driven outreach with lead scoring, human
+        // handoff at a score threshold, and auto-stop on reply/convert.
+        Route::middleware('workspace.role:manager')
+            ->prefix('sdr')->name('sdr.')->group(function () {
+                $sdr = \App\Http\Controllers\User\SdrController::class;
+                Route::get('/',                    [$sdr, 'index'])->name('index');
+                Route::post('/campaigns',          [$sdr, 'storeCampaign'])->name('campaigns.store');
+                Route::put('/campaigns/{id}',      [$sdr, 'updateCampaign'])->whereNumber('id')->name('campaigns.update');
+                Route::delete('/campaigns/{id}',   [$sdr, 'destroyCampaign'])->whereNumber('id')->name('campaigns.destroy');
+                Route::post('/rules',              [$sdr, 'storeRule'])->name('rules.store');
+                Route::put('/rules/{id}',          [$sdr, 'updateRule'])->whereNumber('id')->name('rules.update');
+                Route::delete('/rules/{id}',       [$sdr, 'destroyRule'])->whereNumber('id')->name('rules.destroy');
+            });
+
         Route::prefix('affiliate-history')->name('affiliate-history.')->group(function () {
             $c = \App\Http\Controllers\AffiliateHistoryController::class;
             Route::get('/',       [$c, 'index'])->name('index');
@@ -1404,6 +1543,23 @@ Route::middleware('auth')->group(function () {
             Route::get('/stages',                    [$c, 'stagesJson'])->name('stages');
             Route::get('/contacts/search',           [$c, 'contactsSearch'])->name('contacts.search');
             Route::post('/settings',                 [$c, 'saveSettings'])->name('settings');
+            // Pipeline + stage management. These MUST stay above the
+            // /{deal} routes below: those are whereNumber-constrained, but a
+            // literal path declared after them is still shadowed for any
+            // segment that also parses as a number.
+            Route::get('/pipelines',                      [$c, 'pipelinesJson'])->name('pipelines.index');
+            Route::post('/pipelines',                     [$c, 'pipelineStore'])->name('pipelines.store');
+            Route::patch('/pipelines/{id}',               [$c, 'pipelineUpdate'])->whereNumber('id')->name('pipelines.update');
+            Route::delete('/pipelines/{id}',              [$c, 'pipelineDestroy'])->whereNumber('id')->name('pipelines.destroy');
+            Route::post('/pipelines/{id}/stages',         [$c, 'stageStore'])->whereNumber('id')->name('stages.store');
+            Route::post('/pipelines/{id}/stages/reorder', [$c, 'stageReorder'])->whereNumber('id')->name('stages.reorder');
+            Route::patch('/stages/{id}',                  [$c, 'stageUpdate'])->whereNumber('id')->name('stages.update');
+            Route::delete('/stages/{id}',                 [$c, 'stageDestroy'])->whereNumber('id')->name('stages.destroy');
+            // Deal custom-field DEFINITIONS. Values ride on PATCH /deals/{deal}.
+            Route::get('/fields',                         [$c, 'fieldsIndex'])->name('fields.index');
+            Route::post('/fields',                        [$c, 'fieldStore'])->name('fields.store');
+            Route::patch('/fields/{id}',                  [$c, 'fieldUpdate'])->whereNumber('id')->name('fields.update');
+            Route::delete('/fields/{id}',                 [$c, 'fieldDestroy'])->whereNumber('id')->name('fields.destroy');
             Route::post('/',                         [$c, 'store'])->name('store');
             Route::get('/{deal}',                    [$c, 'show'])->whereNumber('deal')->name('show');
             Route::patch('/{deal}',                  [$c, 'update'])->whereNumber('deal')->name('update');
@@ -1731,6 +1887,11 @@ Route::middleware('auth')->group(function () {
         Route::get('/notifications-page',     [UserPagesController::class, 'notifications'])->name('notifications.legacy');
         Route::get('/settings',      [UserPagesController::class, 'settings'])->name('settings');
         Route::post('/settings',     [UserPagesController::class, 'settingsUpdate'])->name('settings.update');
+        // Per-workspace reCAPTCHA keys for a connected white-label custom domain.
+        Route::post('/settings/captcha', [UserPagesController::class, 'settingsCaptcha'])->name('settings.captcha');
+        // Per-workspace Meta app (manual keys) for Facebook + Instagram connect.
+        Route::post('/settings/meta-app', [UserPagesController::class, 'settingsMetaApp'])->name('settings.meta-app');
+        Route::post('/settings/meta-app/test', [UserPagesController::class, 'settingsMetaAppTest'])->name('settings.meta-app.test');
 
         // Sprint 6 — per-tab save endpoints. Owner-only or self-only
         // inside SettingsTabsController.
@@ -1786,6 +1947,36 @@ Route::middleware('auth')->group(function () {
         Route::get('/account/wallet/statement',     [\App\Http\Controllers\AccountController::class, 'walletStatement'])->name('account.wallet.statement');
         Route::get('/account/wallet/statement.csv', [\App\Http\Controllers\AccountController::class, 'walletStatementCsv'])->name('account.wallet.statement.csv');
 
+        /*
+         * Drip campaigns — scheduled follow-up sequences.
+         *
+         * Separate from Flows on purpose: a Flow is a conversation that reacts
+         * to replies, a drip is a schedule that runs over days regardless. The
+         * waits are DB timestamps (drip_subscribers.next_send_at), so a deploy
+         * or crash delays a follow-up instead of losing it — which is what the
+         * Flow Wait node (an in-process setTimeout) cannot promise.
+         *
+         * `plan:access_drip_campaigns` finally enforces a Package flag that has
+         * existed, and been sold, without ever being checked.
+         */
+        $drip = \App\Http\Controllers\DripCampaignsController::class;
+        Route::middleware('plan:access_drip_campaigns')->group(function () use ($drip) {
+            Route::get   ('/drip-campaigns',                  [$drip, 'index'])->name('drip.index');
+            Route::get   ('/drip-campaigns/create',           [$drip, 'create'])->name('drip.create');
+            Route::post  ('/drip-campaigns',                  [$drip, 'store'])->name('drip.store');
+            Route::get   ('/drip-campaigns/{id}/edit',        [$drip, 'edit'])->whereNumber('id')->name('drip.edit');
+            Route::put   ('/drip-campaigns/{id}',             [$drip, 'update'])->whereNumber('id')->name('drip.update');
+            Route::delete('/drip-campaigns/{id}',             [$drip, 'destroy'])->whereNumber('id')->name('drip.destroy');
+            Route::post  ('/drip-campaigns/{id}/toggle',      [$drip, 'toggle'])->whereNumber('id')->name('drip.toggle');
+            Route::post  ('/drip-campaigns/{id}/enrol',       [$drip, 'enrol'])->whereNumber('id')->name('drip.enrol');
+            Route::get   ('/drip-campaigns/{id}/subscribers', [$drip, 'subscribers'])->whereNumber('id')->name('drip.subscribers');
+            // Preview one step on a real number before it reaches an audience.
+            Route::post  ('/drip-campaigns/{id}/test',        [$drip, 'test'])->whereNumber('id')->name('drip.test');
+            // Drain hook — any poller can push due steps out without waiting
+            // for an operator to open the page.
+            Route::post  ('/drip-campaigns/drain',            [$drip, 'drain'])->name('drip.drain');
+        });
+
         // WhatsApp Warmer — per-number warm-up settings (all engines: Unofficial + WABA + Twilio).
         Route::get ('/warmer',       [\App\Http\Controllers\WarmerController::class, 'index'])->name('warmer.index');
         // {key} is a "engine:id" sender key (e.g. baileys:5 / waba:3 / twilio:2).
@@ -1805,6 +1996,18 @@ Route::middleware('auth')->group(function () {
         Route::get   ('/developers',           [\App\Http\Controllers\DeveloperApiController::class, 'index'])->name('developers');
         Route::post  ('/developers/keys',      [\App\Http\Controllers\DeveloperApiController::class, 'store'])->name('developers.keys.store');
         Route::delete('/developers/keys/{id}', [\App\Http\Controllers\DeveloperApiController::class, 'destroy'])->whereNumber('id')->name('developers.keys.destroy');
+
+        // /n8n — connect the user's OWN n8n instance (we never bundle/host it).
+        // Triggers reuse the outbound-webhook delivery pipeline; actions use the
+        // /api/v1 REST API. Admin-only; the controller gates on the same plan
+        // feature the webhook engine requires (access_outbound_webhooks).
+        Route::middleware('workspace.role:admin')->group(function () {
+            Route::get   ('/n8n',      [\App\Http\Controllers\N8nController::class, 'index'])->name('n8n');
+            Route::post  ('/n8n',      [\App\Http\Controllers\N8nController::class, 'save'])->name('n8n.save');
+            Route::post  ('/n8n/test', [\App\Http\Controllers\N8nController::class, 'test'])->name('n8n.test');
+            Route::post  ('/n8n/embed',[\App\Http\Controllers\N8nController::class, 'saveEmbed'])->name('n8n.embed');
+            Route::delete('/n8n',      [\App\Http\Controllers\N8nController::class, 'disconnect'])->name('n8n.disconnect');
+        });
 
         // /sheets-addon — landing page that walks the user through
         // installing the marketplace add-on + pasting their API key.

@@ -34,11 +34,8 @@
             'M1.5 4.5h13v7h-13z M1.5 7h13 M4 9.5h3',
             \App\Models\WorkspacePaymentConfig::where('workspace_id', auth()->user()->current_workspace_id ?? 0)->count(),
         ],
-        'gateways' => [
-            'Checkout gateways',
-            'M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z M1.5 8h13 M8 1.5c-2 2-2 11 0 13 M8 1.5c2 2 2 11 0 13',
-            \App\Models\WaMerchantGateway::where('workspace_id', auth()->user()->current_workspace_id ?? 0)->where('storefront_id', 0)->where('active', true)->count(),
-        ],
+        // Checkout gateways moved to Settings → Payment gateways (one home for the
+        // merchant's own keys, shared by store checkout + appointment booking).
         'customers' => [
             'Customers',
             'M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z M2.5 14c0-2.5 2.2-4 5.5-4s5.5 1.5 5.5 4',
@@ -146,7 +143,6 @@ if ($cfgConnected) {
                     'coupons' => route('user.store.coupons.index'),
                     'reviews' => route('user.store.reviews.index'),
                     'payments' => route('user.store.payments.index'),
-                    'gateways' => route('user.store.gateways.index'),
                     'customers' => route('user.store.customers.index'),
                 };
                 $active = $current === $key;
@@ -187,7 +183,10 @@ if ($cfgConnected) {
         <div class="border border-wa-green/30 rounded-2xl bg-wa-bubble/50 p-4 text-[12px] text-ink-700 leading-relaxed">
             <div class="font-semibold text-ink-900 mb-1 flex items-center gap-2"><span
                     class="w-2 h-2 rounded-full bg-wa-green"></span>Provider live</div>
-            @if ($cfgConnected)
+            @php $shopSending = (isset($sf) && $sf) ? $sf->sending_label : null; @endphp
+            @if ($shopSending)
+                Sending from <span class="font-mono">{{ $shopSending }}</span>.
+            @elseif ($cfgConnected)
                 Connected via <span class="font-mono">{{ $cfg->phone_number ?: $cfg->display_label }}</span>.
             @elseif ($sfDeviceLive)
                 Sending from <span

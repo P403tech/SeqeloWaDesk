@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+{{-- dir is required: postcss-rtlcss scopes every directional rule to
+     [dir=ltr] / [dir=rtl], so omitting it drops them all. --}}
+<html lang="en" dir="ltr">
 
 <head>
     <meta charset="utf-8">

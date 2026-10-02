@@ -521,18 +521,18 @@
  {{-- ROW 6: Devices + Integrations + Scheduled --}}
  <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-5">
 
- {{-- 14 · Devices · 3 engines --}}
+ {{-- 14 · Devices · 2 engines --}}
  <a id="feat-14" href="{{ url('/register') }}" class="col-span-12 lg:col-span-4 feat-card hairline rounded-3xl bg-white p-6 block overflow-hidden">
  <div class="flex items-start justify-between mb-3">
  <div>
  <div class="feature-num text-[52px]">14</div>
- <div class="mono text-[10px] uppercase tracking-[0.22em] text-ink-500 mt-1.5" data-fc="feature-bento.card14_eyebrow">{{ fc('feature-bento.card14_eyebrow', __('Devices · 3 engines')) }}</div>
+ <div class="mono text-[10px] uppercase tracking-[0.22em] text-ink-500 mt-1.5" data-fc="feature-bento.card14_eyebrow">{{ fc('feature-bento.card14_eyebrow', __('Devices · 2 engines')) }}</div>
  </div>
  </div>
- <h3 class="serif text-[26px] leading-tight" data-fc="feature-bento.card14_title">{!! fc('feature-bento.card14_title', 'WABA. Twilio.<br><span class="italic text-wa-deep">Unofficial</span> API.') !!}</h3>
- <p class="text-[12.5px] text-ink-600 mt-2 leading-relaxed" data-fc="feature-bento.card14_body">{{ fc('feature-bento.card14_body', __('Mix engines per workspace. Embedded signup, OAuth, or scan a QR.')) }}</p>
+ <h3 class="serif text-[26px] leading-tight" data-fc="feature-bento.card14_title">{!! fc('feature-bento.card14_title', 'WABA. <span class="italic text-wa-deep">Twilio.</span>') !!}</h3>
+ <p class="text-[12.5px] text-ink-600 mt-2 leading-relaxed" data-fc="feature-bento.card14_body">{{ fc('feature-bento.card14_body', __('Mix engines per workspace. Embedded signup or OAuth.')) }}</p>
 
- <div class="feat-mock mt-5 grid grid-cols-3 gap-2">
+ <div class="feat-mock mt-5 grid grid-cols-2 gap-2">
  <div class="hairline rounded-xl bg-paper-50 p-2.5 text-center relative">
  <div class="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full blink-green"></div>
  <span class="brand-tile w-9 h-9 rounded-lg bg-[#25D366] text-white flex items-center justify-center mx-auto float-y">
@@ -548,17 +548,10 @@
  <div class="serif text-[11px] mt-1.5">Twilio</div>
  <div class="mono text-[8px] text-ink-500">prod</div>
  </div>
- <div class="hairline rounded-xl bg-paper-50 p-2.5 text-center">
- <span class="brand-tile w-9 h-9 rounded-lg bg-ink-950 text-white flex items-center justify-center mx-auto float-y-3">
- <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor"><path d="M3 3h6v6H3V3zm2 2v2h2V5H5zm10-2h6v6h-6V3zm2 2v2h2V5h-2zM3 15h6v6H3v-6zm2 2v2h2v-2H5zm10 0h2v2h-2v-2zm4 0h2v2h-2v-2zm-4 4h2v2h-2v-2zm4 0h2v2h-2v-2zm-2-4h-2v-2h2v2zm-2 4h2v2h-2v-2zm6-4v2h-2v-2h2z"/></svg>
- </span>
- <div class="serif text-[11px] mt-1.5">Unofficial API</div>
- <div class="mono text-[8px] text-ink-500">sandbox</div>
- </div>
  </div>
 
  <div class="hairline-t mt-5 pt-3 flex items-center justify-between text-[12px]">
- <span class="mono text-ink-500">{{ __('multi-device · auto-reconnect') }}</span>
+ <span class="mono text-ink-500">{{ __('multi-number · one inbox') }}</span>
  <span class="text-wa-deep font-semibold feat-arrow">{{ __('Open →') }}</span>
  </div>
  </a>

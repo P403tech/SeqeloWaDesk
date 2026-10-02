@@ -47,6 +47,19 @@ export default function init() {
       if (first) return String(first);
     }
     return fallback;
+
+  // Turn a failed api() response into the REAL reason, not a generic line.
+  // Laravel validation (422) → { message, errors: { field: [msg] } }; CSRF
+  // (419), plan/other framework failures → { message }; this controller's own
+  // guards → { error }. The old handler read only { error }, so every 422/419
+  // fell back to a useless catch-all with no field and no reason shown.
+  function errorText(json, status) {
+    if (json && json.errors && typeof json.errors === 'object') {
+      const first = Object.values(json.errors)[0];
+      if (first) return Array.isArray(first) ? first[0] : String(first);
+    }
+    if (status === 419) return 'Your session expired — refresh the page and try again.';
+    return (json && (json.error || json.message)) || 'Save failed — check the fields above.';
   }
   function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -282,8 +295,8 @@ export default function init() {
       shopify_tools: !!state.shopify_tools,
       channel_control: readChannelControl(),
     };
-    const { ok, json } = await api('/ai-training/api/assistant', { method: 'POST', body });
-    if (!ok) { toast(json.error || 'Save failed — check the fields above.', 'error'); return false; }
+    const { ok, json, status } = await api('/ai-training/api/assistant', { method: 'POST', body });
+    if (!ok) { toast(errorText(json, status), 'error'); return false; }
     state.id = json.id;
     document.getElementById('ait-state-pill').textContent = 'Saved';
     if (!silent) toast('Agent saved.', 'success');
@@ -450,6 +463,15 @@ export default function init() {
         <div class="flex gap-2">
           <button type="button" data-src-cancel class="px-3 py-1.5 rounded-md border border-paper-200 text-[12px] font-semibold text-ink-700">Cancel</button>
           <button type="button" data-src-go class="px-3 py-1.5 rounded-md bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">Save pair</button>
+        </div>`;
+    } else if (kind === 'catalog') {
+      html = `
+        <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">Add your product catalog</div>
+        <input data-src-label value="Product catalog" placeholder="Label" class="w-full bg-paper-0 border border-paper-200 rounded-md px-2.5 py-1.5 text-[12.5px]">
+        <p class="text-[11px] text-ink-500">The agent will read your live products — names, prices and stock — and stay up to date automatically. No file to upload.</p>
+        <div class="flex gap-2">
+          <button type="button" data-src-cancel class="px-3 py-1.5 rounded-md border border-paper-200 text-[12px] font-semibold text-ink-700">Cancel</button>
+          <button type="button" data-src-go class="px-3 py-1.5 rounded-md bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">Add catalog</button>
         </div>`;
     } else if (kind === 'file') {
       html = `

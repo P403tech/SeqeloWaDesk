@@ -35,17 +35,40 @@
             $rupeeForCredits100 = $credPerRupee > 0 ? round(100 / $credPerRupee, 2) : 0;
             $msgsFor100Credits = $credPerMessage > 0 ? intdiv(100, $credPerMessage) : 0;
             $referrerWorth = $credPerSignup * $credPerMessage;
-            // Signup reward as money (1 credit == 1 money-minor).
             $walletSym       = \App\Support\FormatSettings::currencyFor()?->symbol ?? '';
+
+            // `referral_signup_credits` stores MONEY in minor units. Two values
+            // come out of it and they are NOT the same number:
+            //   $signupMoney   - the money amount, for display
+            //   $signupCredits - what that money actually converts to, via the
+            //                    SAME helper top-ups use
+            // They used to be conflated: the stored minor figure was shown as
+            // money AND spent as credits, which is what made a Rp900 reward pay
+            // out 90,000 credits instead of 9.
             $signupMoney     = number_format($credPerSignup / 100, 2);
+            // Plain, ungrouped value for <input type="number">. number_format()
+            // emits a thousands comma ("1,000.00") which a number input rejects
+            // outright, so the field rendered EMPTY for every reward >= 1000.
+            $signupMoneyRaw  = number_format($credPerSignup / 100, 2, '.', '');
+            $signupCredits   = app(\App\Services\WalletService::class)->creditsForMinor($credPerSignup);
+            $signupMessages  = $credPerMessage > 0 ? intdiv($signupCredits, $credPerMessage) : 0;
+
+            // Refer & Earn (two-sided). Both rewards are MONEY; shown as plain
+            // ungrouped values for the number inputs.
+            $referralEnabled   = (bool) ($settings['referral_enabled'] ?? true);
+            $referrerMinor     = (int) ($settings['referral_referrer_reward_minor'] ?? $credPerSignup);
+            $refereeMinor      = (int) ($settings['referral_referee_reward_minor'] ?? 0);
+            $referrerRewardRaw = number_format($referrerMinor / 100, 2, '.', '');
+            $refereeRewardRaw  = number_format($refereeMinor / 100, 2, '.', '');
+            $referralWindow    = (int) ($settings['referral_window_days'] ?? 30);
         @endphp
 
         {{-- KPI strip --}}
         <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div class="bg-paper-0 border border-paper-200 rounded-2xl p-4 shadow-card">
-                <div class="text-[11px] text-ink-600 font-medium">{{ __('Signup reward') }}</div>
-                <div class="font-serif text-[28px] leading-none mt-1">{{ $walletSym }}{{ $signupMoney }}</div>
-                <div class="text-[11px] text-ink-500 mt-2">{{ __('added to the referrer\'s wallet per successful referral') }}</div>
+                <div class="text-[11px] text-ink-600 font-medium">{{ __('Referrer reward') }}</div>
+                <div class="font-serif text-[28px] leading-none mt-1">{{ $walletSym }}{{ number_format($referrerMinor / 100, 2) }}</div>
+                <div class="text-[11px] text-ink-500 mt-2">{{ __('to the referrer when a friend makes a first paid top-up') }}@if ($refereeMinor > 0) · {{ $walletSym }}{{ number_format($refereeMinor / 100, 2) }} {{ __('to the friend') }}@endif</div>
             </div>
             <div class="bg-paper-0 border border-paper-200 rounded-2xl p-4 shadow-card">
                 <div class="text-[11px] text-ink-600 font-medium">{{ __('Cost per message') }}</div>
@@ -90,20 +113,53 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                     class="font-mono text-[10px] text-wa-deep px-2 py-1 rounded-full bg-wa-mint border border-wa-green/40">{{ __('live · 3 keys') }}</span>
             </div>
 
+            {{-- Refer & Earn on/off + qualifying window --}}
+            <div class="px-5 pt-4 flex flex-wrap items-center gap-4">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <span class="relative inline-flex items-center w-10 h-5 shrink-0">
+                        <input type="checkbox" name="referral_enabled" value="1" @checked($referralEnabled) class="sr-only peer">
+                        <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
+                        <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
+                    </span>
+                    <span class="text-[12px] font-semibold text-ink-800">{{ __('Refer & Earn enabled') }}</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-ink-600">{{ __('Pending referral expires after') }}</span>
+                    <input type="number" name="referral_window_days" min="1" max="365"
+                        value="{{ old('referral_window_days', $referralWindow) }}"
+                        class="w-20 px-2 py-1 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep" />
+                    <span class="text-[11px] text-ink-600">{{ __('days') }}</span>
+                </label>
+            </div>
+
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-5">
                 <label class="flex flex-col gap-1.5">
                     <span
-                        class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">{{ __('Signup reward') }} ({{ $walletSym ?: __('money') }})</span>
+                        class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">{{ __('Referrer reward') }} ({{ $walletSym ?: __('money') }})</span>
                     <div class="relative">
                         @if ($walletSym)
                             <span class="absolute left-3 top-1/2 -translate-y-1/2 text-[12.5px] text-ink-500 font-mono">{{ $walletSym }}</span>
                         @endif
-                        <input type="number" name="referral_signup_credits" min="0" max="100000" step="0.01"
-                            value="{{ old('referral_signup_credits', $signupMoney) }}"
+                        <input type="number" name="referral_referrer_reward" min="0" max="100000" step="0.01"
+                            value="{{ old('referral_referrer_reward', $referrerRewardRaw) }}"
                             class="w-full py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 {{ $walletSym ? 'pl-7 pr-3' : 'px-3' }}" />
                     </div>
                     <span
-                        class="text-[10.5px] text-ink-500">{{ __('Money added to the referrer\'s wallet the moment their referee finishes signup.') }}</span>
+                        class="text-[10.5px] text-ink-500">{{ __('Wallet money the REFERRER earns when their friend makes a first paid top-up.') }}</span>
+                </label>
+                <label class="flex flex-col gap-1.5">
+                    <span
+                        class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">{{ __('Friend\'s welcome bonus') }} ({{ $walletSym ?: __('money') }})</span>
+                    <div class="relative">
+                        @if ($walletSym)
+                            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-[12.5px] text-ink-500 font-mono">{{ $walletSym }}</span>
+                        @endif
+                        <input type="number" name="referral_referee_reward" min="0" max="100000" step="0.01"
+                            value="{{ old('referral_referee_reward', $refereeRewardRaw) }}"
+                            class="w-full py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 {{ $walletSym ? 'pl-7 pr-3' : 'px-3' }}" />
+                    </div>
+                    <span
+                        class="text-[10.5px] text-ink-500">{{ __('Wallet money the INVITED FRIEND earns on their first paid top-up. Set 0 for a one-sided programme.') }}</span>
                 </label>
                 <label class="flex flex-col gap-1.5">
                     <span
@@ -132,9 +188,15 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
             <div class="px-5 py-4 border-t border-paper-200 bg-paper-50/40 flex flex-wrap items-center justify-between gap-3">
                 <div class="text-[11.5px] text-ink-600">
                     {{ __('With current values,') }} <strong>{{ $walletSym }}{{ $signupMoney }}</strong>
-                    {{ __('is added to the referrer\'s wallet — enough for') }}
-                    <strong>{{ number_format($credPerMessage > 0 ? intdiv($credPerSignup, $credPerMessage) : 0) }}</strong>
+                    {{ __('is added to the referrer\'s wallet. At') }}
+                    <strong>{{ rtrim(rtrim(number_format($credPerRupee, 4), '0'), '.') }}</strong>
+                    {{ __('credits per') }} {{ $walletSym ?: __('unit') }}{{ __(', that converts to') }}
+                    <strong>{{ number_format($signupCredits) }}</strong> {{ __('credits — enough for') }}
+                    <strong>{{ number_format($signupMessages) }}</strong>
                     {{ __('messages.') }}
+                    @if ($credPerSignup > 0 && $signupCredits <= 0)
+                        <span class="text-accent-coral font-semibold">{{ __('That is worth less than one credit, so referrers receive nothing. Raise the reward or the conversion rate.') }}</span>
+                    @endif
                 </div>
                 <button type="submit"
                     class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">{{ __('Save') }}</button>
@@ -155,12 +217,16 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                         chat reply, campaign, broadcast, scheduled, auto-reply. Higher value = each send burns more
                         credit.</p>
                     <p><strong>{{ __('Top-up conversion:') }}</strong> "Credits per {{ $defaultSym }}" decides how
-                        many credits each unit of the platform currency buys. <span class="font-mono text-[11px]">0.1 =
-                            {{ $defaultSym }}10/credit · 1.0 = {{ $defaultSym }}1/credit · 10 =
-                            {{ $defaultSym }}0.10/credit</span>.</p>
-                    <p><strong>{{ __('Referral reward:') }}</strong> the moment a referee finishes signup, the
-                        referrer's wallet gets <em>{{ $walletSym }}{{ $signupMoney }}</em> {{ __('added as money') }}.
-                        {{ __('This is the affiliate engine.') }}</p>
+                        many credits each unit of the platform currency buys. <span class="font-mono text-[11px]">0.01 =
+                            {{ $defaultSym }}100/credit · 0.1 = {{ $defaultSym }}10/credit · 1.0 =
+                            {{ $defaultSym }}1/credit · 10 = {{ $defaultSym }}0.10/credit</span>.
+                        {{-- 0.01 leads the list deliberately: it is the sensible setting
+                             for a high-denomination currency (IDR, VND, KRW) and its
+                             absence here is part of why the unit mismatch went unnoticed. --}}
+                    </p>
+                    <p><strong>{{ __('Refer & Earn:') }}</strong> {{ __('when an invited friend makes their FIRST paid top-up, the referrer earns') }}
+                        <em>{{ $walletSym }}{{ number_format($referrerMinor / 100, 2) }}</em>@if ($refereeMinor > 0) {{ __('and the friend earns') }} <em>{{ $walletSym }}{{ number_format($refereeMinor / 100, 2) }}</em>@endif,
+                        {{ __('both as wallet money. Nothing is paid at signup (prevents free-account farming).') }}</p>
                 </div>
             </div>
 
@@ -169,12 +235,12 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                 <h3 class="font-serif text-[20px] leading-tight mt-1 mb-3">{{ __('When credits move') }}</h3>
                 <ol class="space-y-2.5 text-[12.5px] text-ink-700 list-decimal pl-4 leading-relaxed">
                     <li>
-                        <strong>{{ __('Referral Signup:') }}</strong>
-                        {{ __("User joins with a referral code → Referrer's wallet is credited.") }}
+                        <strong>{{ __('Refer & Earn:') }}</strong>
+                        {{ __("Friend joins with a referral link, then makes a first paid top-up → both wallets are credited.") }}
                     </li>
                     <li>
                         <strong>{{ __('Workspace Top-Up:') }}</strong>
-                        {{ __('Workspace adds funds → Wallet balance increases by 1 credit per USD.') }}
+                        {{ __('Workspace adds funds → credits are added at the top-up rate below.') }}
                     </li>
                     <li>
                         <strong>{{ __('Message Sent:') }}</strong>
@@ -197,9 +263,16 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                     <strong>{{ __('break-even point') }}</strong> for affiliate marketing — too generous and your
                     wallet drains, too stingy and nobody refers.</p>
                 <div class="mt-3 rounded-xl bg-paper-0/60 px-3 py-2 text-[11.5px] font-mono text-ink-700">
-                    {{ __('Example:') }} {{ $walletSym }}{{ $signupMoney }} {{ __('reward') }} ÷
-                    {{ __('cost per message') }} =
-                    {{ number_format($credPerMessage > 0 ? intdiv($credPerSignup, $credPerMessage) : 0) }}
+                    {{-- Every step is printed. The old line read "reward ÷ cost per
+                         message = N" while N came from a different figure entirely,
+                         so an admin checking the arithmetic by hand could never make
+                         it reconcile — which is how the unit mismatch stayed hidden. --}}
+                    {{ __('Example:') }} {{ $walletSym }}{{ $signupMoney }} ×
+                    {{ rtrim(rtrim(number_format($credPerRupee, 4), '0'), '.') }}
+                    {{ __('credits per') }} {{ $walletSym ?: __('unit') }} =
+                    {{ number_format($signupCredits) }} {{ __('credits') }} ÷
+                    {{ $credPerMessage }} {{ __('per message') }} =
+                    {{ number_format($signupMessages) }}
                     {{ __('free sends per referral.') }}
                 </div>
             </div>
@@ -209,6 +282,16 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
         <section id="message-pricing" class="mt-8 scroll-mt-20 bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
             <form method="POST" action="{{ route('admin.settings.message-rates.update') }}">
                 @csrf
+                {{-- Implicit-submit default = SAVE. Without this, pressing Enter in a
+                     price cell fires the FIRST submit button on the page, which is
+                     "Sync Meta costs" (it carries its own formaction). Sync IGNORES
+                     the typed "You Charge" values and reloads them from the DB, so
+                     Authentication / Marketing appeared to "reset to ₹0" while Utility
+                     (already stored) survived. This off-screen submit — the form's own
+                     save action — is now the FIRST submit button, so Enter SAVES
+                     instead of syncing. The visible Sync button still works on click. --}}
+                <button type="submit" tabindex="-1" aria-hidden="true"
+                    style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none"></button>
                 <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
                     <div>
                         <h2 class="font-serif text-[22px] leading-tight">{{ __('Per-country pricing & Meta cost') }}</h2>
@@ -303,10 +386,10 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
 
                 @php
                     // Money value of ONE credit in the platform currency (major units).
-                    // credits_per_currency_minor = credits bought per 1 minor unit, so
-                    // 1 credit = 1/(rate) minor = 1/(rate*100) major. Used to price the
-                    // customer side of the margin readout. 0 → unknown (hide margin).
-                    $moneyPerCredit = $credPerRupee > 0 ? (1 / ($credPerRupee * 100)) : 0;
+                    // credits_per_currency_minor = credits bought per 1 MAJOR unit (₹1),
+                    // so 1 credit = 1/(rate) major. Used to price the customer side of
+                    // the margin readout. 0 → unknown (hide margin).
+                    $moneyPerCredit = $credPerRupee > 0 ? (1 / $credPerRupee) : 0;
                     $curSym = $defaultSym ?: '';
                 @endphp
 
@@ -329,7 +412,22 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                                     <td class="px-3 py-2">
                                         <select class="ts-country w-48" name="country_code[]" data-value="{{ $r->country_code }}">
                                             <option value="">{{ __('Any country (default)') }}</option>
+                                            {{-- Render the saved country as a real selected option SERVER-SIDE.
+                                                 The TomSelect enhancer normally injects it from data-value, but if
+                                                 that JS is slow/blocked/errors, the row would otherwise submit an
+                                                 empty country_code — collapsing every country row onto the "Any
+                                                 country" default rows and overwriting the admin's prices to the
+                                                 last colliding row's value (e.g. a ₹0 country → resets to ₹0.00).
+                                                 Emitting it here makes the correct country submit with or without JS. --}}
+                                            @if ($r->country_code)
+                                                <option value="{{ $r->country_code }}" selected>{{ $r->country_code }}</option>
+                                            @endif
                                         </select>
+                                        {{-- Server-rendered fallback country (no JS). The backend uses this
+                                             when the TomSelect widget desyncs and submits an empty
+                                             country_code[] for a row that really has a country, so the
+                                             per-country edit isn't dropped onto the "Any country" default. --}}
+                                        <input type="hidden" name="orig_country[]" value="{{ $r->country_code }}">
                                     </td>
                                     <td class="px-3 py-2">
                                         <select name="category[]" class="px-2 py-1.5 border border-paper-200 rounded-lg bg-paper-0">
@@ -363,6 +461,7 @@ $defaultSym = $defaultCur?->symbol ?? ($defaultCur?->code ?? '');
                                         <select class="ts-country w-48" name="country_code[]" data-value="">
                                             <option value="">{{ __('Any country (default)') }}</option>
                                         </select>
+                                        <input type="hidden" name="orig_country[]" value="">
                                     </td>
                                     <td class="px-3 py-2">
                                         <select name="category[]" class="px-2 py-1.5 border border-paper-200 rounded-lg bg-paper-0">

@@ -1,7 +1,38 @@
 export default function init() {
+    hideDisabledTools();
     initRotatingTips();
     initShortcutCustomizer();
     initToolTabs();
+}
+
+// ── Admin feature toggles (/admin/settings/features) ──
+// The grid carries `data-hidden-features` — a JSON array of URL paths for
+// features an admin switched OFF. Any tool card whose href matches one is
+// removed outright, so the More page never shows a hidden feature. Runs BEFORE
+// initToolTabs so the tab filter only ever sees the still-visible cards.
+function hideDisabledTools() {
+    const grid = document.querySelector('[data-more-tools]');
+    if (!grid) return;
+
+    let hidden = [];
+    try { hidden = JSON.parse(grid.getAttribute('data-hidden-features') || '[]'); } catch (e) { hidden = []; }
+    if (!Array.isArray(hidden) || !hidden.length) return;
+
+    const norm = (h) => ((h || '')
+        .replace(/^https?:\/\/[^/]+/, '')
+        .replace(/[?#].*$/, '')
+        .replace(/\/+$/, '') || '/');
+    const off = hidden.map(norm);
+
+    Array.from(grid.querySelectorAll(':scope > a')).forEach((card) => {
+        const path = norm(card.getAttribute('href'));
+        // Exact page or a sub-page of a hidden feature (e.g. /facebook/posts
+        // under /facebook/posts), but never a sibling that merely shares a
+        // prefix (/facebook/setup stays when only /facebook/posts is off).
+        if (off.some((p) => path === p || path.startsWith(p + '/'))) {
+            card.remove();
+        }
+    });
 }
 
 // ── Category tab filter for the tools grid ──

@@ -20,6 +20,41 @@ use Illuminate\Support\Str;
  */
 class ChatbotWidgetController extends Controller
 {
+    /**
+     * Human names for the save form's fields.
+     *
+     * Passed to the validator as :attribute replacements so a failure reads
+     * "The Send-button label field is required." instead of
+     * "The action button text color field is required." — the operator has no
+     * idea which on-screen control `action_button_text_color` is.
+     */
+    private const FIELD_LABELS = [
+        'name'                     => 'Widget name',
+        'mode'                     => 'Engine',
+        'assistant_id'             => 'Smart agent',
+        'flow_id'                  => 'Workflow to run',
+        'target_whatsapp_cc'       => 'Country code',
+        'target_whatsapp_number'   => 'WhatsApp number',
+        'prefilled_message'        => 'Prefilled message',
+        'position'                 => 'Placement',
+        'button_color'             => 'Bubble colour',
+        'button_image_url'         => 'Bubble image',
+        'header_title'             => 'Header title',
+        'header_bg'                => 'Header fill',
+        'header_text_color'        => 'Header ink',
+        'welcome_message'          => 'Welcome message',
+        'message_bubble_color'     => 'Bubble fill',
+        'message_text_color'       => 'Bubble ink',
+        'body_bg_kind'             => 'Background type',
+        'body_bg_color'            => 'Background colour',
+        'body_bg_image_url'        => 'Background image',
+        'button_label'             => 'Send-button label',
+        'action_button_bg'         => 'Send-button fill',
+        'action_button_text_color' => 'Send-button ink',
+        'allowed_domains'          => 'Allowed domains',
+        'allowed_domains.*'        => 'Allowed domain',
+    ];
+
     public function index(): View
     {
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
@@ -48,6 +83,7 @@ class ChatbotWidgetController extends Controller
             'widget'     => null,
             'mode'       => 'create',
             'assistants' => $assistants,
+            'flows'      => $this->publishedFlows($wsId),
         ]);
     }
 
@@ -61,7 +97,26 @@ class ChatbotWidgetController extends Controller
             'widget'     => $widget,
             'mode'       => 'edit',
             'assistants' => $assistants,
+            'flows'      => $this->publishedFlows($wsId),
         ]);
+    }
+
+    /**
+     * Flows a widget may be bound to: this workspace's, published AND active.
+     * Unpublished flows are deliberately excluded — one would save without
+     * complaint and then never run, which reads to the visitor as a dead widget.
+     */
+    private function publishedFlows(int $wsId)
+    {
+        return \App\Models\Flow::where('workspace_id', $wsId)
+            ->where('is_active', 1)->where('is_published', 1)
+            // Only flows BUILT for the widget. A WhatsApp ('chat') flow can hold
+            // nodes the widget engine has no branch for — a template send, a
+            // list picker — which would walk into a dead node mid-conversation.
+            // The builder now offers "Chat widget" as a channel; that is what a
+            // widget-bound flow must be.
+            ->where('flow_type', 'webchat')
+            ->orderBy('flow_name')->get(['id', 'flow_name']);
     }
 
     public function apiSave(Request $request): JsonResponse
@@ -70,11 +125,26 @@ class ChatbotWidgetController extends Controller
         $wsId = (int) ($user?->current_workspace_id ?? 0);
         if (!$wsId) return response()->json(['ok' => false, 'error' => 'no_workspace'], 400);
 
-        $data = $request->validate([
+        // Validated MANUALLY, not via $request->validate(), on purpose.
+        //
+        // validate() throws a ValidationException that Laravel renders as
+        //   { message, errors: { field: [msg] } }
+        // but the builder's save() reads `json.error` and shows a generic
+        // "Save failed — check the highlighted step." for anything else. So
+        // every field-level failure reached the operator as a toast that named
+        // neither the field nor the reason — the exact complaint from the
+        // screenshot, and unfixable from the client without a fresh asset build.
+        //
+        // Converting the failure here means the ALREADY-DEPLOYED bundle shows
+        // the real reason, with no `npm run build` on the customer's server.
+        $rules = [
             'id'                       => 'nullable|integer',
             'name'                     => 'required|string|max:120',
-            'mode'                     => 'required|in:ai,whatsapp,both',
+            // `flow` is its own mode. `both` keeps its existing meaning
+            // (AI chat + WhatsApp deeplink) and is NOT a flow mode.
+            'mode'                     => 'required|in:ai,whatsapp,both,flow',
             'assistant_id'             => 'nullable|integer',
+            'flow_id'                  => 'nullable|integer',
             'target_whatsapp_cc'       => 'nullable|string|max:8',
             'target_whatsapp_number'   => 'nullable|string|max:24',
             'prefilled_message'        => 'nullable|string|max:2000',
@@ -97,12 +167,32 @@ class ChatbotWidgetController extends Controller
             'collect_name'             => 'nullable|boolean',
             'collect_email'            => 'nullable|boolean',
             'collect_phone'            => 'nullable|boolean',
+            'ai_capture_enabled'       => 'nullable|boolean',
             // CORS allow-list — empty array means "any origin", per
             // ChatbotWidget::originAllowed(). Each entry is a bare
             // host[:port]; the model normalises scheme + path on read.
             'allowed_domains'          => 'nullable|array|max:50',
             'allowed_domains.*'        => 'string|max:253',
-        ]);
+        ];
+
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), $rules, [], self::FIELD_LABELS);
+        if ($validator->fails()) {
+            $field = (string) array_key_first($validator->errors()->messages());
+            $first = (string) $validator->errors()->first();
+
+            return response()->json([
+                'ok'     => false,
+                'field'  => $field,
+                // `error` is the key the builder already reads, so this reaches
+                // the operator as a real sentence on installs running an older
+                // asset bundle — no rebuild required.
+                'error'  => $first,
+                // Kept as well so a rebuilt bundle can highlight the field and
+                // jump to its step.
+                'errors' => $validator->errors()->messages(),
+            ], 422);
+        }
+        $data = $validator->validated();
 
         // Normalise allowed_domains: strip scheme/path, lowercase, dedupe,
         // drop blanks. Done before fill() so the model's array cast
@@ -123,16 +213,51 @@ class ChatbotWidgetController extends Controller
         // If mode requires AI, the assistant_id must resolve to a
         // workspace-scoped active assistant. Otherwise the visitor's
         // first message would hit the fallback path every time.
+        // A flow-bound widget needs a flow that exists in THIS workspace and is
+        // actually runnable. Without this check the widget saves green and then
+        // goes silent for every visitor, with nothing to explain why.
+        if ($data['mode'] === 'flow' && ! empty($data['flow_id'])) {
+            $flow = \App\Models\Flow::where('workspace_id', $wsId)->find($data['flow_id']);
+            if (! $flow) {
+                return response()->json(['ok' => false, 'field' => 'flow_id', 'error' => 'Flow not in this workspace.'], 422);
+            }
+            if ((int) ($flow->is_active ?? 0) !== 1 || (int) ($flow->is_published ?? 0) !== 1) {
+                return response()->json([
+                    'ok' => false,
+                    'field' => 'flow_id',
+                    'error' => 'That flow is not published yet. Publish it first, or it will never run for visitors.',
+                ], 422);
+            }
+            // Channel integrity. The picker already only lists webchat flows, but
+            // this is the boundary that matters — a flow built for WhatsApp can
+            // contain nodes the widget engine has no branch for, and the visitor
+            // would hit a dead node mid-conversation with no error anywhere.
+            if ((string) ($flow->flow_type ?? '') !== 'webchat') {
+                return response()->json([
+                    'ok' => false,
+                    'field' => 'flow_id',
+                    'error' => 'That flow was built for a different channel. Open it in Flows and set its Trigger channel to "Chat widget", or build one for the widget.',
+                ], 422);
+            }
+        }
+        if ($data['mode'] === 'flow' && empty($data['flow_id'])) {
+            return response()->json([
+                'ok' => false, 'field' => 'flow_id', 'error' => 'Flow mode needs a flow. Pick one, or build one in Flows.',
+            ], 422);
+        }
+        // `flow` mode answers with the workflow, so it must NOT demand an
+        // assistant the way ai/both do.
         if (in_array($data['mode'], ['ai', 'both'], true)) {
             if (empty($data['assistant_id'])) {
                 return response()->json([
                     'ok' => false, 'error' => 'AI mode needs an assistant. Pick one or create one in AI Agents.',
+                    'ok' => false, 'field' => 'assistant_id', 'error' => 'AI mode needs an assistant. Pick one or create one in AI Training.',
                 ], 422);
             }
             $ok = AiChatAssistant::where('workspace_id', $wsId)
                 ->where('id', $data['assistant_id'])->exists();
             if (!$ok) {
-                return response()->json(['ok' => false, 'error' => 'Assistant not in this workspace.'], 422);
+                return response()->json(['ok' => false, 'field' => 'assistant_id', 'error' => 'Assistant not in this workspace.'], 422);
             }
         }
 
@@ -158,6 +283,10 @@ class ChatbotWidgetController extends Controller
             $slug = $base . '-' . (++$i);
         }
         $widget->slug = $slug;
+
+        // Coerce the toggle so an unchecked box reliably persists as false
+        // (an absent nullable checkbox would otherwise keep the old value).
+        $data['ai_capture_enabled'] = $request->boolean('ai_capture_enabled');
 
         $widget->fill($data);
         $widget->save();

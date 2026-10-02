@@ -39,6 +39,10 @@
             'form'    => ['label'=>'Form',       'pill'=>'bg-accent-amber/20 text-[#8B5A14]',  'icon'=>'bg-accent-amber'],
             'api'     => ['label'=>'API',        'pill'=>'bg-paper-100 text-ink-600',          'icon'=>'bg-ink-500'],
             'manual'  => ['label'=>'Manual',     'pill'=>'bg-paper-100 text-ink-600',          'icon'=>'bg-ink-400'],
+            // Every value in Deal::SOURCES needs a row here — an unmapped source
+            // silently falls back to the 'Manual' pill (line ~135).
+            'flow'     => ['label'=>'Flow',      'pill'=>'bg-wa-mint/40 text-wa-deep',         'icon'=>'bg-wa-teal'],
+            'facebook' => ['label'=>'Messenger', 'pill'=>'bg-accent-sky/15 text-accent-sky',   'icon'=>'bg-accent-sky'],
         ];
     @endphp
 
@@ -53,14 +57,15 @@
             <h1 class="font-serif text-[40px] leading-none text-ink-900">{{ __('Deals') }} <span class="italic text-wa-deep">{{ __('pipeline') }}</span></h1>
         </div>
         <div class="flex items-center gap-2">
-            @if($pipelines->count() > 1)
-                <select onchange="window.location='{{ route('user.deals.index') }}?pipeline='+this.value"
-                        class="px-4 py-2 rounded-full border border-paper-200 bg-paper-0 text-[12px] font-medium hover:bg-paper-50 cursor-pointer">
-                    @foreach($pipelines as $p)
-                        <option value="{{ $p->id }}" @selected($p->id === $pipeline->id)>{{ $p->name }}</option>
-                    @endforeach
-                </select>
-            @endif
+            {{-- Always rendered, even with one pipeline: it is also how you reach
+                 "New pipeline", which is why extra boards were unreachable before. --}}
+            <select data-pipeline-switch data-index-url="{{ route('user.deals.index') }}"
+                    class="px-4 py-2 rounded-full border border-paper-200 bg-paper-0 text-[12px] font-medium hover:bg-paper-50 cursor-pointer">
+                @foreach($pipelines as $p)
+                    <option value="{{ $p->id }}" @selected($p->id === $pipeline->id)>{{ $p->name }}{{ $p->is_default ? ' · ' . __('default') : '' }}</option>
+                @endforeach
+                <option value="__new">{{ __('+ New pipeline…') }}</option>
+            </select>
             <a href="{{ route('user.deals.reports') }}" class="px-4 py-2 rounded-full border border-paper-200 bg-paper-0 text-[12px] font-medium hover:bg-paper-50 inline-flex items-center gap-1.5">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18M7 14l4-4 3 3 5-6"/></svg>{{ __('Reports') }}
             </a>
@@ -232,26 +237,180 @@
     </div>
 </div>
 
-{{-- Pipeline settings (auto-deal from orders) --}}
-<div class="dl-modal-backdrop" id="dl-settings-modal" data-url="{{ route('user.deals.settings') }}">
-    <div class="dl-modal">
+{{-- Pipeline settings — tabbed. "Automation" is the original auto-deal-from-
+     orders form; Stages / Lost reasons / Pipeline are the management surfaces
+     the schema always supported but nothing ever exposed. --}}
+<div class="dl-modal-backdrop" id="dl-settings-modal"
+     data-url="{{ route('user.deals.settings') }}"
+     data-base="{{ url('/deals') }}"
+     data-pipeline-id="{{ $pipeline->id }}"
+     data-pipeline-count="{{ $pipelines->count() }}">
+    <div class="dl-modal dl-modal-lg">
         <h3 class="text-lg font-bold text-ink-900 mb-1">{{ __('Pipeline settings') }}</h3>
-        <p class="text-[12px] text-ink-500 mb-4">{{ __('Turn new orders into deals automatically.') }}</p>
-        <form id="dl-settings-form" class="space-y-4">
-            <label class="flex items-start gap-3 cursor-pointer">
-                <input type="checkbox" name="auto_from_orders" value="1" @checked($wsSettings['auto']) class="mt-1">
-                <span>
-                    <span class="block text-[13px] font-semibold text-ink-900">{{ __('Auto-create a deal from new orders') }}</span>
-                    <span class="block text-[12px] text-ink-500">{{ __('Each new order lands in the default pipeline as an open deal.') }}</span>
-                </span>
-            </label>
+        <p class="text-[12px] text-ink-500 mb-3">{{ $pipeline->name }}</p>
+
+        <div class="flex items-center gap-1 border-b border-paper-200 mb-4" role="tablist">
+            @foreach([
+                'stages'    => __('Stages'),
+                'lost'      => __('Lost reasons'),
+                'fields'    => __('Custom fields'),
+                'pipeline'  => __('Pipeline'),
+                'automation'=> __('Automation'),
+            ] as $key => $label)
+                <button type="button" role="tab" data-settings-tab="{{ $key }}"
+                        class="px-3 py-2 text-[12px] font-semibold border-b-2 -mb-px transition
+                               {{ $loop->first ? 'border-wa-deep text-ink-900' : 'border-transparent text-ink-500 hover:text-ink-900' }}">{{ $label }}</button>
+            @endforeach
+        </div>
+
+        {{-- Stages --}}
+        <section data-settings-pane="stages">
+            <p class="text-[12px] text-ink-500 mb-3">{{ __('Drag to reorder. Probability drives the weighted forecast.') }}</p>
+            <div data-stage-list class="space-y-1.5 mb-3">
+                @foreach($columns as $col)
+                    @php $s = $col['stage']; @endphp
+                    <div class="dl-stage-row" data-stage-row data-stage-id="{{ $s->id }}" draggable="true">
+                        <span class="dl-stage-grip" aria-hidden="true">
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="5" cy="4" r="1.3"/><circle cx="11" cy="4" r="1.3"/><circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/><circle cx="5" cy="12" r="1.3"/><circle cx="11" cy="12" r="1.3"/></svg>
+                        </span>
+                        <input type="color" data-stage-color value="{{ $s->color }}" aria-label="{{ __('Stage colour') }}" class="dl-stage-color">
+                        <input type="text" data-stage-name value="{{ $s->name }}" maxlength="120" aria-label="{{ __('Stage name') }}" class="dl-stage-name">
+                        <label class="dl-stage-prob">
+                            <input type="number" data-stage-prob value="{{ $s->probability }}" min="0" max="100" aria-label="{{ __('Win probability percent') }}">
+                            <span>%</span>
+                        </label>
+                        <select data-stage-kind aria-label="{{ __('Stage type') }}" class="dl-stage-kind">
+                            <option value="open"  @selected(! $s->is_won && ! $s->is_lost)>{{ __('Open') }}</option>
+                            <option value="won"   @selected($s->is_won)>{{ __('Won') }}</option>
+                            <option value="lost"  @selected($s->is_lost)>{{ __('Lost') }}</option>
+                        </select>
+                        <button type="button" data-stage-delete aria-label="{{ __('Delete stage') }}" class="dl-stage-del">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+                        </button>
+                    </div>
+                @endforeach
+            </div>
+            <form data-stage-add class="flex items-center gap-2">
+                <input type="text" name="name" placeholder="{{ __('New stage name') }}" maxlength="120" required class="dl-field flex-1">
+                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Add stage') }}</button>
+            </form>
+        </section>
+
+        {{-- Lost reasons --}}
+        <section data-settings-pane="lost" hidden>
+            <p class="text-[12px] text-ink-500 mb-3">{{ __('When this list has entries, Mark Lost asks the agent to pick one — so the report can group them. Leave it empty to keep free text.') }}</p>
+            <div data-reason-list class="flex flex-wrap gap-1.5 mb-3">
+                @foreach(array_values((array) ($pipeline->lost_reasons ?? [])) as $r)
+                    <span class="dl-chip" data-reason="{{ $r }}">{{ $r }}<button type="button" data-reason-del aria-label="{{ __('Remove') }}">&times;</button></span>
+                @endforeach
+                <span data-reason-empty class="text-[12px] text-ink-500 {{ ($pipeline->lost_reasons ?? []) ? 'hidden' : '' }}">{{ __('No reasons configured — agents type their own.') }}</span>
+            </div>
+            <form data-reason-add class="flex items-center gap-2">
+                <input type="text" name="reason" placeholder="{{ __('e.g. Price too high') }}" maxlength="120" required class="dl-field flex-1">
+                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Add reason') }}</button>
+            </form>
+        </section>
+
+        {{-- Custom fields — definitions only; values are edited on each deal. --}}
+        <section data-settings-pane="fields" hidden>
+            <p class="text-[12px] text-ink-500 mb-3">{{ __('Track anything beyond title, value and owner. Fields appear on every deal in this workspace.') }}</p>
+            <div data-field-list class="space-y-1.5 mb-3">
+                <span data-field-empty class="text-[12px] text-ink-500">{{ __('Loading…') }}</span>
+            </div>
+            <form data-field-add class="flex flex-wrap items-center gap-2">
+                <input type="text" name="label" placeholder="{{ __('Field name, e.g. Contract number') }}" maxlength="128" required class="dl-field flex-1 min-w-[180px]">
+                <select name="type" class="dl-field w-auto">
+                    @foreach(['text' => __('Text'), 'number' => __('Number'), 'date' => __('Date'), 'select' => __('Choice'), 'bool' => __('Yes / No'), 'url' => __('Link'), 'email' => __('Email')] as $v => $l)
+                        <option value="{{ $v }}">{{ $l }}</option>
+                    @endforeach
+                </select>
+                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Add field') }}</button>
+            </form>
+            <p class="text-[11px] text-ink-500 mt-2">{{ __('Choice fields get their options after you add them. Deleting a field keeps values already saved on deals.') }}</p>
+        </section>
+
+        {{-- Pipeline --}}
+        <section data-settings-pane="pipeline" hidden>
+            <form data-pipeline-form class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-ink-500 mb-1">{{ __('Pipeline name') }}</label>
+                    <input type="text" name="name" value="{{ $pipeline->name }}" maxlength="120" required class="dl-field">
+                </div>
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name="is_default" value="1" @checked($pipeline->is_default) @disabled($pipeline->is_default) class="mt-1">
+                    <span>
+                        <span class="block text-[13px] font-semibold text-ink-900">{{ __('Use as the default pipeline') }}</span>
+                        <span class="block text-[12px] text-ink-500">{{ __('New deals from automations and orders land here.') }}</span>
+                    </span>
+                </label>
+                <div class="flex items-center justify-between gap-2 pt-2 border-t border-paper-200">
+                    <button type="button" data-pipeline-delete
+                            class="dl-btn dl-btn-ghost text-red-600 {{ $pipelines->count() <= 1 ? 'opacity-40 pointer-events-none' : '' }}">{{ __('Delete pipeline') }}</button>
+                    <button type="submit" class="dl-btn dl-btn-primary">{{ __('Save') }}</button>
+                </div>
+                @if($pipelines->count() <= 1)
+                    <p class="text-[11px] text-ink-500">{{ __('Create a second pipeline before deleting this one.') }}</p>
+                @endif
+            </form>
+        </section>
+
+        {{-- Automation (original settings form, unchanged) --}}
+        <section data-settings-pane="automation" hidden>
+            <form id="dl-settings-form" class="space-y-4">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name="auto_from_orders" value="1" @checked($wsSettings['auto']) class="mt-1">
+                    <span>
+                        <span class="block text-[13px] font-semibold text-ink-900">{{ __('Auto-create a deal from new orders') }}</span>
+                        <span class="block text-[12px] text-ink-500">{{ __('Each new order lands in the default pipeline as an open deal.') }}</span>
+                    </span>
+                </label>
+                <div>
+                    <label class="block text-xs font-semibold text-ink-500 mb-1">{{ __('Only for orders above (blank = any value)') }}</label>
+                    <input type="number" name="min_value" min="0" step="0.01" value="{{ $wsSettings['min'] }}" class="dl-field" placeholder="0">
+                </div>
+                <div class="flex items-center justify-end gap-2 pt-2">
+                    <button type="submit" class="dl-btn dl-btn-primary">{{ __('Save') }}</button>
+                </div>
+            </form>
+        </section>
+
+        <div class="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-paper-200">
+            <button type="button" class="dl-btn dl-btn-ghost" data-settings-cancel>{{ __('Close') }}</button>
+        </div>
+    </div>
+</div>
+
+{{-- Mark Lost — renders a picklist when the pipeline configures reasons,
+     otherwise a free-text box (the pre-existing behaviour). --}}
+<div class="dl-modal-backdrop" id="dl-lost-modal"
+     data-reasons="{{ json_encode(array_values((array) ($pipeline->lost_reasons ?? []))) }}">
+    <div class="dl-modal">
+        <h3 class="text-lg font-bold text-ink-900 mb-1">{{ __('Mark this deal lost') }}</h3>
+        <p class="text-[12px] text-ink-500 mb-4">{{ __('Recording why helps the pipeline report show what is costing you deals.') }}</p>
+        <form data-lost-form class="space-y-4">
+            <div data-lost-field></div>
+            <div class="flex items-center justify-end gap-2 pt-2">
+                <button type="button" class="dl-btn dl-btn-ghost" data-lost-cancel>{{ __('Cancel') }}</button>
+                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Mark lost') }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{-- Move-deals prompt, shared by stage + pipeline deletion. The server refuses
+     to strand deals; this is where the operator names the destination. --}}
+<div class="dl-modal-backdrop" id="dl-move-modal">
+    <div class="dl-modal">
+        <h3 class="text-lg font-bold text-ink-900 mb-1">{{ __('Move the deals first') }}</h3>
+        <p class="text-[12px] text-ink-500 mb-4" data-move-message></p>
+        <form data-move-form class="space-y-4">
             <div>
-                <label class="block text-xs font-semibold text-ink-500 mb-1">{{ __('Only for orders above (blank = any value)') }}</label>
-                <input type="number" name="min_value" min="0" step="0.01" value="{{ $wsSettings['min'] }}" class="dl-field" placeholder="0">
+                <label class="block text-xs font-semibold text-ink-500 mb-1">{{ __('Move them to') }}</label>
+                <select name="move_to" required class="dl-field" data-move-target></select>
             </div>
             <div class="flex items-center justify-end gap-2 pt-2">
-                <button type="button" class="dl-btn dl-btn-ghost" data-settings-cancel>{{ __('Cancel') }}</button>
-                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Save') }}</button>
+                <button type="button" class="dl-btn dl-btn-ghost" data-move-cancel>{{ __('Cancel') }}</button>
+                <button type="submit" class="dl-btn dl-btn-primary">{{ __('Move and delete') }}</button>
             </div>
         </form>
     </div>

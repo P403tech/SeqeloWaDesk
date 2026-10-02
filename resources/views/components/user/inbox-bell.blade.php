@@ -247,8 +247,16 @@
         });
 
         const BASE_INTERVAL = 15000; // 15s default poll
-        const MAX_INTERVAL = 300000; // 5m cap on backoff
+        const MAX_INTERVAL = 300000; // 5m cap on 429 / error backoff
+        // Separate, tighter ceiling for the QUIET case. A rate-limit or a dead
+        // backend can afford to wait 5 minutes; an idle-but-healthy inbox must
+        // not, or the badge would lag a minute behind a real message. 60s is
+        // the compromise — and any change, popup open or tab focus resets it.
+        const IDLE_CEILING = 60000;
         let currentInterval = BASE_INTERVAL;
+        // Shape of the last payload (total + newest mark). Used to tell "nothing
+        // moved" from "something moved" without diffing the whole response.
+        let lastShape = null;
         let timer = null;
         let lastTotal = 0;
         let lastMark = 0; // newest unread timestamp seen — the dismiss watermark
@@ -355,7 +363,20 @@
                 }
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
-                currentInterval = BASE_INTERVAL; // success → reset backoff
+                // IDLE BACKOFF. This bell sits on EVERY page of the app, so a
+                // flat 15s is the highest-volume loop we run — four requests a
+                // minute per open tab, per operator, forever. When the unread
+                // picture has not moved we widen the gap; anything changing
+                // snaps it straight back to 15s, and so does opening the popup
+                // or a visibilitychange. A quiet account therefore costs a
+                // fraction of what it used to, with no delay when it matters.
+                const shape = JSON.stringify([data?.total ?? 0, newestMark(data)]);
+                if (shape === lastShape) {
+                    currentInterval = Math.min(IDLE_CEILING, currentInterval * 2);
+                } else {
+                    currentInterval = BASE_INTERVAL;
+                }
+                lastShape = shape;
                 const total = (data && typeof data.total === 'number') ? data.total : 0;
                 const mark = newestMark(data);
                 console.log('[ibx-bell] poll → total=' + total);
@@ -414,7 +435,11 @@
             popup.classList.toggle('hidden');
             if (!popup.classList.contains('hidden')) {
                 positionPopup(); // drop up or down depending on where the pill sits
-                // Force-render the latest data so the popup isn't stale.
+                // Force-render the latest data so the popup isn't stale, and
+                // drop any idle backoff — the operator is looking at it now, so
+                // this is the moment to be responsive again.
+                currentInterval = BASE_INTERVAL;
+                clearTimeout(timer);
                 poll();
             }
         });

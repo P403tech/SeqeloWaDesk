@@ -54,7 +54,7 @@
         <div class="grid md:grid-cols-2 gap-4 mt-3">
             <label class="block">
                 <span class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('DLT Sender ID') }}</span>
-                <input name="sender_id" maxlength="16" placeholder="WADESK" value="{{ old('sender_id') }}"
+                <input name="sender_id" maxlength="16" placeholder="{{ brand_token(6) }}" value="{{ old('sender_id') }}"
                     class="w-full px-3 py-2 rounded-xl border border-paper-200 bg-white text-[13px] font-mono focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10" />
                 <span class="text-[10.5px] text-ink-500 mt-1 block">{{ __('MSG91 only. Your 6-letter DLT-registered sender.') }}</span>
             </label>

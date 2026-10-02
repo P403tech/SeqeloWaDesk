@@ -201,7 +201,17 @@ class NotificationHelper
             ?? ($model->user_id ?? null)
             ?? Auth::id();
 
+        // Stamp the notification with the workspace that OWNS the record, never
+        // the recipient's CURRENT workspace. A contact created in workspace A by
+        // a user who happens to be viewing workspace B otherwise landed in B's
+        // bell (toUser falls back to current_workspace_id) — the reported
+        // cross-workspace leak. Every LogsNotifications model is workspace-scoped
+        // and carries workspace_id; honour it.
+        $workspaceId = $opts['workspace_id']
+            ?? ($model->workspace_id ?? null);
+
         return self::toUser($userId, $title, $message, [
+            'workspace_id' => $workspaceId,
             'category'    => $opts['category']    ?? $meta['category'],
             'severity'    => $opts['severity']    ?? ($verb === 'deleted' ? 'warning' : 'info'),
             'icon'        => $opts['icon']        ?? $meta['icon'],

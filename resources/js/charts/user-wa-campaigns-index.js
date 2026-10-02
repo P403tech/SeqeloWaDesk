@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /*
  * /wa-campaigns page — AJAX glue.
  *
@@ -314,23 +316,17 @@ export default function init() {
     // (no toast) and skipped while the tab is hidden so the bridge
     // doesn't burn CPU on backgrounded windows.
     const POLL_MS = 15_000;
-    let pollHandle = null;
-    function startPoll() {
-        if (pollHandle) return;
-        pollHandle = setInterval(() => {
-            if (document.hidden) return;
-            fetchPartial(readState(), { silent: true });
-        }, POLL_MS);
-    }
-    function stopPoll() {
-        if (!pollHandle) return;
-        clearInterval(pollHandle);
-        pollHandle = null;
-    }
+    // Shared poller — overlap guard, hidden-tab pause, and a widening gap once
+    // no campaign is actually running. A finished campaign list does not need
+    // four refreshes a minute for the rest of the operator's session.
+    const poller = createPoller(async () => {
+        await fetchPartial(readState(), { silent: true });
+        return false;
+    }, { interval: POLL_MS, maxInterval: 60_000 });
+    function startPoll() { poller.start(); }
+    function stopPoll()  { poller.stop(); }
+    // The poller owns visibilitychange (pause while hidden, fire on return).
     startPoll();
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) fetchPartial(readState(), { silent: true });
-    });
     window.addEventListener('pagehide', stopPoll);
 
     window.addEventListener('popstate', () => {

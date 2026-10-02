@@ -1,6 +1,7 @@
 /*
  * /broadcasts page AJAX glue: filters, search, row delete, and pagination.
  */
+import { createPoller } from '../lib/poller.js';
 
 // Base path the page was actually served under (handles a /public install).
 // pathname never includes the query string, so it stays the route across
@@ -51,6 +52,13 @@ function paintActive(state) {
     if (search && document.activeElement !== search) search.value = state.q || '';
 }
 
+// Is anything still in flight? Read straight off the counters the last refresh
+// painted, so the poller stays fast while broadcasts are actually running and
+// relaxes once everything has settled. Defaults to "busy" when the counters are
+// missing — better to poll a little too often than to stall a live view.
+let lastBusy = true;
+function listIsBusy() { return lastBusy; }
+
 function applyCounts(statusCounts, stats) {
     Object.entries(statusCounts || {}).forEach(([key, value]) => {
         const el = document.querySelector(`[data-bc-status-count="${key}"]`);
@@ -72,8 +80,12 @@ function applyCounts(statusCounts, stats) {
     set('delivered', delivered);
     set('read', read);
     set('failed', failed);
-    set('processing', Number(stats.processing ?? 0));
-    set('queued', Number(stats.queued ?? 0));
+    const processing = Number(stats.processing ?? 0);
+    const queued     = Number(stats.queued ?? 0);
+    set('processing', processing);
+    set('queued', queued);
+    // Drives the poll cadence — see listIsBusy().
+    lastBusy = (processing + queued) > 0;
     set('delivery_pct', sent > 0 ? (delivered / sent * 100).toFixed(1) : '0.0');
     set('read_pct', delivered > 0 ? (read / delivered * 100).toFixed(1) : '0.0');
     set('failed_pct', sent > 0 ? (failed / sent * 100).toFixed(1) : '0.0');
@@ -203,25 +215,20 @@ export default function init() {
     // — no toast — and skipped while the tab is hidden to save
     // both the laptop battery and the Node bridge's CPU.
     const POLL_MS = 15_000;
-    let pollHandle = null;
-    function startPoll() {
-        if (pollHandle) return;
-        pollHandle = setInterval(() => {
-            if (document.hidden) return;
-            fetchPartial(readState(), { silent: true });
-        }, POLL_MS);
-    }
-    function stopPoll() {
-        if (!pollHandle) return;
-        clearInterval(pollHandle);
-        pollHandle = null;
-    }
+    // Shared poller: no overlapping requests, no polling on a hidden tab, and
+    // the gap widens to 60s once the list stops changing — a finished broadcast
+    // does not need checking four times a minute forever. Any row that is still
+    // moving keeps it at 15s.
+    const poller = createPoller(async () => {
+        await fetchPartial(readState(), { silent: true });
+        return listIsBusy();
+    }, { interval: POLL_MS, maxInterval: 60_000 });
+    function startPoll() { poller.start(); }
+    function stopPoll()  { poller.stop(); }
+    // The poller handles visibilitychange itself — it pauses while hidden and
+    // fires immediately on return, which is what the hand-rolled listener here
+    // used to do.
     startPoll();
-    // Re-fetch immediately when the tab becomes visible after a long
-    // hide — counters might be very stale otherwise.
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) fetchPartial(readState(), { silent: true });
-    });
     // Clean up if the page is being unloaded so we don't leave the
     // interval running in a bf-cache restoration scenario.
     window.addEventListener('pagehide', stopPoll);

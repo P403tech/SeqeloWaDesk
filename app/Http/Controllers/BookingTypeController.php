@@ -115,11 +115,22 @@ class BookingTypeController extends Controller
         $ws   = $wsId ? Workspace::find($wsId) : null;
         $currency = $type?->financial->currency ?? ($ws->currency ?: config('app.currency', 'USD'));
 
-        // Active gateways for the resolved currency (empty when none configured).
+        // The MERCHANT's own configured gateways (workspace keys) — NOT the
+        // platform/admin gateways. A booking deposit is collected into the
+        // CLIENT's own PayPal / Razorpay / etc., the SAME gateways the store
+        // checkout uses (WaMerchantGateway). Configure them at /gateways.
         $gateways = collect();
         try {
-            $gateways = app(PaymentGatewayManager::class)->activeGateways($currency)
-                ->map(fn ($g) => ['slug' => $g->slug ?? $g->driver ?? (string) $g->id, 'label' => $g->title ?? $g->name ?? $g->slug]);
+            $meta = PaymentGatewayManager::GATEWAY_META;
+            $gateways = \App\Models\WaMerchantGateway::query()->active()
+                ->where('workspace_id', (int) $wsId)
+                ->where('storefront_id', 0)
+                ->orderBy('sort_order')
+                ->get()
+                ->filter->isConfigured()
+                ->unique('slug')
+                ->map(fn ($g) => ['slug' => $g->slug, 'label' => $meta[$g->slug]['name'] ?? ucfirst($g->slug)])
+                ->values();
         } catch (\Throwable $e) {
         }
 

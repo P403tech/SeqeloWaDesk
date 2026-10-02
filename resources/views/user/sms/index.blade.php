@@ -213,7 +213,7 @@
                             <ol class="list-decimal pl-5 mt-2 space-y-1.5 text-[12px] text-ink-600">
                                 <li>{{ __('Indian carriers filter foreign long-codes — use MSG91 with DLT for reliable India delivery.') }}</li>
                                 <li>{{ __('Paste your MSG91 Auth Key in the Auth Token / Auth Key field.') }}</li>
-                                <li>{{ __('Register a 6-letter DLT Sender ID (e.g. WADESK) + your DLT template on the DLT portal, then paste both in the MSG91 options.') }}</li>
+                                <li>{{ __('Register a 6-letter DLT Sender ID (e.g. :example) + your DLT template on the DLT portal, then paste both in the MSG91 options.', ['example' => brand_token(6)]) }}</li>
                             </ol>
                         </details>
                         <details class="px-5 py-3.5">

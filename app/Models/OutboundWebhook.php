@@ -17,7 +17,10 @@ use Illuminate\Database\Eloquent\Model;
  *   - conversation.resolved
  *   - conversation.reopened
  *   - conversation.replied      (outbound message sent)
- *   - conversation.received     (inbound message)
+ *   - conversation.received     (inbound message — fires for EVERY channel:
+ *                                WhatsApp, Facebook, Instagram, Telegram, …;
+ *                                data.channel says which, data.message carries
+ *                                the inbound bubble)
  *   - note.added
  *
  * Payload shape lives in OutboundWebhookDispatcher::buildPayload().

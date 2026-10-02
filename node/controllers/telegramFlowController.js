@@ -35,28 +35,39 @@ export const telegramInbound = async (req, res) => {
   }
 
   const hasContent = text.trim() !== "";
-  const isResume   = hasSession(botId, chatId) && hasContent;
   const canStart   = !!(flow && (flow.flowNodes || flow.nodes));
+  const isCommand  = text.trim().startsWith("/"); // Telegram bot command, e.g. /start
 
-  console.log(`[TG-FLOW-NODE] IN bot=${botId} chat=${chatId} text="${text.slice(0, 50)}" isResume=${isResume} canStart=${canStart}`);
+  // A matched start-flow RE-FIRES even when a stale session is parked, IF the
+  // customer sent a bot COMMAND (/start …) or nothing is parked. This fixes the
+  // "get-started bot only responds the first time" bug: after the first run left a
+  // node parked, a repeat /start (e.g. tapping Start again after clearing the
+  // chat) was being swallowed as a resume-answer to the old node, so the flow
+  // never re-triggered. runFlow() clears any old session first, so a restart is
+  // clean. A NON-command reply that merely contains a keyword still RESUMES a
+  // parked flow, so mid-flow answers and 'any'-triggered flows aren't hijacked.
+  const restart  = canStart && (isCommand || !hasSession(botId, chatId));
+  const isResume = !restart && hasSession(botId, chatId) && hasContent;
 
-  if (!isResume && !canStart) {
+  console.log(`[TG-FLOW-NODE] IN bot=${botId} chat=${chatId} text="${text.slice(0, 50)}" restart=${restart} isResume=${isResume} canStart=${canStart}`);
+
+  if (!restart && !isResume) {
     return res.status(200).send({ ok: true, consumed: false, mode: "none" });
   }
 
   // Answer BEFORE running — a Wait node must never hold the request open.
-  res.status(202).send({ ok: true, consumed: true, mode: isResume ? "resume" : "start" });
+  res.status(202).send({ ok: true, consumed: true, mode: restart ? "start" : "resume" });
 
   try { pruneSessions(); } catch (_) {}
 
   (async () => {
     try {
-      if (isResume) {
-        const done = await resumeFlow({ botId, chatId, text, vars });
-        if (!done) console.log(`[TG-FLOW-NODE] resume declined (no matching branch) bot=${botId} chat=${chatId}`);
+      if (restart) {
+        await runFlow({ auth, flow, chatId, text, flowId, botId, workspaceId, appDomain, vars });
         return;
       }
-      await runFlow({ auth, flow, chatId, text, flowId, botId, workspaceId, appDomain, vars });
+      const done = await resumeFlow({ botId, chatId, text, vars });
+      if (!done) console.log(`[TG-FLOW-NODE] resume declined (no matching branch) bot=${botId} chat=${chatId}`);
     } catch (e) {
       console.error(`[TG-FLOW-NODE] handler crashed bot=${botId} chat=${chatId}: ${e?.message}`);
     }

@@ -92,7 +92,14 @@ class TiktokIngestService
             }
         }
 
-        $ts = $p['ts'] ? \Illuminate\Support\Carbon::createFromTimestamp($p['ts']) : now();
+        // Pass app tz — createFromTimestamp() returns the instant in UTC while
+        // now() (and Eloquent's created_at) use APP_TIMEZONE. Both land in the
+        // same naive DATETIME column, so without this a non-UTC server stored
+        // every vendor-stamped inbound row hours behind the platform-sent rows
+        // beside it, breaking the thread's COALESCE(sent_at, created_at) sort.
+        $ts = $p['ts']
+            ? \Illuminate\Support\Carbon::createFromTimestamp($p['ts'], config('app.timezone'))
+            : now();
 
         $inbox = InboxMessage::create([
             'conversation_id' => $conv->id,

@@ -2,8 +2,10 @@ import intlTelInput from 'intl-tel-input/intlTelInputWithUtils';
 import 'intl-tel-input/styles';
 import TomSelect from 'tom-select';
 import 'tom-select/dist/css/tom-select.css';
+import { initReferralQr } from './referral-qr.js';
 
 export default function init() {
+    initReferralQr();
     const TAB_TITLES = {
         profile:   ['Profile <span class="italic text-wa-deep">settings</span>', 'Update your photo, name, and contact details.'],
         plan:      ['Plan &amp; <span class="italic text-wa-deep">usage</span>',  'Your current plan, what it includes, and how much of this month you have used.'],

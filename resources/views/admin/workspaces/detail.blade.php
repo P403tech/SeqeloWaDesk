@@ -147,26 +147,62 @@
             </div>
         </section>
 
-        {{-- Custom-domain DNS panel — only when domain is set + not verified. --}}
-        @if ($workspace->custom_domain && !$workspace->cname_verified)
-            <section class="rounded-2xl border border-accent-amber/40 bg-accent-amber/5 px-5 py-4 text-[12.5px]">
-                <div class="flex items-start gap-3">
-                    <svg viewBox="0 0 16 16" class="w-4 h-4 text-accent-amber mt-0.5" fill="none"
-                        stroke="currentColor" stroke-width="1.6">
-                        <circle cx="8" cy="8" r="6" />
-                        <path d="M8 5v3.5M8 11h.01" />
-                    </svg>
-                    <div class="min-w-0">
-                        <div class="font-semibold">DNS verification pending for {{ $workspace->custom_domain }}</div>
-                        <div class="text-ink-700 mt-1">
-                            Add a <code class="bg-paper-100 px-1 rounded">CNAME</code> record pointing to <code
-                                class="bg-paper-100 px-1 rounded">cnames.{{ parse_url(config('app.url'), PHP_URL_HOST) }}</code>
-                            (subdomain) or an <code class="bg-paper-100 px-1 rounded">A</code> record to this server's
-                            IP (apex). Verification runs every 5 min.
+        {{-- Custom-domain white-label panel. Verified → StorefrontPublicController
+             resolves this host to THIS workspace's shop (scoped to the host). --}}
+        @if ($workspace->custom_domain)
+            @php
+                $cnameTarget = config('storefront.cname_target', parse_url(config('app.url'), PHP_URL_HOST));
+                // Resolve the platform host to an A-record IP for apex/root domains
+                // (a CNAME is illegal on a bare root, so those need an A record).
+                $cnameIp = @gethostbyname($cnameTarget);
+                if ($cnameIp === $cnameTarget) $cnameIp = null;
+            @endphp
+            @if ($workspace->cname_verified)
+                <section class="rounded-2xl border border-wa-green/40 bg-wa-mint/40 px-5 py-4 text-[12.5px]">
+                    <div class="flex items-start gap-3">
+                        <svg viewBox="0 0 16 16" class="w-4 h-4 text-wa-deep mt-0.5" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <path d="M3 8.5l3.5 3.5L13 5" />
+                        </svg>
+                        <div class="min-w-0 flex-1">
+                            <div class="font-semibold">Domain live — the shop serves on
+                                <a href="https://{{ $workspace->custom_domain }}" target="_blank" rel="noopener"
+                                    class="font-mono text-wa-deep hover:underline">{{ $workspace->custom_domain }}</a></div>
+                            <div class="text-ink-700 mt-1">Requests to this domain render only this workspace's storefront — never the platform.</div>
                         </div>
+                        <form method="POST" action="{{ route('admin.workspaces.verify-domain', $workspace->id) }}">
+                            @csrf
+                            <button class="px-3 py-1.5 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[11.5px] font-semibold whitespace-nowrap">Re-check</button>
+                        </form>
                     </div>
-                </div>
-            </section>
+                </section>
+            @else
+                <section class="rounded-2xl border border-accent-amber/40 bg-accent-amber/5 px-5 py-4 text-[12.5px]">
+                    <div class="flex items-start gap-3">
+                        <svg viewBox="0 0 16 16" class="w-4 h-4 text-accent-amber mt-0.5" fill="none"
+                            stroke="currentColor" stroke-width="1.6">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M8 5v3.5M8 11h.01" />
+                        </svg>
+                        <div class="min-w-0 flex-1">
+                            <div class="font-semibold">Point <code class="bg-paper-100 px-1 rounded">{{ $workspace->custom_domain }}</code> to us, then click Verify</div>
+                            <div class="text-ink-700 mt-1.5">At your domain's DNS provider, add <strong>one</strong> record:</div>
+                            <ul class="mt-1 space-y-1 text-ink-700">
+                                <li>• <strong>{{ __('Subdomain') }}</strong> (e.g. shop.brand.com): <code class="bg-paper-100 px-1 rounded">CNAME</code> →
+                                    <code class="bg-paper-100 px-1 rounded">{{ $cnameTarget }}</code></li>
+                                @if ($cnameIp)
+                                    <li>• <strong>{{ __('Root domain') }}</strong> (brand.com): <code class="bg-paper-100 px-1 rounded">A</code> →
+                                        <code class="bg-paper-100 px-1 rounded">{{ $cnameIp }}</code></li>
+                                @endif
+                            </ul>
+                            <div class="text-ink-500 mt-1.5 text-[11px]">{{ __('DNS can take a few minutes to propagate before Verify succeeds.') }}</div>
+                        </div>
+                        <form method="POST" action="{{ route('admin.workspaces.verify-domain', $workspace->id) }}">
+                            @csrf
+                            <button class="px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 hover:bg-wa-teal text-[11.5px] font-semibold whitespace-nowrap">Verify now</button>
+                        </form>
+                    </div>
+                </section>
+            @endif
         @endif
 
         {{-- 6 KPI cards --}}
@@ -376,6 +412,48 @@
             </div>
         </section>
 
+        {{-- Members & roles — change a member's role in this workspace. The role
+             drives the user's nav tier + permissions (UserNav::userRank →
+             User::workspaceRole → the workspace_user pivot). --}}
+        <section class="bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="font-serif text-[20px]">{{ __('Members & roles') }}</h2>
+                <span class="text-[11.5px] text-ink-500">{{ __('Role sets what this member sees & can do in this workspace') }}</span>
+            </div>
+            @php $roleOptions = ['owner' => 'Owner', 'admin' => 'Admin', 'manager' => 'Manager', 'agent' => 'Agent', 'viewer' => 'Viewer']; @endphp
+            @if (($members ?? collect())->isEmpty())
+                <div class="text-[12px] text-ink-500">{{ __('No members in this workspace yet.') }}</div>
+            @else
+                <div class="divide-y divide-paper-100">
+                    @foreach ($members as $member)
+                        <div class="flex items-center gap-3 py-2.5">
+                            <div class="min-w-0 flex-1">
+                                <div class="text-[13px] font-medium text-ink-900 truncate">{{ $member->name }}
+                                    @if ((int) $member->id === (int) $workspace->owner_user_id)
+                                        <span class="ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-wa-mint text-wa-deep">{{ __('owner') }}</span>
+                                    @endif
+                                </div>
+                                <div class="text-[11px] font-mono text-ink-400 truncate">{{ $member->email }}</div>
+                            </div>
+                            <form action="{{ route('admin.workspaces.member-role', $workspace->id) }}" method="POST"
+                                class="flex items-center gap-2 shrink-0">
+                                @csrf
+                                <input type="hidden" name="user_id" value="{{ $member->id }}">
+                                <select name="role"
+                                    class="px-2.5 py-1.5 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep">
+                                    @foreach ($roleOptions as $val => $lbl)
+                                        <option value="{{ $val }}" @selected(($member->pivot->role ?? 'agent') === $val)>{{ __($lbl) }}</option>
+                                    @endforeach
+                                </select>
+                                <button type="submit"
+                                    class="px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11.5px] font-semibold hover:bg-wa-teal">{{ __('Save') }}</button>
+                            </form>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </section>
+
         {{-- Edit form — hidden by default, toggled by "Edit" button. Posts PUT to admin.workspaces.update. --}}
         <section id="edit-panel" class="hidden bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card">
             <div class="flex items-center justify-between mb-4">
@@ -384,8 +462,20 @@
                     class="text-[12px] text-ink-500 hover:text-ink-900">{{ __('Close') }}</button>
             </div>
             <form action="{{ route('admin.workspaces.update', $workspace->id) }}" method="POST"
+                enctype="multipart/form-data"
                 class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 @csrf @method('PUT')
+                <div class="md:col-span-2">
+                    <label class="text-[11.5px] font-semibold mb-1 block">{{ __('Workspace logo') }}</label>
+                    @if ($workspace->brand_logo_path)
+                        <img src="{{ asset('storage/' . $workspace->brand_logo_path) }}" alt=""
+                            class="h-10 mb-2 rounded bg-paper-50 p-1 object-contain">
+                    @endif
+                    <input type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                        class="block w-full text-[12px] text-ink-700 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-wa-deep file:text-white file:text-[11px] file:font-semibold file:cursor-pointer border border-dashed border-paper-300 rounded-lg bg-paper-0 p-2">
+                    <div class="text-[10.5px] text-ink-500 font-mono mt-1">
+                        {{ __('PNG/JPG/SVG/WebP · max 2 MB. Leave empty to keep the current logo.') }}</div>
+                </div>
                 <div>
                     <label class="text-[11.5px] font-semibold mb-1 block"
                         for="ws-edit-name">{{ __('Name') }}</label>
@@ -407,6 +497,14 @@
                         value="{{ old('custom_domain', $workspace->custom_domain) }}"
                         class="w-full px-3 py-2 border border-paper-200 rounded-lg text-[12.5px]"
                         placeholder="{{ __('e.g. crm.acme.com') }}">
+                    @php
+                        $__ct = config('storefront.cname_target', parse_url(config('app.url'), PHP_URL_HOST));
+                        $__ip = @gethostbyname($__ct); if ($__ip === $__ct) $__ip = null;
+                    @endphp
+                    <p class="text-[11px] text-ink-500 mt-1 leading-relaxed">
+                        {{ __('Point your domain here at your DNS, then Save and click Verify:') }}<br>
+                        <span class="font-mono text-ink-700">CNAME → {{ $__ct }}</span>@if ($__ip) &nbsp;·&nbsp; <span class="font-mono text-ink-700">A → {{ $__ip }}</span>@endif
+                    </p>
                 </div>
                 <div>
                     <label class="text-[11.5px] font-semibold mb-1 block"

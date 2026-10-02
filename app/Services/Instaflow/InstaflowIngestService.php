@@ -196,6 +196,32 @@ class InstaflowIngestService
             $convo->increment('unread_count');
         }
 
+        // DM sender → Contact, keyed by IGSID (no phone) — the same capture every
+        // other social channel does. Genuine inbound only: a test ping or a
+        // connect-time backfill must not manufacture leads, and an outbound row's
+        // sender is us. Also the prerequisite for comment→DM flow enrollment,
+        // which resolves the flow's Contact through conversations.contact_id.
+        // Best effort — forSocialSender never throws, so a failure here can never
+        // break ingest.
+        if ($dir === 'in' && ! $isTest && ! $isBackfill) {
+            try {
+                $igsid = $igConvId !== '' ? (string) Str::afterLast($igConvId, ':') : '';
+                if ($igsid !== '') {
+                    $avatar = trim((string) data_get($data, 'conversation.avatar', ''));
+                    // The first webhook often carries only the numeric IGSID, so the
+                    // placeholder title must not become the lead's name — pass null
+                    // and let forSocialSender apply its generic label instead.
+                    $leadName = ($title === 'Instagram' || ctype_digit(ltrim($title, '@'))) ? null : $title;
+                    $contact = \App\Models\Contact::forSocialSender($wsId, 'instagram', $igsid, $leadName, $avatar ?: null, 'Source: Instagram DM');
+                    if ($contact && empty($convo->contact_id) && Schema::hasColumn('conversations', 'contact_id')) {
+                        $convo->forceFill(['contact_id' => $contact->id])->save();
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('[INSTAFLOW] contact capture failed: '.$e->getMessage(), ['convo' => $convo->id]);
+            }
+        }
+
         event(new MessageReceived($inbox->id, $convo->id, $wsId, $dir, null));
 
         Log::info('[INSTAFLOW] inbox message stored', [

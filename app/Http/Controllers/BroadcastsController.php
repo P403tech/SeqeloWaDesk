@@ -1803,6 +1803,20 @@ class BroadcastsController extends Controller
             if (isset($contact[$key]) && $contact[$key] !== null && $contact[$key] !== '') return $scalarize($contact[$key]);
             $custom = $contact['custom_attributes'] ?? [];
             if (is_array($custom) && isset($custom[$key]) && $custom[$key] !== '') return $scalarize($custom[$key]);
+            // Derive first/last name from the full `name` when the dedicated
+            // column is empty. Many contacts store only `name` (CSV import,
+            // channel-created, WABA inbound), so {{first_name}} would resolve
+            // blank and the template would ship the LITERAL placeholder name —
+            // the reported "Hi first_name" bug — while {{full_name}} worked.
+            $nk = str_replace([' ', '-'], '_', strtolower(trim($key)));
+            if (in_array($nk, ['first_name', 'firstname'], true)) {
+                $full = trim($scalarize($contact['name'] ?? ''));
+                if ($full !== '') return \Illuminate\Support\Str::before($full, ' ');
+            }
+            if (in_array($nk, ['last_name', 'lastname'], true)) {
+                $full = trim($scalarize($contact['name'] ?? ''));
+                if ($full !== '' && str_contains($full, ' ')) return trim(\Illuminate\Support\Str::after($full, ' '));
+            }
             return $fallback->lookup($key, $contact, $workspaceId);
         };
 

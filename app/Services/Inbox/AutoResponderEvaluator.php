@@ -33,18 +33,86 @@ class AutoResponderEvaluator
     /** Resume window when agent-override leaves "Resume after" blank (24h). */
     private const DEFAULT_RESUME_SECONDS = 86400;
 
+    /**
+     * "Greet once, never resend" — what an explicit 0 means on a responder rule.
+     * A window, not a flag, because `keyword_replies.cooldown` is an UNSIGNED
+     * int so a -1 sentinel cannot be stored. 10 years outlives any thread.
+     */
+    public const NEVER_RESEND_SECONDS = 315360000;
+
+    /** Units the "Resend after" / "Resume after" pickers offer, largest first. */
+    public const UNITS = ['days', 'hours', 'minutes', 'seconds'];
+
+    /** Seconds per unit — the single source both directions of the conversion use. */
+    public const UNIT_SECONDS = ['days' => 86400, 'hours' => 3600, 'minutes' => 60, 'seconds' => 1];
+
     /** Convert a value + Minutes/Hours/Days unit into seconds (null when unset). */
-    public static function toSeconds(?int $value, ?string $unit): ?int
+    public static function toSeconds($value, ?string $unit): ?int
     {
-        $value = (int) $value;
-        if ($value <= 0) {
+        // NULL/'' (field left blank) and an explicit 0 are NOT the same thing.
+        // Collapsing both to null made "0" mean "unset", which the responder
+        // triggers then read as the 24h default — so an operator asking for no
+        // window silently got the longest one possible. Blank still means unset;
+        // 0 is now carried through as a real, explicit zero.
+        if ($value === null || $value === '') {
             return null;
         }
+        $value = (int) $value;
+        if ($value < 0) {
+            return null;
+        }
+        if ($value === 0) {
+            return 0;
+        }
         return match (strtolower((string) $unit)) {
+            'second', 'seconds', 'sec' => $value,
             'minute', 'minutes', 'min' => $value * 60,
             'day', 'days'              => $value * 86400,
             default                    => $value * 3600, // hours (default)
         };
+    }
+
+    /**
+     * Seconds → the unit the edit form should redisplay. Picks the LARGEST unit
+     * that divides the stored value exactly, preferring the operator's saved
+     * unit when it still divides cleanly, so reopening the form never truncates.
+     */
+    public static function displayUnit($seconds, ?string $savedUnit): string
+    {
+        if ($seconds === null || $seconds === '') {
+            return in_array($savedUnit, self::UNITS, true) ? $savedUnit : 'hours';
+        }
+        $s = (int) $seconds;
+        if ($s <= 0) {
+            return in_array($savedUnit, self::UNITS, true) ? $savedUnit : 'hours';
+        }
+        // Keep the operator's own unit whenever it represents the value exactly.
+        $savedDiv = self::UNIT_SECONDS[$savedUnit] ?? null;
+        if ($savedDiv !== null && $s % $savedDiv === 0) {
+            return $savedUnit;
+        }
+        foreach (['days', 'hours', 'minutes', 'seconds'] as $u) {
+            if ($s % self::UNIT_SECONDS[$u] === 0) {
+                return $u;
+            }
+        }
+        return 'seconds';
+    }
+
+    /**
+     * Seconds → the number the edit form should redisplay, in the unit chosen by
+     * displayUnit(). Null stays null (blank field); an explicit 0 stays 0.
+     */
+    public static function displayValue($seconds, ?string $savedUnit): ?int
+    {
+        if ($seconds === null || $seconds === '') {
+            return null;
+        }
+        $s = (int) $seconds;
+        if ($s <= 0) {
+            return 0;
+        }
+        return intdiv($s, self::UNIT_SECONDS[self::displayUnit($s, $savedUnit)]);
     }
 
     /**
@@ -55,14 +123,25 @@ class AutoResponderEvaluator
      */
     public function resendSeconds(KeywordReply $rule): int
     {
-        $c = (int) ($rule->cooldown ?? 0);
+        $isResponder = in_array($rule->trigger_type ?? 'keyword', ['welcome', 'out_of_hours', 'away'], true);
+        $raw = $rule->cooldown;
+
+        // NULL = never configured → keep the historic defaults.
+        if ($raw === null || $raw === '') {
+            return $isResponder ? self::DEFAULT_RESEND_SECONDS : 0;
+        }
+
+        $c = (int) $raw;
         if ($c > 0) {
             return $c;
         }
-        // welcome / out_of_hours / away all default to a 24h per-contact window so
-        // they reply once, not to every inbound. Classic keyword rules stay 0.
-        return in_array($rule->trigger_type ?? 'keyword', ['welcome', 'out_of_hours', 'away'], true)
-            ? self::DEFAULT_RESEND_SECONDS : 0;
+
+        // Explicit 0. On a keyword rule that has always meant "no throttle".
+        // On a responder it must NOT mean that: a welcome re-greeting on every
+        // inbound would front the thread forever and swallow every keyword the
+        // customer sends, because the welcome pass returns before keyword
+        // matching runs. So 0 = "greet once, never resend".
+        return $isResponder ? self::NEVER_RESEND_SECONDS : 0;
     }
 
     /**
@@ -251,18 +330,20 @@ class AutoResponderEvaluator
                 $resume = self::DEFAULT_RESUME_SECONDS;
             }
 
-            // Previous inbound (the current one is already stored at eval time).
-            $lastTwo = InboxMessage::query()
-                ->where('conversation_id', $convo->id)
-                ->where('direction', 'in')
-                ->orderByDesc('id')->limit(2)->get();
-            $prev = $lastTwo->count() >= 2 ? $lastTwo[1] : null;
-            if (! $prev || ! $prev->created_at) {
-                return false; // no prior inbound to measure inactivity against → allow
+            // Measure the resume window from the AGENT'S last reply — NOT from the
+            // customer's previous inbound. "Resume after" means: resume the responder
+            // only once it's been quiet for this long since a HUMAN last spoke. The
+            // old code anchored on the customer's prior inbound, so a customer who
+            // answered the agent an hour after their own previous message (inbound gap
+            // > resume_after) looked "idle" and the responder fired on top of a live,
+            // agent-handled chat — the exact "agent replied but it still auto-replies"
+            // bug. Anchored on the agent's reply, the window only lapses after the
+            // agent goes quiet, and every fresh agent reply re-arms the pause.
+            if (! $lastAgent->created_at) {
+                return true; // agent replied but timestamp missing → treat as live handover
             }
-
-            $gap = now()->diffInSeconds($prev->created_at, true);
-            return $gap < $resume; // still within the live handled window → paused
+            $gap = now()->diffInSeconds($lastAgent->created_at, true);
+            return $gap < $resume; // agent spoke within the resume window → still paused
         } catch (\Throwable $e) {
             return false;
         }

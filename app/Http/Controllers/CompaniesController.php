@@ -85,7 +85,7 @@ class CompaniesController extends Controller
             'contacts' => $contacts->map(fn ($c) => [
                 'id'    => $c->id,
                 'name'  => (string) ($c->name ?: '(no name)'),
-                'phone' => preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile)),
+                'phone' => Contact::canonicalizePhone($c->country_code, $c->mobile),
                 'email' => (string) ($c->email ?? ''),
             ]),
             'deals'    => $deals,
@@ -117,7 +117,7 @@ class CompaniesController extends Controller
         if ($request->expectsJson()) {
             return response()->json(['success' => true, 'id' => $c->id, 'name' => (string) $c->name]);
         }
-        return redirect()->route('companies.show', $c->id)->with('status', 'Company created.');
+        return redirect()->route('user.companies.show', $c->id)->with('status', 'Company created.');
     }
 
     public function update(Request $request, int $id)
@@ -153,7 +153,7 @@ class CompaniesController extends Controller
         if ($request->expectsJson()) {
             return response()->json(['success' => true]);
         }
-        return redirect()->route('companies.index')->with('status', 'Company deleted.');
+        return redirect()->route('user.companies.index')->with('status', 'Company deleted.');
     }
 
     /** JSON search for pickers / the AI copilot. */

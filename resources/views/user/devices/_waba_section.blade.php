@@ -11,6 +11,12 @@
 --}}
 <section class="space-y-5">
 
+    @php
+        // Workspace AI agents for the per-number "auto-reply agent" picker.
+        $__aiAgents = \App\Models\AiAgent::where('workspace_id', auth()->user()?->current_workspace_id)
+            ->orderBy('name')->get(['id', 'name']);
+    @endphp
+
     {{-- ── BSP billing choice — shown once a WABA number is connected. The
          client picks who bills them: Meta directly (normal plan system) or
          through us (prepaid wallet, we bill per message, Meta invoices us). --}}
@@ -199,8 +205,8 @@
                         </dl>
 
                         <div
-                            class="mt-4 pt-4 border-t border-paper-200 flex items-center justify-between gap-2 flex-wrap">
-                            <div class="flex items-center gap-1.5">
+                            class="mt-4 pt-4 border-t border-paper-200 flex flex-col gap-3">
+                            <div class="flex items-center gap-1.5 flex-wrap">
                                 <span
                                     class="inline-flex items-center gap-1 text-[11px] {{ $isConnected ? 'text-wa-deep' : 'text-accent-coral' }}">
                                     <span
@@ -215,7 +221,7 @@
                                     @include('user.devices._inbound_badge', ['wired' => (is_array($waba->meta_json ?? null) ? ($waba->meta_json['inbound_wired'] ?? null) : null)])
                                 @endif
                             </div>
-                            <div class="flex items-center gap-1">
+                            <div class="flex flex-wrap items-center gap-1.5">
                                 @if (!$waba->is_primary && $isConnected)
                                     <form method="POST" action="{{ url('/devices/waba/' . $waba->id . '/primary') }}"
                                         class="inline">
@@ -319,6 +325,35 @@
                                     </button>
                                 </form>
                             </div>
+                            {{-- Per-number automation: default AI agent + business/segment tag.
+                                 The agent auto-replies to every new chat on this number; the
+                                 business tag is applied to each inbound chat AND its contact so
+                                 contacts are grouped by which number/business they belong to. --}}
+                            <form method="POST" action="{{ url('/devices/waba/' . $waba->id . '/default-agent') }}"
+                                class="flex items-end gap-2 flex-wrap">
+                                @csrf
+                                @if ($__aiAgents->isNotEmpty())
+                                    <label class="flex flex-col gap-1">
+                                        <span class="text-[11px] font-mono uppercase tracking-[0.12em] text-ink-500">{{ __('Auto-reply agent') }}</span>
+                                        <select name="agent_id"
+                                            class="px-2.5 py-1 rounded-full border border-paper-200 text-[11.5px] bg-paper-0 focus:border-wa-deep focus:outline-none">
+                                            <option value="">{{ __('None') }}</option>
+                                            @foreach ($__aiAgents as $ag)
+                                                <option value="{{ $ag->id }}" @selected((int) $waba->default_ai_agent_id === (int) $ag->id)>{{ $ag->name }}</option>
+                                            @endforeach
+                                        </select>
+                                    </label>
+                                @endif
+                                <label class="flex flex-col gap-1">
+                                    <span class="text-[11px] font-mono uppercase tracking-[0.12em] text-ink-500">{{ __('Business tag') }}</span>
+                                    <input type="text" name="business_tag" maxlength="60" value="{{ $waba->default_tag }}"
+                                        placeholder="{{ __('e.g. Cloud Kitchen') }}"
+                                        class="px-2.5 py-1 rounded-full border border-paper-200 text-[11.5px] bg-paper-0 focus:border-wa-deep focus:outline-none" />
+                                </label>
+                                <button type="submit"
+                                    class="px-3 py-1 rounded-full bg-wa-deep text-white text-[11.5px] font-medium hover:opacity-90">{{ __('Save') }}</button>
+                                <span class="text-[10.5px] text-ink-400 w-full">{{ __('Auto-assigns the agent and tags every new chat + contact on this number.') }}</span>
+                            </form>
                         </div>
                     </div>
                 @endforeach
@@ -338,6 +373,8 @@
     @include('user.devices._waba_modals', [
         'embeddedSignupReady' => $embeddedSignupReady ?? false,
         'embeddedSignupConfigId' => $embeddedSignupConfigId ?? '',
+        'embeddedSignupVersion' => $embeddedSignupVersion ?? 'v2',
+        'embeddedSignupCoexConfigId' => $embeddedSignupCoexConfigId ?? '',
         'wabaAppId' => $wabaAppId ?? '',
     ])
 

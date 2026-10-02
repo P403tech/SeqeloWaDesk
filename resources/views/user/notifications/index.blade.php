@@ -91,7 +91,7 @@
                         class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Unread') }}</span>
                     <span
                         class="text-[10px] font-mono {{ $stats['urgent'] > 0 ? 'text-accent-coral' : 'text-ink-500' }}">
-                        <span data-stat="urgent">{{ $stats['urgent'] }}</span> urgent
+                        <span data-stat="urgent">{{ $stats['urgent'] }}</span> {{ __('messages') }}
                     </span>
                 </div>
                 <div class="mt-2 flex items-baseline gap-2">
@@ -107,7 +107,7 @@
                     <span
                         class="text-[10px] font-mono {{ $stats['todayDelta'] >= 0 ? 'text-wa-deep' : 'text-accent-coral' }}">
                         {{ $stats['todayDelta'] >= 0 ? '+' : '' }}<span
-                            data-stat="todayDelta">{{ $stats['todayDelta'] }}</span>% vs avg
+                            data-stat="todayDelta">{{ $stats['todayDelta'] }}</span>% {{ __('vs avg') }}
                     </span>
                 </div>
                 <div class="mt-2 flex items-baseline gap-2">

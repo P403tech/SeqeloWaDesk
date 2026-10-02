@@ -33,7 +33,10 @@ class Deal extends Model
     ];
 
     public const STATUSES = ['open', 'won', 'lost'];
-    public const SOURCES  = ['manual', 'inbox', 'order', 'shopify', 'woo', 'form', 'api'];
+    // Every writer of deals.source MUST appear here — the /deals board builds its
+    // source filter from this list, so a value missing here hides those deals.
+    // 'flow' = FlowNodeActionsController deal node, 'facebook' = Messenger lead node.
+    public const SOURCES  = ['manual', 'inbox', 'order', 'shopify', 'woo', 'form', 'api', 'flow', 'facebook'];
 
     protected static function booted(): void
     {
@@ -109,6 +112,37 @@ class Deal extends Model
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('[DEAL] create-notify failed: ' . $e->getMessage());
             }
+
+            // CRM flow triggers. deal_created fires for every new deal; a deal
+            // created STRAIGHT INTO a Won/Lost stage never fires updated(), so
+            // its outcome trigger has to fire here too — the same reason the
+            // notification block above duplicates notifyDealOutcome.
+            // Drip campaigns triggered by a new deal — the consultancy case:
+            // a booking becomes a deal, and the follow-up sequence starts.
+            try { app(\App\Services\Drip\DripRunner::class)->onDealCreated($deal); }
+            catch (\Throwable $e) { \Log::warning('Drip onDealCreated: ' . $e->getMessage()); }
+
+            try {
+                $enroll = app(\App\Services\Flow\FlowEnrollmentService::class);
+                $enroll->onDealCreated($deal);
+                if ($deal->status === 'won')  $enroll->onDealWon($deal);
+                if ($deal->status === 'lost') $enroll->onDealLost($deal);
+                if ((int) $deal->owner_user_id > 0) {
+                    $enroll->onDealAssigned($deal, (int) $deal->owner_user_id);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('[DEAL] create flow-trigger failed: ' . $e->getMessage());
+            }
+
+            // Outbound webhooks. Fired from the model rather than each caller so
+            // EVERY creation path is covered — the board, the inbox, an order, a
+            // flow node, a Meta lead, the REST API. Same wasChanged-free reasoning
+            // as above: a deal created straight into Won/Lost never fires
+            // updated(), so its outcome is emitted here too.
+            $deal->emitWebhook('deal_created');
+            if (in_array($deal->status, ['won', 'lost'], true)) {
+                $deal->emitWebhook('deal_' . $deal->status);
+            }
         });
 
         static::updated(function (Deal $deal) {
@@ -123,7 +157,71 @@ class Deal extends Model
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('[DEAL] outcome/assign-notify failed: ' . $e->getMessage());
             }
+
+            // CRM flow triggers for the same transitions. Gated on wasChanged()
+            // so a plain edit (retitle, value tweak) on an already-won deal does
+            // NOT re-fire deal_won — the trigger means "just became won", not
+            // "is won". Reassignment fires on the NEW owner regardless of who
+            // made the change: the notification skips self-assignment because a
+            // person needn't be told what they just did, but a flow wired to
+            // "assigned to Priya" must run whether Priya or her manager did it.
+            try {
+                $enroll = app(\App\Services\Flow\FlowEnrollmentService::class);
+                if ($deal->wasChanged('status')) {
+                    if ($deal->status === 'won')  $enroll->onDealWon($deal);
+                    if ($deal->status === 'lost') $enroll->onDealLost($deal);
+                }
+                if ($deal->wasChanged('owner_user_id') && (int) $deal->owner_user_id > 0) {
+                    $enroll->onDealAssigned($deal, (int) $deal->owner_user_id);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('[DEAL] outcome/assign flow-trigger failed: ' . $e->getMessage());
+            }
+
+            // Gated on the TRANSITION, like the flow triggers: editing the title
+            // of a deal that was won last week must not re-announce the win.
+            if ($deal->wasChanged('status') && in_array($deal->status, ['won', 'lost'], true)) {
+                $deal->emitWebhook('deal_' . $deal->status);
+            }
         });
+    }
+
+    /**
+     * Outbound webhook payload for this deal.
+     *
+     * Money goes out in BOTH shapes: `value_minor` is the exact integer the
+     * system stores, `value` is the human amount — a subscriber that silently
+     * treats minor units as major would be off by 100x, so neither is left to
+     * inference. Ad attribution rides along when the deal came from a lead ad or
+     * a Click-to-WhatsApp conversation.
+     */
+    public function emitWebhook(string $event): void
+    {
+        try {
+            $meta = is_array($this->meta) ? $this->meta : [];
+            \App\Services\WebhookService::emit($event, array_filter([
+                'workspace_id'  => (int) $this->workspace_id,
+                'user_id'       => $this->owner_user_id ? (int) $this->owner_user_id : null,
+                'deal_id'       => (int) $this->id,
+                'title'         => (string) $this->title,
+                'status'        => (string) $this->status,
+                'source'        => (string) $this->source,
+                'pipeline_id'   => (int) $this->pipeline_id,
+                'stage_id'      => (int) $this->stage_id,
+                'stage_name'    => optional($this->stage)->name,
+                'contact_id'    => $this->contact_id ? (int) $this->contact_id : null,
+                'owner_user_id' => $this->owner_user_id ? (int) $this->owner_user_id : null,
+                'value_minor'   => (int) $this->value_minor,
+                'value'         => round(((int) $this->value_minor) / 100, 2),
+                'currency'      => (string) $this->currency,
+                'lost_reason'   => $this->status === 'lost' ? $this->lost_reason : null,
+                'attribution'   => $meta['meta_ad'] ?? $meta['ctwa'] ?? null,
+                'timestamp'     => now()->timestamp,
+            ], fn ($v) => $v !== null), $this->owner_user_id ? (int) $this->owner_user_id : null);
+        } catch (\Throwable $e) {
+            // A webhook must never break the save that produced the deal.
+            \Illuminate\Support\Facades\Log::warning('[DEAL] webhook emit failed: ' . $e->getMessage());
+        }
     }
 
     /* -------------------- relations -------------------- */

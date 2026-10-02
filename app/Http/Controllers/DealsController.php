@@ -283,6 +283,21 @@ class DealsController extends Controller
                 return ['name' => $u?->name ?? 'Unknown', 'won' => (int) $r->won_count, 'value' => (int) $r->won_minor / 100];
             })->values();
 
+        // Why deals are lost. `lost_reason` was captured all along but never
+        // reported on, so the field was write-only — an operator could see one
+        // deal's reason on its card and never the pattern across the pipeline.
+        // Grouped in PHP (not SQL) so an empty reason folds into one bucket and
+        // casing differences on legacy free-text rows collapse together.
+        $lostReasons = Deal::forCurrentWorkspace()->where('status', 'lost')
+            ->get(['lost_reason', 'value_minor'])
+            ->groupBy(fn ($d) => mb_strtolower(trim((string) $d->lost_reason)) ?: '__none__')
+            ->map(fn ($rows) => [
+                'name'  => trim((string) $rows->first()->lost_reason) ?: __('No reason given'),
+                'count' => $rows->count(),
+                'value' => (int) $rows->sum('value_minor') / 100,
+            ])
+            ->sortByDesc('count')->values();
+
         // Display currency = workspace setting → platform default (dynamic),
         // never the pipeline's stored code.
         $currency = (string) (optional(request()->user()->currentWorkspace)->currency
@@ -290,6 +305,7 @@ class DealsController extends Controller
 
         return view('user.deals.reports', [
             'byStage'  => $byStage,
+            'lostReasons' => $lostReasons,
             'winRate'  => ($won + $lost) > 0 ? (int) round($won / ($won + $lost) * 100) : 0,
             'won'      => $won,
             'lost'     => $lost,
@@ -325,6 +341,11 @@ class DealsController extends Controller
             'deal'       => $this->serializeDeal($row),
             'stages'     => $stages,
             'members'    => $members,
+            // Definitions joined to this deal's stored values, so the drawer can
+            // render the inputs without a second round-trip. Empty array when
+            // the workspace has defined no custom fields — the panel then omits
+            // the section entirely rather than showing an empty heading.
+            'custom'     => $this->dealCustomValues($row),
             'activities' => $row->activities->map(fn ($a) => $this->serializeActivity($a, $stages))->values(),
         ]);
     }
@@ -345,9 +366,18 @@ class DealsController extends Controller
             'stage_id'            => 'sometimes|nullable|integer',
             'contact_id'          => 'sometimes|nullable|integer',
             'expected_close_date' => 'sometimes|nullable|date',
+            // Workspace-defined custom fields, as { key: value }. Merged (never
+            // replaced) into meta->custom so a partial submit can't erase fields
+            // the drawer didn't render.
+            'custom'              => 'sometimes|array|max:60',
+            'custom.*'            => 'nullable|string|max:2000',
         ]);
 
         $patch = [];
+        $skippedCustom = [];
+        if (array_key_exists('custom', $data)) {
+            [$patch['meta'], $skippedCustom] = $this->mergeDealCustom($row, (array) $data['custom']);
+        }
         if (array_key_exists('title', $data))    $patch['title'] = $data['title'];
         if (array_key_exists('value', $data))    $patch['value_minor'] = (int) round((float) ($data['value'] ?? 0) * 100);
         if (array_key_exists('currency', $data) && $data['currency']) $patch['currency'] = $data['currency'];
@@ -369,7 +399,14 @@ class DealsController extends Controller
 
         $row->update($patch);
 
-        return response()->json(['ok' => true, 'deal' => $this->serializeDeal($row->fresh(['contact', 'owner', 'stage']))]);
+        return response()->json([
+            'ok'     => true,
+            'deal'   => $this->serializeDeal($row->fresh(['contact', 'owner', 'stage'])),
+            'custom' => $this->dealCustomValues($row->fresh()),
+            // Named so the drawer can say WHICH entry was rejected rather than
+            // silently discarding it — an unexplained blank field reads as a bug.
+            'skipped_custom' => $skippedCustom,
+        ]);
     }
 
     /** DELETE /deals/{deal}. */
@@ -450,6 +487,26 @@ class DealsController extends Controller
         }
         if ($flag === 'is_lost') {
             $reason = trim((string) $request->input('reason', ''));
+            // When the pipeline defines a picklist, the reason must come FROM it
+            // — that is the whole point of configuring one, and reports group on
+            // the exact string. Matched case-insensitively but stored in the
+            // pipeline's own casing so the grouping stays clean. A pipeline with
+            // no list keeps the original free-text behaviour untouched.
+            $allowed = array_values((array) (optional($row->pipeline)->lost_reasons ?? []));
+            if ($allowed && $reason !== '') {
+                $hit = null;
+                foreach ($allowed as $a) {
+                    if (mb_strtolower(trim((string) $a)) === mb_strtolower($reason)) { $hit = (string) $a; break; }
+                }
+                if ($hit === null) {
+                    return response()->json([
+                        'ok'      => false,
+                        'reasons' => $allowed,
+                        'message' => __('Pick one of the lost reasons configured for this pipeline.'),
+                    ], 422);
+                }
+                $reason = $hit;
+            }
             if ($reason !== '') $row->lost_reason = mb_substr($reason, 0, 191);
         }
         $row->stage_id = $stage->id; // observer flips status + stamps timestamp
@@ -478,8 +535,8 @@ class DealsController extends Controller
             'ok'   => true,
             'data' => $rows->map(fn ($c) => [
                 'id'    => $c->id,
-                'name'  => $c->name ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: mask_phone((string) ($c->country_code . $c->mobile)),
-                'phone' => mask_phone((string) ($c->country_code . $c->mobile)),
+                'name'  => $c->name ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: mask_phone(Contact::canonicalizePhone($c->country_code, $c->mobile)),
+                'phone' => mask_phone(Contact::canonicalizePhone($c->country_code, $c->mobile)),
             ])->values(),
         ]);
     }
@@ -495,13 +552,628 @@ class DealsController extends Controller
         ]);
     }
 
+    /* ==================================================================
+     * Pipeline + stage management
+     *
+     * The tables always supported multiple pipelines and fully custom stages —
+     * there was simply no way to reach them: one pipeline was auto-seeded from
+     * Pipeline::DEFAULT_STAGES and nothing could add, rename, recolour, reorder
+     * or delete anything. These endpoints expose what the schema already had.
+     *
+     * Two rules run through all of it:
+     *   1. Nothing may orphan a deal. Deleting a pipeline or a stage that holds
+     *      deals is refused unless the caller names a destination (`move_to`).
+     *   2. A pipeline must keep exactly one Won stage and one Lost stage —
+     *      markWon()/markLost() resolve the target by those flags, so removing
+     *      the last one would break "Mark won" with a 422 the operator can't
+     *      diagnose from the board.
+     * ================================================================== */
+
+    /** GET /deals/pipelines — id + name list, for pickers (board, flow builder). */
+    public function pipelinesJson(Request $request): JsonResponse
+    {
+        $wsId = (int) ($request->user()->current_workspace_id ?? 0);
+        Pipeline::ensureDefaultForWorkspace($wsId);
+
+        $rows = Pipeline::forCurrentWorkspace()->orderBy('sort_order')->orderBy('id')
+            ->get(['id', 'name', 'currency', 'is_default', 'lost_reasons'])
+            ->map(fn (Pipeline $p) => [
+                'id'           => $p->id,
+                'name'         => $p->name,
+                'currency'     => $p->currency,
+                'is_default'   => (bool) $p->is_default,
+                'lost_reasons' => array_values((array) ($p->lost_reasons ?? [])),
+                'stage_count'  => $p->stages()->count(),
+                'deal_count'   => $p->deals()->count(),
+            ])->values();
+
+        return response()->json(['ok' => true, 'data' => $rows]);
+    }
+
+    /** POST /deals/pipelines — create a board and seed the default stage ladder. */
+    public function pipelineStore(Request $request): JsonResponse
+    {
+        $wsId = (int) ($request->user()->current_workspace_id ?? 0);
+        if ($wsId <= 0) {
+            return response()->json(['ok' => false, 'message' => __('No active workspace.')], 422);
+        }
+
+        $data = $request->validate([
+            'name'     => 'required|string|max:120',
+            'currency' => 'nullable|string|max:10',
+        ]);
+
+        // Fall back to the workspace currency, never a hardcoded code — a
+        // hardcoded 'INR' default is exactly what made the board convert every
+        // amount into the wrong currency before (see ensureDefaultForWorkspace).
+        $currency = strtoupper(trim((string) ($data['currency'] ?? ''))) ?:
+            (string) (optional($request->user()->currentWorkspace)->currency
+                ?: \App\Models\SystemSetting::get('default_currency', 'USD'));
+
+        $isFirst = Pipeline::forCurrentWorkspace()->count() === 0;
+
+        $pipeline = Pipeline::create([
+            'workspace_id' => $wsId,
+            'name'         => trim($data['name']),
+            'is_default'   => $isFirst,   // a workspace's first board is its default
+            'currency'     => $currency,
+            'sort_order'   => (int) Pipeline::forCurrentWorkspace()->max('sort_order') + 1,
+        ]);
+        $pipeline->seedDefaultStages();
+
+        \App\Support\Audit::log('deals.pipeline_created', [
+            'subject_type' => 'pipeline', 'subject_id' => $pipeline->id,
+            'meta' => ['name' => $pipeline->name],
+        ]);
+
+        return response()->json([
+            'ok'       => true,
+            'message'  => __('Pipeline created.'),
+            'pipeline' => ['id' => $pipeline->id, 'name' => $pipeline->name],
+        ]);
+    }
+
+    /** PATCH /deals/pipelines/{id} — rename, currency, default flag, lost reasons. */
+    public function pipelineUpdate(Request $request, int $id): JsonResponse
+    {
+        $pipeline = Pipeline::forCurrentWorkspace()->find($id);
+        if (! $pipeline) {
+            return response()->json(['ok' => false, 'message' => __('Pipeline not found.')], 404);
+        }
+
+        $data = $request->validate([
+            'name'           => 'sometimes|required|string|max:120',
+            'currency'       => 'sometimes|nullable|string|max:10',
+            'is_default'     => 'sometimes|boolean',
+            'lost_reasons'   => 'sometimes|array|max:40',
+            'lost_reasons.*' => 'string|max:120',
+        ]);
+
+        $patch = [];
+        if (array_key_exists('name', $data))     $patch['name'] = trim($data['name']);
+        if (array_key_exists('currency', $data) && $data['currency']) {
+            $patch['currency'] = strtoupper(trim($data['currency']));
+        }
+        if (array_key_exists('lost_reasons', $data)) {
+            // Trim, drop blanks, de-duplicate case-insensitively — the whole
+            // point of the list is that reports can GROUP by it, which a list
+            // holding both "Price" and "price " would defeat.
+            $seen = [];
+            $clean = [];
+            foreach ($data['lost_reasons'] as $r) {
+                $r = trim((string) $r);
+                if ($r === '') continue;
+                $k = mb_strtolower($r);
+                if (isset($seen[$k])) continue;
+                $seen[$k] = true;
+                $clean[]  = $r;
+            }
+            $patch['lost_reasons'] = $clean;
+        }
+        if ($patch) $pipeline->update($patch);
+
+        // Promotion is its own transactional step (demote the others first).
+        // Un-setting a default is NOT supported: a workspace must always have
+        // exactly one, so the way to change it is to promote a different board.
+        if (! empty($data['is_default'])) {
+            $pipeline->setAsDefault();
+        }
+
+        return response()->json(['ok' => true, 'message' => __('Pipeline saved.')]);
+    }
+
+    /**
+     * DELETE /deals/pipelines/{id}[?move_to=<pipelineId>]
+     *
+     * Refuses to strand deals. With `move_to` the deals are remapped onto the
+     * destination's FIRST stage and the board is removed; without it, a pipeline
+     * holding deals is a 422 that names the count so the operator can decide.
+     */
+    public function pipelineDestroy(Request $request, int $id): JsonResponse
+    {
+        $pipeline = Pipeline::forCurrentWorkspace()->find($id);
+        if (! $pipeline) {
+            return response()->json(['ok' => false, 'message' => __('Pipeline not found.')], 404);
+        }
+        if (Pipeline::forCurrentWorkspace()->count() <= 1) {
+            return response()->json(['ok' => false, 'message' =>
+                __('This is your only pipeline — create another one before deleting this.')], 422);
+        }
+
+        $dealCount = (int) Deal::forCurrentWorkspace()->where('pipeline_id', $pipeline->id)->count();
+        $moveTo    = (int) $request->query('move_to', 0);
+
+        if ($dealCount > 0 && $moveTo <= 0) {
+            return response()->json([
+                'ok'         => false,
+                'needs_move' => true,
+                'deal_count' => $dealCount,
+                'message'    => trans_choice(
+                    '{1}This pipeline still holds :count deal. Choose where to move it first.'
+                    . '|[2,*]This pipeline still holds :count deals. Choose where to move them first.',
+                    $dealCount, ['count' => $dealCount]
+                ),
+            ], 422);
+        }
+
+        $target = null;
+        if ($dealCount > 0) {
+            $target = Pipeline::forCurrentWorkspace()->where('id', '!=', $pipeline->id)->find($moveTo);
+            if (! $target) {
+                return response()->json(['ok' => false, 'message' => __('Destination pipeline not found.')], 422);
+            }
+            if ($target->stages()->count() === 0) $target->seedDefaultStages();
+        }
+
+        $wasDefault = (bool) $pipeline->is_default;
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($pipeline, $target, $dealCount) {
+            if ($dealCount > 0 && $target) {
+                $firstStage = $target->stages()->orderBy('sort_order')->first();
+                // Bulk query update on purpose: this bypasses the Deal observer,
+                // so remapping 400 deals during an admin cleanup does NOT fire 400
+                // stage-change flow enrolments and blast the customers. A tidy-up
+                // is not a sales event.
+                Deal::where('workspace_id', $pipeline->workspace_id)
+                    ->where('pipeline_id', $pipeline->id)
+                    ->update(['pipeline_id' => $target->id, 'stage_id' => $firstStage->id]);
+            }
+            $pipeline->stages()->delete();
+            $pipeline->delete();
+        });
+
+        // Never leave the workspace without a default — index() resolves the
+        // board by that flag and would otherwise fall through to "first by id".
+        if ($wasDefault) {
+            Pipeline::forCurrentWorkspace()->orderBy('sort_order')->orderBy('id')->first()?->setAsDefault();
+        }
+
+        \App\Support\Audit::log('deals.pipeline_deleted', [
+            'subject_type' => 'pipeline', 'subject_id' => $id,
+            'meta' => ['moved_deals' => $dealCount, 'moved_to' => $target?->id],
+        ]);
+
+        return response()->json(['ok' => true, 'message' => $dealCount > 0
+            ? trans_choice('{1}Pipeline deleted — :count deal moved.|[2,*]Pipeline deleted — :count deals moved.', $dealCount, ['count' => $dealCount])
+            : __('Pipeline deleted.')]);
+    }
+
+    /** POST /deals/pipelines/{id}/stages — append a stage to the ladder. */
+    public function stageStore(Request $request, int $id): JsonResponse
+    {
+        $pipeline = Pipeline::forCurrentWorkspace()->find($id);
+        if (! $pipeline) {
+            return response()->json(['ok' => false, 'message' => __('Pipeline not found.')], 404);
+        }
+
+        $data = $this->validateStage($request, true);
+
+        // A stage can be Won or Lost, never both — the Deal observer reads the
+        // flags to decide the deal's status and would have to pick arbitrarily.
+        if (! empty($data['is_won']))  $data['is_lost'] = false;
+        if (! empty($data['is_lost'])) $data['is_won']  = false;
+
+        $stage = $pipeline->stages()->create([
+            'workspace_id' => $pipeline->workspace_id,
+            'name'         => trim($data['name']),
+            'color'        => $data['color'] ?? '#64748B',
+            'probability'  => (int) ($data['probability'] ?? 0),
+            'is_won'       => (bool) ($data['is_won'] ?? false),
+            'is_lost'      => (bool) ($data['is_lost'] ?? false),
+            'sort_order'   => (int) $pipeline->stages()->max('sort_order') + 1,
+        ]);
+
+        // Promoting a new terminal stage demotes the old one, so the pipeline
+        // still resolves exactly one Won and one Lost target.
+        $this->enforceSingleTerminal($pipeline, $stage);
+
+        return response()->json(['ok' => true, 'message' => __('Stage added.'), 'stage' => $stage->fresh()]);
+    }
+
+    /** PATCH /deals/stages/{id} — rename, recolour, probability, Won/Lost flags. */
+    public function stageUpdate(Request $request, int $id): JsonResponse
+    {
+        $stage = PipelineStage::forCurrentWorkspace()->find($id);
+        if (! $stage) {
+            return response()->json(['ok' => false, 'message' => __('Stage not found.')], 404);
+        }
+
+        $data  = $this->validateStage($request, false);
+        $patch = [];
+        if (array_key_exists('name', $data))        $patch['name']        = trim($data['name']);
+        if (array_key_exists('color', $data))       $patch['color']       = $data['color'];
+        if (array_key_exists('probability', $data)) $patch['probability'] = (int) $data['probability'];
+
+        if (array_key_exists('is_won', $data)) {
+            $patch['is_won'] = (bool) $data['is_won'];
+            if ($patch['is_won']) $patch['is_lost'] = false;
+        }
+        if (array_key_exists('is_lost', $data)) {
+            $patch['is_lost'] = (bool) $data['is_lost'];
+            if ($patch['is_lost']) $patch['is_won'] = false;
+        }
+
+        // Clearing the flag on the pipeline's ONLY Won (or Lost) stage would
+        // leave markWon()/markLost() with nothing to resolve — they 422 with
+        // "this pipeline has no Won stage", which reads as a bug from the board.
+        foreach (['is_won' => __('Won'), 'is_lost' => __('Lost')] as $flag => $label) {
+            if (array_key_exists($flag, $patch) && $patch[$flag] === false && $stage->{$flag}) {
+                $others = PipelineStage::forCurrentWorkspace()
+                    ->where('pipeline_id', $stage->pipeline_id)
+                    ->where('id', '!=', $stage->id)->where($flag, true)->count();
+                if ($others === 0) {
+                    return response()->json(['ok' => false, 'message' => __(
+                        'This is the only :label stage on the pipeline. Mark another stage as :label first.',
+                        ['label' => $label]
+                    )], 422);
+                }
+            }
+        }
+
+        $stage->update($patch);
+        $this->enforceSingleTerminal($stage->pipeline, $stage->fresh());
+
+        return response()->json(['ok' => true, 'message' => __('Stage saved.'), 'stage' => $stage->fresh()]);
+    }
+
+    /** POST /deals/pipelines/{id}/stages/reorder — rewrite sort_order from ids[]. */
+    public function stageReorder(Request $request, int $id): JsonResponse
+    {
+        $pipeline = Pipeline::forCurrentWorkspace()->find($id);
+        if (! $pipeline) {
+            return response()->json(['ok' => false, 'message' => __('Pipeline not found.')], 404);
+        }
+
+        $data = $request->validate([
+            'ids'   => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        // Only ids that really belong to THIS pipeline are honoured — the board
+        // posts what it rendered, and a stale tab could otherwise renumber a
+        // stage that has since moved to another board.
+        $owned = $pipeline->stages()->pluck('id')->all();
+        $order = array_values(array_filter(array_map('intval', $data['ids']), fn ($i) => in_array($i, $owned, true)));
+        if (! $order) {
+            return response()->json(['ok' => false, 'message' => __('Nothing to reorder.')], 422);
+        }
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($order, $pipeline, $owned) {
+            foreach ($order as $i => $stageId) {
+                PipelineStage::where('id', $stageId)->where('pipeline_id', $pipeline->id)
+                    ->update(['sort_order' => $i]);
+            }
+            // Anything the client left out keeps a stable position AFTER the
+            // ordered block, so a partial post can never collapse two stages
+            // onto the same sort_order.
+            $rest = array_values(array_diff($owned, $order));
+            foreach ($rest as $j => $stageId) {
+                PipelineStage::where('id', $stageId)->where('pipeline_id', $pipeline->id)
+                    ->update(['sort_order' => count($order) + $j]);
+            }
+        });
+
+        return response()->json(['ok' => true, 'message' => __('Stages reordered.')]);
+    }
+
+    /** DELETE /deals/stages/{id}[?move_to=<stageId>] — remove a column. */
+    public function stageDestroy(Request $request, int $id): JsonResponse
+    {
+        $stage = PipelineStage::forCurrentWorkspace()->find($id);
+        if (! $stage) {
+            return response()->json(['ok' => false, 'message' => __('Stage not found.')], 404);
+        }
+
+        $siblings = PipelineStage::forCurrentWorkspace()->where('pipeline_id', $stage->pipeline_id);
+        if ((clone $siblings)->count() <= 1) {
+            return response()->json(['ok' => false, 'message' =>
+                __('A pipeline needs at least one stage.')], 422);
+        }
+
+        foreach (['is_won' => __('Won'), 'is_lost' => __('Lost')] as $flag => $label) {
+            if ($stage->{$flag} && (clone $siblings)->where('id', '!=', $stage->id)->where($flag, true)->count() === 0) {
+                return response()->json(['ok' => false, 'message' => __(
+                    'This is the only :label stage on the pipeline. Mark another stage as :label before deleting it.',
+                    ['label' => $label]
+                )], 422);
+            }
+        }
+
+        $dealCount = (int) Deal::forCurrentWorkspace()->where('stage_id', $stage->id)->count();
+        $moveTo    = (int) $request->query('move_to', 0);
+
+        if ($dealCount > 0 && $moveTo <= 0) {
+            return response()->json([
+                'ok'         => false,
+                'needs_move' => true,
+                'deal_count' => $dealCount,
+                'message'    => trans_choice(
+                    '{1}This stage still holds :count deal. Choose where to move it first.'
+                    . '|[2,*]This stage still holds :count deals. Choose where to move them first.',
+                    $dealCount, ['count' => $dealCount]
+                ),
+            ], 422);
+        }
+
+        $target = null;
+        if ($dealCount > 0) {
+            $target = (clone $siblings)->where('id', '!=', $stage->id)->find($moveTo);
+            if (! $target) {
+                return response()->json(['ok' => false, 'message' =>
+                    __('Pick a destination stage on the same pipeline.')], 422);
+            }
+        }
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($stage, $target, $dealCount) {
+            if ($dealCount > 0 && $target) {
+                // Bulk update, observer bypassed — same reasoning as the pipeline
+                // remap above: housekeeping must not fire stage-change automations.
+                Deal::where('workspace_id', $stage->workspace_id)
+                    ->where('stage_id', $stage->id)
+                    ->update(['stage_id' => $target->id]);
+            }
+            $stage->delete();
+        });
+
+        return response()->json(['ok' => true, 'message' => $dealCount > 0
+            ? trans_choice('{1}Stage deleted — :count deal moved.|[2,*]Stage deleted — :count deals moved.', $dealCount, ['count' => $dealCount])
+            : __('Stage deleted.')]);
+    }
+
+    /** Shared validation for stageStore (required name) + stageUpdate (partial). */
+    private function validateStage(Request $request, bool $creating): array
+    {
+        $rule = $creating ? 'required' : 'sometimes|required';
+
+        return $request->validate([
+            'name'        => $rule . '|string|max:120',
+            // Hex only — the value is written straight into a style attribute
+            // on the board, so anything else is both broken and an injection
+            // vector on a field the operator controls.
+            'color'       => 'sometimes|nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
+            'probability' => 'sometimes|nullable|integer|min:0|max:100',
+            'is_won'      => 'sometimes|boolean',
+            'is_lost'     => 'sometimes|boolean',
+        ]);
+    }
+
+    /**
+     * Keep at most one Won and one Lost stage per pipeline. `$keep` is the stage
+     * just created or edited — every other row carrying the same flag is cleared.
+     */
+    private function enforceSingleTerminal(Pipeline $pipeline, PipelineStage $keep): void
+    {
+        foreach (['is_won', 'is_lost'] as $flag) {
+            if (! $keep->{$flag}) continue;
+            PipelineStage::where('pipeline_id', $pipeline->id)
+                ->where('id', '!=', $keep->id)
+                ->where($flag, true)
+                ->update([$flag => false]);
+        }
+    }
+
+    /* ==================================================================
+     * Deal custom fields
+     *
+     * Definitions live in `deal_custom_fields`; VALUES live in the existing
+     * (previously unused) deals.meta->custom map, keyed by the field's `key`.
+     * Contacts have had this since the inbox was built — deals never did, so
+     * anything a workspace tracked beyond title/value/owner went into the free
+     * -text notes box where nothing could filter or report on it.
+     * ================================================================== */
+
+    /** GET /deals/fields — the workspace's deal custom-field definitions. */
+    public function fieldsIndex(Request $request): JsonResponse
+    {
+        return response()->json([
+            'ok'   => true,
+            'data' => \App\Models\DealCustomField::forCurrentWorkspace()
+                ->orderBy('sort')->orderBy('id')->get()
+                ->map(fn ($f) => [
+                    'id'            => $f->id,
+                    'key'           => $f->key,
+                    'label'         => $f->label,
+                    'type'          => $f->type,
+                    'options'       => array_values((array) ($f->options ?? [])),
+                    'required'      => (bool) $f->required,
+                    'show_in_panel' => (bool) $f->show_in_panel,
+                    'sort'          => (int) $f->sort,
+                ])->values(),
+        ]);
+    }
+
+    /** POST /deals/fields — define a new custom field. */
+    public function fieldStore(Request $request): JsonResponse
+    {
+        $wsId = (int) ($request->user()->current_workspace_id ?? 0);
+        if ($wsId <= 0) {
+            return response()->json(['ok' => false, 'message' => __('No active workspace.')], 422);
+        }
+
+        $data = $this->validateFieldDefinition($request, true);
+
+        // The key IS the storage address inside deals.meta->custom, so it has to
+        // be a stable slug — not whatever the operator typed. Derived from the
+        // label when omitted, and never editable afterwards (see fieldUpdate).
+        $key = \Illuminate\Support\Str::slug((string) ($data['key'] ?? $data['label']), '_');
+        $key = mb_substr(preg_replace('/[^a-z0-9_]/', '', strtolower($key)), 0, 64);
+        if ($key === '') {
+            return response()->json(['ok' => false, 'message' => __('Give the field a name using letters or numbers.')], 422);
+        }
+        if (\App\Models\DealCustomField::where('workspace_id', $wsId)->where('key', $key)->exists()) {
+            return response()->json(['ok' => false, 'message' => __('A field with that name already exists.')], 422);
+        }
+
+        $field = \App\Models\DealCustomField::create([
+            'workspace_id'  => $wsId,
+            'key'           => $key,
+            'label'         => trim($data['label']),
+            'type'          => $data['type'] ?? 'text',
+            'options'       => $this->cleanFieldOptions($data['options'] ?? []),
+            'required'      => (bool) ($data['required'] ?? false),
+            'show_in_panel' => (bool) ($data['show_in_panel'] ?? true),
+            'sort'          => (int) \App\Models\DealCustomField::forCurrentWorkspace()->max('sort') + 1,
+        ]);
+
+        return response()->json(['ok' => true, 'message' => __('Field added.'), 'field' => $field]);
+    }
+
+    /** PATCH /deals/fields/{id} — edit a definition. The KEY is immutable. */
+    public function fieldUpdate(Request $request, int $id): JsonResponse
+    {
+        $field = \App\Models\DealCustomField::forCurrentWorkspace()->find($id);
+        if (! $field) {
+            return response()->json(['ok' => false, 'message' => __('Field not found.')], 404);
+        }
+
+        $data  = $this->validateFieldDefinition($request, false);
+        $patch = [];
+        if (array_key_exists('label', $data))         $patch['label']         = trim($data['label']);
+        if (array_key_exists('type', $data))          $patch['type']          = $data['type'];
+        if (array_key_exists('options', $data))       $patch['options']       = $this->cleanFieldOptions($data['options']);
+        if (array_key_exists('required', $data))      $patch['required']      = (bool) $data['required'];
+        if (array_key_exists('show_in_panel', $data)) $patch['show_in_panel'] = (bool) $data['show_in_panel'];
+        if (array_key_exists('sort', $data))          $patch['sort']          = (int) $data['sort'];
+
+        // `key` is deliberately NOT patchable: every stored value is addressed
+        // by it, so renaming would orphan the data on every existing deal.
+        // Renaming the LABEL is what an operator actually wants, and that is
+        // free — the label is display-only.
+        $field->update($patch);
+
+        return response()->json(['ok' => true, 'message' => __('Field saved.'), 'field' => $field->fresh()]);
+    }
+
+    /**
+     * DELETE /deals/fields/{id} — remove a definition.
+     *
+     * Stored values are LEFT ALONE in deals.meta->custom. Sweeping them would
+     * mean rewriting every deal in the workspace to undo one mis-click, and
+     * re-creating the field with the same key brings the data straight back.
+     */
+    public function fieldDestroy(int $id): JsonResponse
+    {
+        $field = \App\Models\DealCustomField::forCurrentWorkspace()->find($id);
+        if (! $field) {
+            return response()->json(['ok' => false, 'message' => __('Field not found.')], 404);
+        }
+        $field->delete();
+
+        return response()->json(['ok' => true, 'message' => __('Field removed. Values already saved on deals are kept.')]);
+    }
+
+    /** Shared validation for fieldStore (label required) + fieldUpdate (partial). */
+    private function validateFieldDefinition(Request $request, bool $creating): array
+    {
+        $rule = $creating ? 'required' : 'sometimes|required';
+
+        return $request->validate([
+            'label'         => $rule . '|string|max:128',
+            'key'           => 'sometimes|nullable|string|max:64',
+            'type'          => 'sometimes|string|in:' . implode(',', \App\Models\DealCustomField::TYPES),
+            'options'       => 'sometimes|array|max:60',
+            'options.*'     => 'string|max:120',
+            'required'      => 'sometimes|boolean',
+            'show_in_panel' => 'sometimes|boolean',
+            'sort'          => 'sometimes|integer|min:0|max:9999',
+        ]);
+    }
+
+    /** Trim, drop blanks, de-duplicate select options case-insensitively. */
+    private function cleanFieldOptions($options): array
+    {
+        $seen = [];
+        $out  = [];
+        foreach ((array) $options as $o) {
+            $o = trim((string) $o);
+            if ($o === '') continue;
+            $k = mb_strtolower($o);
+            if (isset($seen[$k])) continue;
+            $seen[$k] = true;
+            $out[]    = $o;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Merge submitted custom values into a deal's meta->custom map.
+     *
+     * Merge, never replace: a partial submit (the drawer sends only the fields
+     * it rendered) must not erase values it never showed. A value that does not
+     * fit its declared type is SKIPPED, keeping the old one — a bad entry must
+     * not wipe good data, and one bad field must not fail the whole save.
+     *
+     * @return array{0: array, 1: array}  [new meta, skipped keys]
+     */
+    private function mergeDealCustom(Deal $deal, array $submitted): array
+    {
+        $defs    = \App\Models\DealCustomField::forCurrentWorkspace()->get()->keyBy('key');
+        $meta    = is_array($deal->meta) ? $deal->meta : [];
+        $custom  = is_array($meta['custom'] ?? null) ? $meta['custom'] : [];
+        $skipped = [];
+
+        foreach ($submitted as $key => $val) {
+            $def = $defs->get((string) $key);
+            if (! $def) { $skipped[] = (string) $key; continue; }
+
+            $coerced = $def->coerce(trim((string) $val));
+            if ($coerced === false) { $skipped[] = (string) $key; continue; }
+
+            $custom[(string) $key] = $coerced;
+        }
+
+        $meta['custom'] = $custom;
+
+        return [$meta, $skipped];
+    }
+
+    /** Resolve a deal's custom values for the UI, joined to their definitions. */
+    private function dealCustomValues(Deal $deal): array
+    {
+        $meta   = is_array($deal->meta) ? $deal->meta : [];
+        $custom = is_array($meta['custom'] ?? null) ? $meta['custom'] : [];
+
+        return \App\Models\DealCustomField::forCurrentWorkspace()
+            ->orderBy('sort')->orderBy('id')->get()
+            ->map(fn ($f) => [
+                'key'           => $f->key,
+                'label'         => $f->label,
+                'type'          => $f->type,
+                'options'       => array_values((array) ($f->options ?? [])),
+                'required'      => (bool) $f->required,
+                'show_in_panel' => (bool) $f->show_in_panel,
+                'value'         => $custom[$f->key] ?? null,
+            ])->values()->all();
+    }
+
     /* -------------------- serializers -------------------- */
 
     private function serializeDeal(Deal $d): array
     {
         $c = $d->contact;
         $hasContact = $c && $c->id;
-        $rawPhone   = $hasContact ? preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile)) : null;
+        $rawPhone   = $hasContact ? Contact::canonicalizePhone($c->country_code, $c->mobile) : null;
 
         return [
             'id'            => $d->id,
@@ -521,8 +1193,8 @@ class DealsController extends Controller
             'created_at'    => optional($d->created_at)->toDayDateTimeString(),
             'contact'       => $hasContact ? [
                 'id'        => $c->id,
-                'name'      => $c->name ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: mask_phone((string) ($c->country_code . $c->mobile)),
-                'phone'     => mask_phone((string) ($c->country_code . $c->mobile)),
+                'name'      => $c->name ?: trim(($c->first_name ?? '') . ' ' . ($c->last_name ?? '')) ?: mask_phone(Contact::canonicalizePhone($c->country_code, $c->mobile)),
+                'phone'     => mask_phone(Contact::canonicalizePhone($c->country_code, $c->mobile)),
                 'wa_phone'  => $rawPhone, // for the wa.me deep link only
             ] : null,
         ];

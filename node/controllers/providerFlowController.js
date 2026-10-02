@@ -17,7 +17,7 @@
 // this file is purely additive and never imported by the socket handler.
 import axios from "axios";
 import moment from "moment";
-import { executeFlowNode, handleFlowResponse } from "../services/flowService.js";
+import { executeFlowNode, handleFlowResponse, rehydrateParkedSession, syncParkedSession } from "../services/flowService.js";
 import { fetchWorkspaceAttributes, mergeFlowVariables } from "../services/campaignService.js";
 
 const nodeHeaders = () => ({ "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "", Accept: "application/json" });
@@ -78,18 +78,29 @@ export const providerInbound = async (req, res, app) => {
   const pushName      = String(req.body?.pushName || "");
   const forcedFlowId  = req.body?.flowId ? String(req.body.flowId) : "";
   const provider      = String(req.body?.provider || "waba");
+  // Stored media URL for an Ask node flagged "accept upload" (Phase 3). Laravel
+  // already downloaded + stored the WABA/Twilio media and forwards its URL here.
+  const mediaUrl      = String(req.body?.mediaUrl || "");
   if (!deviceNumber || !customerPhone) {
     return res.status(400).send({ ok: false, error: "deviceNumber and customerPhone required" });
   }
 
   const sessionKey = `${deviceNumber}_${customerPhone}`;
-  const active = appLocals.activeFlowSessions[sessionKey];
+  let active = appLocals.activeFlowSessions[sessionKey];
   // An interactive TAP (button / list row) carries a replyId; typed free text
   // does not. A tap is always the current node's ANSWER, so it can never be a
   // keyword; only typed text can restart a flow. Used below both to resume and
   // to detect a mid-flow keyword restart.
   const isTap = replyId !== "";
   const typed = text.trim();
+
+  // DURABLE SESSIONS: no live session (e.g. Node restarted) but the customer
+  // just replied/tapped — try to rehydrate a parked flow from Laravel so the
+  // reply resumes it instead of being dropped. Only for a real reply/tap; an
+  // empty system event must not rehydrate + auto-answer a parked node.
+  if (!active && (typed !== "" || isTap)) {
+    active = await rehydrateParkedSession(appLocals, sessionKey);
+  }
   // Only a real customer action (typed text or an interactive tap) may resume a
   // parked flow. An empty payload (Meta's unsupported/system/reaction/read-state
   // events) must NOT resume — otherwise it re-invokes the parked AI node with
@@ -177,12 +188,16 @@ export const providerInbound = async (req, res, app) => {
       if (isResume) {
         if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
         const message = buildMessage(text, replyId, pushName);
+        if (mediaUrl) message.__mediaUrl = mediaUrl;   // Ask node "accept upload" capture
         console.log(`[PROVIDER-FLOW] resume key=${sessionKey} provider=${provider} nextNodeType=${active.waitingForInput?.nextNodeType}`);
         try {
           await handleFlowResponse(message, active, customerPhone, deviceNumber, null, appLocals);
         } catch (e) {
           console.error(`[PROVIDER-FLOW] resume failed key=${sessionKey}: ${e?.message}`);
         }
+        // Durable sessions: mirror the settled state — re-parked at the next
+        // question (upsert) or advanced past/ended (clear).
+        await syncParkedSession(appLocals, sessionKey);
         clearSessionLater(appLocals, sessionKey, active.timeoutSeconds || 600);
         return;
       }
@@ -232,6 +247,8 @@ export const providerInbound = async (req, res, app) => {
       } catch (e) {
         console.error(`[PROVIDER-FLOW] start exec failed flow=${flowId}: ${e?.message}`);
       }
+      // Durable sessions: if the first node parked on a question, snapshot it.
+      await syncParkedSession(appLocals, sessionKey);
       clearSessionLater(appLocals, sessionKey, timeoutSeconds);
     } catch (e) {
       console.error(`[PROVIDER-FLOW] handler crashed key=${sessionKey}: ${e?.message}`);

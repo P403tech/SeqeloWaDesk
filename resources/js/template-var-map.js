@@ -89,18 +89,38 @@ function slotsInBody(body) {
 export function initVariableMap({ body, hidden, rows, empty }) {
     if (!body || !hidden || !rows) return;
     let attributes = [];
+    // Column headers from the recipient CSV/Excel the operator uploaded. When
+    // present they are offered FIRST in every dropdown ("From your file") so a
+    // user maps {{1}} → a spreadsheet column without typing anything — the
+    // WA-Sender-style flow. The chosen header is the raw column name, which the
+    // importer stores verbatim on each contact's custom_attributes, so send-time
+    // substitution resolves it unchanged. setColumns() feeds them in.
+    let columns = [];
+
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
     function optionsHtml(selectedKey) {
-        const head = `<option value="">${'— not mapped —'}</option>`;
-        const opts = attributes
+        let html = `<option value="">${'— not mapped —'}</option>`;
+        if (columns.length) {
+            html += `<optgroup label="${esc('From your file')}">`;
+            html += columns
+                .map((c) => `<option value="${esc(c)}"${c === selectedKey ? ' selected' : ''}>${esc(c)}</option>`)
+                .join('');
+            html += '</optgroup>';
+        }
+        const attrOpts = attributes
             .map((a) => {
                 const key = a.key || '';
                 const label = (a.name || key) + (key ? ` (${key})` : '');
                 const sel = key === selectedKey ? ' selected' : '';
-                return `<option value="${key.replace(/"/g, '&quot;')}"${sel}>${label.replace(/</g, '&lt;')}</option>`;
+                return `<option value="${esc(key)}"${sel}>${esc(label)}</option>`;
             })
             .join('');
-        return head + opts;
+        html += columns.length
+            ? `<optgroup label="${esc('Contact attributes')}">${attrOpts}</optgroup>`
+            : attrOpts;
+        return html;
     }
 
     function render() {
@@ -158,6 +178,16 @@ export function initVariableMap({ body, hidden, rows, empty }) {
         attributes = Array.isArray(list) ? list : [];
         render();
     });
+
+    // Public handle so the campaign builder can push the uploaded file's column
+    // headers in (and clear them when the file is removed), re-rendering the
+    // dropdowns each time.
+    return {
+        setColumns(list) {
+            columns = Array.isArray(list) ? list.map((c) => String(c).trim()).filter(Boolean) : [];
+            render();
+        },
+    };
 }
 
 export default initVariableMap;

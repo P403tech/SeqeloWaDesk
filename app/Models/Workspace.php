@@ -50,6 +50,18 @@ class Workspace extends Model
         'auto_pickup_delay_sec', 'voicemail_delay_sec', 'default_voice_ai_agent_id',
         // Admin-set provisioning fields.
         'custom_domain', 'cname_verified', 'country',
+        // Per-workspace reCAPTCHA (white-label custom domains use their own keys).
+        'captcha_enabled', 'captcha_version', 'captcha_site_key', 'captcha_secret',
+        // Per-workspace Meta app (manual keys) for Facebook + Instagram connect.
+        'meta_app_id', 'meta_app_secret',
+        // Per-workspace INSTAGRAM-LOGIN app (Instagram API with Instagram Login).
+        // Separate Instagram App ID + secret (e.g. 4329…) — its own app so IG DMs
+        // deliver via instagram_business_manage_messages without Advanced Access.
+        'ig_login_app_id', 'ig_login_app_secret',
+        'threads_app_id', 'threads_app_secret',
+        // Per-workspace OWN Google + Shopify app (self-serve BYO app).
+        'google_client_id', 'google_client_secret',
+        'shopify_client_id', 'shopify_client_secret',
         'billing_cycle', 'trial_ends_at', 'plan_ends_at', 'cap_monthly_messages', 'cap_daily_messages',
         'cap_devices', 'cap_users',
         'skip_onboarding_email', 'bill_to_platform_credit', 'pre_seed_sample_data',
@@ -88,6 +100,13 @@ class Workspace extends Model
         'voicemail_delay_sec'      => 'integer',
         'default_voice_ai_agent_id'=> 'integer',
         'cname_verified'           => 'boolean',
+        'captcha_enabled'          => 'boolean',
+        'captcha_secret'           => 'encrypted',
+        'meta_app_secret'          => 'encrypted',
+        'ig_login_app_secret'      => 'encrypted',
+        'threads_app_secret'       => 'encrypted',
+        'google_client_secret'     => 'encrypted',
+        'shopify_client_secret'    => 'encrypted',
         'skip_onboarding_email'    => 'boolean',
         'bill_to_platform_credit'  => 'boolean',
         'pre_seed_sample_data'     => 'boolean',
@@ -419,6 +438,85 @@ class Workspace extends Model
      * Per-request cached. Never recurses (resolves siblings via the raw
      * package(), not billingPackage()).
      */
+    /**
+     * This workspace's OWN Meta app (manual App ID + Secret) for Facebook +
+     * Instagram connect, when the admin enabled `meta_allow_manual_app` and the
+     * workspace filled BOTH. Returns ['id'=>, 'secret'=>] or null (→ admin app).
+     * Shared by the FB service + the native Instagram addon.
+     */
+    public function ownMetaApp(): ?array
+    {
+        // UNGATED (mirrors WhatsApp BYO-app): a workspace that has entered its OWN
+        // Meta App ID + Secret uses THAT app for OAuth, appsecret_proof and webhook
+        // verification. Returns null when the workspace hasn't set its own keys, so
+        // it transparently falls back to the platform app. No admin toggle — clients
+        // MUST use their own app while the platform app is still in Meta App Review.
+        $id     = trim((string) ($this->meta_app_id ?? ''));
+        $secret = trim((string) ($this->meta_app_secret ?? ''));
+        return ($id !== '' && $secret !== '') ? ['id' => $id, 'secret' => $secret] : null;
+    }
+
+    /**
+     * This workspace's OWN INSTAGRAM-LOGIN app (Instagram API with Instagram
+     * Login) — the separate Instagram App ID + secret. Returns ['id'=>,'secret'=>]
+     * when BOTH are set, else null. When present, Instagram connects through the
+     * Instagram-Login OAuth flow (graph.instagram.com) using THESE keys, so DMs
+     * arrive via instagram_business_manage_messages without Advanced-Access review.
+     * Facebook keeps using ownMetaApp() (page-token) independently.
+     */
+    public function ownIgLoginApp(): ?array
+    {
+        $id     = trim((string) ($this->ig_login_app_id ?? ''));
+        $secret = trim((string) ($this->ig_login_app_secret ?? ''));
+        return ($id !== '' && $secret !== '') ? ['id' => $id, 'secret' => $secret] : null;
+    }
+
+    /**
+     * This workspace's OWN Threads (Meta) app id + secret. Returns
+     * ['id'=>,'secret'=>] when BOTH are set, else null (→ platform/admin app).
+     * UNGATED (mirrors ownMetaApp / ownIgLoginApp): a workspace that entered its
+     * own Threads app keys connects through THAT app.
+     */
+    public function ownThreadsApp(): ?array
+    {
+        $id     = trim((string) ($this->threads_app_id ?? ''));
+        $secret = trim((string) ($this->threads_app_secret ?? ''));
+        return ($id !== '' && $secret !== '') ? ['id' => $id, 'secret' => $secret] : null;
+    }
+
+    /**
+     * This workspace's OWN Google OAuth app (client_id + client_secret), for
+     * self-serve Google connect (Calendar/Meet/Sheets/Docs/Forms). Returns
+     * ['id'=>, 'secret'=>] when BOTH are set, else null (→ platform/admin app).
+     *
+     * UNGATED (mirrors ownMetaApp / WhatsApp BYO-app): a workspace that has
+     * entered its own Google keys connects through THAT app — no admin config
+     * or approval needed. Token refresh, which runs in the flow runtime with no
+     * login session, resolves these off the workspace it is passed, so a
+     * background Sheets/Docs refresh still uses the client's own app secret.
+     */
+    public function ownGoogleApp(): ?array
+    {
+        $id     = trim((string) ($this->google_client_id ?? ''));
+        $secret = trim((string) ($this->google_client_secret ?? ''));
+        return ($id !== '' && $secret !== '') ? ['id' => $id, 'secret' => $secret] : null;
+    }
+
+    /**
+     * This workspace's OWN Shopify app (API key + secret), for self-serve
+     * Shopify connect. Returns ['id'=>, 'secret'=>] when BOTH are set, else
+     * null (→ platform/admin app). UNGATED. The secret also verifies this
+     * store's webhook HMAC + OAuth HMAC — the webhook route carries the
+     * integration's routing token so we can bind the workspace before verify
+     * even though Shopify posts webhooks with no session.
+     */
+    public function ownShopifyApp(): ?array
+    {
+        $id     = trim((string) ($this->shopify_client_id ?? ''));
+        $secret = trim((string) ($this->shopify_client_secret ?? ''));
+        return ($id !== '' && $secret !== '') ? ['id' => $id, 'secret' => $secret] : null;
+    }
+
     public function billingPackage(): ?\App\Models\Package
     {
         $scope = (string) \App\Models\SystemSetting::get('billing_plan_scope', 'workspace');
@@ -610,6 +708,19 @@ class Workspace extends Model
             ->withTimestamps();
     }
 
+    /**
+     * Canonical "seats used" for this workspace — the ONE definition both the
+     * usage display and the invite-limit enforcement must share. A seat = one
+     * workspace_user membership row. Previously the display counted users by
+     * current_workspace_id while enforcement counted the pivot, so the dashboard
+     * ("3 of 5") could disagree with the limit ("blocked at 5/5"). (#29)
+     */
+    public function seatsUsed(): int
+    {
+        return (int) \Illuminate\Support\Facades\DB::table('workspace_user')
+            ->where('workspace_id', $this->id)->count();
+    }
+
     public function teams()
     {
         return $this->hasMany(Team::class);
@@ -665,10 +776,65 @@ class Workspace extends Model
         $slug = Str::slug($base) ?: 'workspace';
         $candidate = $slug;
         $i = 1;
-        while (static::where('slug', $candidate)->exists()) {
+        // withTrashed() is load-bearing. This model soft-deletes, but
+        // `workspaces_slug_unique` is a plain MySQL index that still counts
+        // trashed rows. A default (scoped) lookup therefore hands back a slug
+        // the INSERT rejects with 1062 -- which is exactly what happened when a
+        // client deleted a workspace and recreated it under the same name.
+        while (static::withTrashed()->where('slug', $candidate)->exists()) {
             $candidate = $slug . '-' . (++$i);
         }
         return $candidate;
+    }
+
+    /**
+     * Create a workspace, surviving a slug collision instead of 500-ing.
+     *
+     * generateSlug() pre-checks uniqueness, but the check and the INSERT are
+     * not atomic: two concurrent signups with the same name, a double-submit,
+     * or a retried request can both pass the check and then collide. Every
+     * workspace-creation path must go through here so the guard is uniform --
+     * it used to live only in AuthController, which is why registration
+     * recovered but "New workspace" surfaced a raw 500.
+     *
+     * Only `workspaces_slug_unique` is absorbed; any other unique constraint
+     * rethrows so real bugs stay visible.
+     */
+    public static function createWithUniqueSlug(array $attrs): self
+    {
+        $base = Str::slug((string) ($attrs['name'] ?? '')) ?: 'workspace';
+
+        for ($try = 0; $try < 5; $try++) {
+            try {
+                return static::create($attrs);
+            } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+                if (! static::isSlugCollision($e)) {
+                    throw $e;
+                }
+                $attrs['slug'] = $base . '-' . Str::lower(Str::random(6));
+            }
+        }
+
+        // Five random-suffix collisions in a row is not a thing that happens;
+        // this is here so the method has no path that returns null.
+        $attrs['slug'] = 'workspace-' . Str::lower(Str::random(12));
+        return static::create($attrs);
+    }
+
+    /**
+     * Is this unique violation the slug index, as opposed to some other one?
+     *
+     * Each driver phrases it differently, and matching only the MySQL index
+     * name would make the retry above a silent no-op everywhere else (tests
+     * run on SQLite), turning a recoverable collision back into a 500.
+     */
+    protected static function isSlugCollision(\Throwable $e): bool
+    {
+        $msg = $e->getMessage();
+
+        return str_contains($msg, 'workspaces_slug_unique')   // MySQL / MariaDB
+            || str_contains($msg, 'workspaces.slug')          // SQLite
+            || str_contains($msg, 'workspaces_slug_key');     // PostgreSQL
     }
 
     /**
@@ -710,6 +876,86 @@ class Workspace extends Model
                 // creation (which would break signup entirely).
                 \Illuminate\Support\Facades\Log::warning(
                     '[WORKSPACE] starter tag seed failed: ' . $e->getMessage(),
+                    ['workspace_id' => $workspace->id]
+                );
+            }
+        });
+
+        /*
+         * Trashing a workspace must take its AUTOMATIONS with it.
+         *
+         * Soft-deleting the workspace left its flows with deleted_at = NULL, so
+         * Flow::deleted never fired, so the managed keyword_replies rows those
+         * flows own stayed ACTIVE. The result reported from the field: "deleted
+         * the account and workspace, but the flows keep coming back" — they were
+         * never trashed, only the workspace was.
+         *
+         * Worse than clutter: those live rules keep competing in the keyword
+         * matcher, which is a strong candidate for "multiple keyword flows work
+         * sometimes but mostly not".
+         *
+         * Soft-delete (not force) so restoring the workspace can bring them
+         * back, and per-row so Flow::deleted runs its own trigger-rule cleanup.
+         */
+        static::deleted(function (self $workspace) {
+            // A force-delete removes the rows outright; there is nothing left
+            // to cascade to and the FK cleanup belongs to the DB.
+            if (method_exists($workspace, 'isForceDeleting') && $workspace->isForceDeleting()) {
+                return;
+            }
+
+            try {
+                $flows = Flow::where('workspace_id', $workspace->id)->get();
+                foreach ($flows as $flow) {
+                    $flow->delete();   // fires Flow::deleted → drops its keyword rule
+                }
+
+                // Hand-made (non-flow) keyword replies orphan the same way and
+                // keep matching. Deactivate rather than delete so a restore can
+                // put the workspace back exactly as it was.
+                $muted = \App\Models\KeywordReply::where('workspace_id', $workspace->id)
+                    ->where('status', 'active')
+                    ->update(['status' => 'inactive']);
+
+                \Illuminate\Support\Facades\Log::info('[WORKSPACE] trashed — automations cascaded', [
+                    'workspace_id'   => $workspace->id,
+                    'flows_trashed'  => $flows->count(),
+                    'rules_disabled' => $muted,
+                ]);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning(
+                    '[WORKSPACE] automation cascade failed: ' . $e->getMessage(),
+                    ['workspace_id' => $workspace->id]
+                );
+            }
+        });
+
+        /*
+         * Restoring a workspace has to undo the above, or the customer gets
+         * their workspace back with an empty Flows list.
+         */
+        static::restored(function (self $workspace) {
+            try {
+                $restored = Flow::withTrashed()
+                    ->where('workspace_id', $workspace->id)
+                    ->whereNotNull('deleted_at')
+                    ->get();
+
+                foreach ($restored as $flow) {
+                    $flow->restore();
+                    // Rebuild the managed keyword rule the delete hook removed.
+                    if (method_exists($flow, 'syncKeywordTriggerReply')) {
+                        $flow->syncKeywordTriggerReply();
+                    }
+                }
+
+                \Illuminate\Support\Facades\Log::info('[WORKSPACE] restored — flows brought back', [
+                    'workspace_id' => $workspace->id,
+                    'flows'        => $restored->count(),
+                ]);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning(
+                    '[WORKSPACE] flow restore failed: ' . $e->getMessage(),
                     ['workspace_id' => $workspace->id]
                 );
             }

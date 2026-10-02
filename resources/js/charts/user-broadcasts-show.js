@@ -12,6 +12,7 @@
 // SVGs recompute their width to the now-visible container.
 import ApexCharts from 'apexcharts';
 import { themeColor } from '../theme-colors.js';
+import { createPoller } from '../lib/poller.js';
 
 export default function init() {
     const data = window.WA_BROADCAST_DATA || {};
@@ -126,7 +127,6 @@ export default function init() {
     if (liveEl) {
         const url = liveEl.dataset.liveUrl;
         const fmt = (n) => Number(n || 0).toLocaleString();
-        let timer = null;
         const tick = async () => {
             try {
                 const r = await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
@@ -151,13 +151,18 @@ export default function init() {
                 if (pill && j.status) {
                     pill.textContent = j.status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
                 }
-                if (!j.in_flight && timer) { clearInterval(timer); timer = null; }
+                // The send has finished — nothing will change again, so stop
+                // polling entirely rather than widen. This is the one case
+                // where the right cadence is "never".
+                if (!j.in_flight) { poller.stop(); return false; }
+                return true;   // still sending — stay on the fast cadence
             } catch (_) { /* network blips are silent */ }
+            return false;
         };
-        const start = () => { if (!timer) { tick(); timer = setInterval(tick, 12000); } };
-        const stop  = () => { if (timer)  { clearInterval(timer); timer = null; } };
-        start();
-        document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+        // Shared poller: overlap guard + hidden-tab pause, and it keeps the
+        // 12s cadence only while the broadcast is actually in flight.
+        const poller = createPoller(tick, { interval: 12000, maxInterval: 60000 });
+        poller.start();
     }
 
     // Retry-failed button — confirm + POST.

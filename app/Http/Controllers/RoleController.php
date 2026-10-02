@@ -45,6 +45,8 @@ class RoleController extends Controller
     {
         $validated = $request->validate([
             'name'          => 'required|string|max:191|unique:roles,name',
+            'scope'         => 'nullable|in:workspace,platform',
+            'description'   => 'nullable|string|max:500',
             'permissions'   => 'array',
             'permissions.*' => 'string',
         ]);
@@ -53,6 +55,11 @@ class RoleController extends Controller
             'name'       => $validated['name'],
             'guard_name' => 'web',
         ]);
+        // Persist Scope + Description — the form always showed these but they were
+        // never saved (#25).
+        $role->scope       = $validated['scope'] ?? 'workspace';
+        $role->description = $validated['description'] ?? null;
+        $role->save();
 
         if (!empty($validated['permissions'])) {
             // Resolve permission names → Permission models, ignore unknowns.
@@ -159,11 +166,15 @@ class RoleController extends Controller
 
         $validated = $request->validate([
             'name'          => 'required|string|max:191|unique:roles,name,' . $id,
+            'scope'         => 'nullable|in:workspace,platform',
+            'description'   => 'nullable|string|max:500',
             'permissions'   => 'array',
             'permissions.*' => 'string',
         ]);
 
-        $role->name = $validated['name'];
+        $role->name        = $validated['name'];
+        $role->scope       = $validated['scope'] ?? $role->scope ?? 'workspace';
+        $role->description = $validated['description'] ?? null;
         $role->save();
 
         $perms = !empty($validated['permissions'])

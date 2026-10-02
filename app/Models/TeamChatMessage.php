@@ -14,6 +14,12 @@ class TeamChatMessage extends Model
 
     protected $fillable = [
         'workspace_id',
+        // Missing from this list, create() silently DROPPED it — mass
+        // assignment ignores non-fillable keys rather than erroring — so every
+        // message was written with channel_id = NULL. The send succeeded, the
+        // sender saw it optimistically in the browser, and nobody could ever
+        // read it back: the channel query matched nothing.
+        'channel_id',
         'user_id',
         'body',
         'mentions',

@@ -71,8 +71,12 @@
         <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8h10M9 4l4 4-4 4" /></svg>
     </button>
 
-    <p class="text-[12.5px] text-ink-600 text-center mt-4">{{ __('New to') }} {{ $__brandName }}?
-        <a href="{{ route('register') }}" class="text-wa-deep font-semibold hover:underline">{{ __('Create an account') }}</a></p>
+    {{-- On a white-label custom domain we only offer sign-in — no public
+         registration for a workspace-locked tenant site. --}}
+    @unless ($isTenantDomain ?? false)
+        <p class="text-[12.5px] text-ink-600 text-center mt-4">{{ __('New to') }} {{ $__brandName }}?
+            <a href="{{ route('register') }}" class="text-wa-deep font-semibold hover:underline">{{ __('Create an account') }}</a></p>
+    @endunless
 </form>
 
 @php

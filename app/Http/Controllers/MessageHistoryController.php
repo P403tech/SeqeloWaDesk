@@ -468,16 +468,38 @@ class MessageHistoryController extends Controller
             'failureReason'  => (string) ($r['meta']['error'] ?? ''),
             'sentAtFull'     => $this->toDisplayTz($r['when'])?->format('M d, Y H:i') ?? '—',
             'timeline'       => $this->timeline($r),
-            'metadata'       => [
-                ['label' => 'Message ID',   'value' => $r['id']],
-                ['label' => 'Source',       'value' => $r['source_label'] ?? '—'],
-                ['label' => 'Phone',        'value' => $r['phone'] ?: '—'],
-                ['label' => 'Status',       'value' => $r['status'] ?: '—'],
-                ['label' => 'Language',     'value' => $r['meta']['language'] ?? '—'],
-                ['label' => 'Created',      'value' => $this->toDisplayTz($r['when'])?->format('M d, Y H:i') ?: '—'],
-            ],
+            'metadata'       => $this->detailMetadata($r),
             'canResend'      => false,    // unified view doesn't expose source-specific resend
         ]);
+    }
+
+    /**
+     * The message-detail METADATA rows. Appends a "Failure reason" row (Meta
+     * error code + human text) whenever the message failed — so the operator can
+     * see WHY without escalating. Requested by Kothari Tech; the reason is
+     * already captured on the row, it just wasn't surfaced here.
+     */
+    private function detailMetadata(array $r): array
+    {
+        $meta = [
+            ['label' => 'Message ID',   'value' => $r['id']],
+            ['label' => 'Source',       'value' => $r['source_label'] ?? '—'],
+            ['label' => 'Phone',        'value' => $r['phone'] ?: '—'],
+            ['label' => 'Status',       'value' => $r['status'] ?: '—'],
+            ['label' => 'Language',     'value' => $r['meta']['language'] ?? '—'],
+            ['label' => 'Created',      'value' => $this->toDisplayTz($r['when'])?->format('M d, Y H:i') ?: '—'],
+        ];
+
+        $isFailed = in_array((string) ($r['status'] ?? ''), ['failed', 'error'], true);
+        $code = trim((string) ($r['meta']['error_code'] ?? ''));
+        $text = trim((string) ($r['meta']['error']
+            ?? ($r['meta']['error_message'] ?? ($r['failure_reason'] ?? ''))));
+        $display = trim(($code !== '' ? '#' . $code . ' ' : '') . $text);
+        if ($isFailed && $display !== '') {
+            $meta[] = ['label' => 'Failure reason', 'value' => $display];
+        }
+
+        return $meta;
     }
 
     private function timeline(array $r): array

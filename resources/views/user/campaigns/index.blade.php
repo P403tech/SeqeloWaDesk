@@ -140,15 +140,16 @@
                             </svg>
                             Sync now
                         </button>
-                        <form method="POST" action="{{ route('user.meta-ads.import') }}" class="inline">
+                        <form method="POST" action="{{ route('user.meta-ads.import') }}" class="inline"
+                            id="meta-import-form" data-import-url="{{ route('user.meta-ads.import') }}">
                             @csrf
                             <button type="submit"
-                                class="px-4 py-2 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium flex items-center gap-2">
+                                class="px-4 py-2 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium flex items-center gap-2 disabled:opacity-60">
                                 <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
                                     stroke-width="1.6">
                                     <path d="M8 2v8M5 7l3 3 3-3M3 13h10" />
                                 </svg>
-                                {{ __('Fetch from Meta') }}
+                                <span data-import-label>{{ __('Fetch from Meta') }}</span>
                             </button>
                         </form>
                         <a href="{{ route('user.meta-ads.analytics') }}"
@@ -175,21 +176,14 @@
                             </svg>
                             Create Meta campaign
                         </a>
-                        {{-- P7 — Instagram-linked (via Instaflow) workspaces get a
-                             deep-link into Instaflow's own ad manager, which runs IG
-                             ads under the correct IG identity. WaDesk's native Meta
-                             Ads (Create Meta campaign) already build IG-placement
-                             creatives for a workspace with its own Meta ad account. --}}
-                        @if (!empty($instaflowAdsUrl))
-                            <a href="{{ $instaflowAdsUrl }}" target="_blank" rel="noopener"
-                                class="px-4 py-2 rounded-full border border-[#5B3D8A] text-[#5B3D8A] text-[12px] font-semibold hover:bg-[#5B3D8A]/10 flex items-center gap-2"
-                                title="{{ __('Manage Instagram ads under your Instagram identity in :igbrand', ['igbrand' => ig_brand_name()]) }}">
-                                <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
-                                    <rect x="3" y="3" width="10" height="10" rx="3"/><circle cx="8" cy="8" r="2.2"/><circle cx="11" cy="5" r=".7" fill="currentColor" stroke="none"/>
-                                </svg>
-                                {{ __('Instagram ads') }}
-                            </a>
-                        @endif
+                        {{-- (Removed) The "Instagram ads" button deep-linked to
+                             <instaflow_base>/instagram/ads whenever the workspace had
+                             an Instagram account connected. The path was assembled by
+                             string concatenation and never checked, so it opened a
+                             404 in a new tab. Native Meta Ads ("Create Meta campaign")
+                             already build IG-placement creatives, so nothing is lost.
+                             Same reasoning as the removed "Switch to Instagram" header
+                             icon: Instagram is used inside WaDesk, not another app. --}}
                     </div>
                 </div>
 
@@ -429,4 +423,69 @@
             class="hidden">@csrf @method('DELETE')</form>
     @endif
 
+    {{-- "Fetch from Meta" — chunked import. Each campaign needs 3 extra Graph
+         calls, so importing 70+ in one POST hit nginx's 60s limit (504). This
+         loops the import a few campaigns at a time until done. Inline; no build. --}}
+    <script>
+    (function () {
+        var form = document.getElementById('meta-import-form');
+        if (!form) return;
+        var url = form.getAttribute('data-import-url');
+        var label = form.querySelector('[data-import-label]');
+        var btn = form.querySelector('button');
+        var tokenEl = form.querySelector('input[name=_token]');
+        var metaEl = document.querySelector('meta[name="csrf-token"]');
+        var token = (tokenEl && tokenEl.value) || (metaEl && metaEl.getAttribute('content')) || '';
+        var original = label ? label.textContent : 'Fetch from Meta';
+        var running = false;
+
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            if (running) return;
+            running = true;
+            if (btn) btn.disabled = true;
+            var after = 0, imported = 0, updated = 0, total = 0, guard = 0;
+            try {
+                do {
+                    var res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json', 'Accept': 'application/json',
+                            'X-CSRF-TOKEN': token, 'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: JSON.stringify({ after: after, limit: 5 }),
+                    });
+                    var data = await res.json();
+                    if (!res.ok || !data.ok) throw new Error(data.error || data.message || ('HTTP ' + res.status));
+                    imported += (data.imported || 0);
+                    updated += (data.updated || 0);
+                    total = data.total || total;
+                    var done = Math.min(after + 5, total || (after + 5));
+                    if (label) label.textContent = 'Fetching ' + done + (total ? ' / ' + total : '') + '…';
+                    after = data.next;
+                    guard++;
+
+                    // Meta throttling / high usage → pause, then auto-resume.
+                    // Cap each pause at 60s and just re-try; if still limited the
+                    // next chunk returns rate_limited again and we wait again.
+                    var wait = Math.min(data.retry_after || 0, 60);
+                    if (wait > 0 && after !== null && after !== undefined) {
+                        for (var s = wait; s > 0; s--) {
+                            if (label) label.textContent = (data.rate_limited ? 'Meta busy — resuming in ' : 'Pacing — ') + s + 's…';
+                            await new Promise(function (r) { setTimeout(r, 1000); });
+                        }
+                    }
+                } while (after !== null && after !== undefined && guard < 500);
+                if (label) label.textContent = imported + ' new, ' + updated + ' updated — refreshing…';
+                setTimeout(function () { window.location.reload(); }, 900);
+            } catch (err) {
+                if (label) label.textContent = 'Fetch failed — retry';
+                if (window.WaToaster && window.WaToaster.error) window.WaToaster.error('Fetch from Meta failed: ' + err.message);
+                if (btn) btn.disabled = false;
+                running = false;
+                setTimeout(function () { if (label) label.textContent = original; }, 4000);
+            }
+        });
+    })();
+    </script>
 </x-layouts.user>

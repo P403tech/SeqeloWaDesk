@@ -181,6 +181,7 @@ class OptOutService
             ->first(function ($c) use ($digits, $last10) {
                 $d = Contact::canonicalizePhone($c->country_code, $c->mobile)
                     ?: preg_replace('/\D+/', '', (string) $c->mobile);
+                $d = Contact::canonicalizePhone($c->country_code, $c->mobile);
                 return $d !== '' && ($d === $digits || str_ends_with($d, $last10));
             });
     }

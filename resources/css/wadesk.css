@@ -933,6 +933,23 @@ html[data-theme="doodle"] .text-wa-deep                          { color: var(--
 html[data-theme="doodle"] .text-wa-teal                          { color: var(--color-wa-teal) !important; }
 html[data-theme="doodle"] .text-paper-0                          { color: #FFFDF5 !important; }
 
+/* ── CHAT PREVIEW BUBBLE — theme-independent ──────────────────────────
+   The WhatsApp message preview must always render like WhatsApp (light
+   bubble, near-black text) no matter which app UI theme is active. Doodle
+   remaps the paper/ink tokens the bubble is built from, which left the body
+   text the same colour as the bubble → INVISIBLE TEXT (reported: "live
+   preview for the Doodle theme does not display text"). Pin the preview's own
+   colours so its text is always legible. Scoped to the preview ids only, so
+   nothing else in the doodle theme is affected. */
+html[data-theme="doodle"] #pp-card{
+  background-color: #FFFFFF !important;
+}
+html[data-theme="doodle"] #pp-card,
+html[data-theme="doodle"] #pp-card #pp-body,
+html[data-theme="doodle"] #pp-card #pp-header{
+  color: #15281F !important;
+}
+
 /* ── PRIMARY CTA (.bg-wa-deep) — pill-dark style ──────────
    ink BG, white text, thick ink border, hard offset shadow. */
 html[data-theme="doodle"] button.bg-wa-deep,
@@ -2228,8 +2245,21 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
        past the viewport — a bare 1fr is minmax(auto,1fr) and long message
        text / the header action row would blow the track wide, pushing the
        right-aligned outgoing bubbles off-screen (they looked "cut off"). */
-    .ti-frame { grid-template-columns: 280px minmax(0, 1fr); }
-    .ti-frame.no-contact { grid-template-columns: 280px minmax(0, 1fr); }
+    /* !important + ID scope is REQUIRED here (same reason the phone query below
+       needs it): the desktop grid is set by the unconditional ID rule
+       `#ti-frame.ti-frame` (specificity 1,2,0), which beats a class-only
+       `.ti-frame` rule (0,1,0) even inside this media query. Without it the
+       team inbox KEPT the 4-column desktop grid at tablet/PWA widths — the
+       thread `1fr` squeezed to a thin strip with an empty contact column
+       (the "PWA window looks broken" report). Cover every state combo. */
+    .ti-frame,
+    .ti-frame.no-contact,
+    #ti-frame.ti-frame,
+    #ti-frame.ti-frame.no-contact,
+    #ti-frame.ti-frame.nav-collapsed,
+    #ti-frame.ti-frame.nav-collapsed.no-contact {
+      grid-template-columns: 280px minmax(0, 1fr) !important;
+    }
     .ti-frame > .ti-col { min-width: 0; }                         /* let grid children shrink */
     .ti-frame > aside:first-child { display: none; }              /* hide team-nav sidebar */
     /* z-index 45 sits ABOVE the app header (z-40) so the drawer still covers
@@ -2256,13 +2286,23 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
     .ti-frame.nav-collapsed,
     .ti-frame.nav-collapsed.no-contact,
     .ti-frame.mobile-thread-open,
-    .ti-frame.mobile-thread-open.no-contact {
-      /* !important is REQUIRED here: the desktop grid is set by the unconditional
-         ID rule `#ti-frame.ti-frame.no-contact` (specificity 1,2,0), which beats a
-         class-only mobile rule (0,2,0) even inside this max-width query — so
-         without !important the phone kept the 4-column desktop grid and the list
-         rendered as a squished 290px track. !important on a class rule trumps the
-         non-important ID rule at every state. */
+    .ti-frame.mobile-thread-open.no-contact,
+    /* ID-scoped twins are REQUIRED, not decorative. The tablet query above
+       (max-width:1023.98px) also matches at phone width, and its selectors are
+       ID-scoped (`#ti-frame.ti-frame…`, specificity 1,2,0) AND !important. When
+       two !important declarations collide, specificity still decides — so a
+       class-only rule here (0,2,0) LOSES to it and the phone inherited the
+       tablet's `280px minmax(0,1fr)`: a 280px list with a dead empty column
+       beside it. Matching the ID scope makes this rule 1,2,0 too, and being
+       later in the file it wins. (An earlier comment here claimed !important on
+       a class rule beats an ID rule — that was only true while the tablet rule
+       had no !important of its own.) */
+    #ti-frame.ti-frame,
+    #ti-frame.ti-frame.no-contact,
+    #ti-frame.ti-frame.nav-collapsed,
+    #ti-frame.ti-frame.nav-collapsed.no-contact,
+    #ti-frame.ti-frame.mobile-thread-open,
+    #ti-frame.ti-frame.mobile-thread-open.no-contact {
       grid-template-columns: minmax(0, 1fr) !important;
       height: calc(100vh - 56px);
       height: 100dvh;
@@ -2366,6 +2406,9 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
     --ch-em:  #C0563B;
     --ch-tt:  #FE2C55;
     --ch-sms: #6D28D9;
+    --ch-ln:  #06C755;
+    --ch-wc:  #07C160;
+    --ch-vb:  #7360F2;
     --ai-purple: #5B3D8A;
     --ai-purple-bg: #F3E9FF;
   }
@@ -2384,6 +2427,9 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .ti-chbadge.ch-em { background: var(--ch-em); }
   .ti-chbadge.ch-tt { background: var(--ch-tt); }
   .ti-chbadge.ch-sms { background: var(--ch-sms); }
+  .ti-chbadge.ch-ln { background: var(--ch-ln); }
+  .ti-chbadge.ch-wc { background: var(--ch-wc); }
+  .ti-chbadge.ch-vb { background: var(--ch-vb); }
 
   /* ── Channel filter tabs (colour-coded) — replaces the plain device
         <select>. "All" + one pill per connected channel, each with a count. */
@@ -2413,6 +2459,10 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .ti-chtab.on.ch-tg  { background: var(--ch-tg); }
   .ti-chtab.on.ch-em  { background: var(--ch-em); }
   .ti-chtab.on.ch-tt  { background: var(--ch-tt); }
+  .ti-chtab.on.ch-sms { background: var(--ch-sms); }
+  .ti-chtab.on.ch-ln  { background: var(--ch-ln); }
+  .ti-chtab.on.ch-wc  { background: var(--ch-wc); }
+  .ti-chtab.on.ch-vb  { background: var(--ch-vb); }
 
   /* ── Quick-label toggle pills (chat header). Neutral at rest — the label's
      colour lives only in the icon — and fill solid with `--ql` while the label
@@ -2461,7 +2511,13 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   [data-user-shell="sidebar"] .lg\:grid-cols-\[300px_1fr\] > aside:not([data-keep-rail]) { display: none !important; }
 
   .ti-seg { position: relative; display: flex; background: var(--color-paper-100);
-            border: 1px solid var(--color-paper-200); border-radius: 11px; padding: 3px; }
+            border: 1px solid var(--color-paper-200); border-radius: 11px; padding: 3px;
+            /* 5 team tabs (All/Mine/Unassigned/@me/Unread) don't fit a narrow
+               sidebar at equal widths — let them size to content and scroll
+               instead of cramming ("@meUnread"). Scrollbar hidden for a clean
+               pill look; the sliding thumb still tracks the active button. */
+            overflow-x: auto; scrollbar-width: none; }
+  .ti-seg::-webkit-scrollbar { display: none; }
   /* Default width covers the first of the two always-visible buttons (All /
      Unread) so the very first paint — before the JS measures the active
      button — already lines up. JS overrides left/width for other tabs. */
@@ -2469,14 +2525,21 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
             background: var(--color-paper-0); border-radius: 8px;
             box-shadow: 0 1px 3px rgba(11,31,28,.12), 0 0 0 1px rgba(11,31,28,.04);
             transition: left .22s cubic-bezier(.5,0,.2,1.2), width .22s cubic-bezier(.5,0,.2,1.2); }
-  .ti-seg button { position: relative; z-index: 1; flex: 1; height: 27px; border-radius: 8px;
-            font-size: 11px; font-weight: 600; color: var(--color-ink-500);
+  .ti-seg button { position: relative; z-index: 1; flex: 0 0 auto; height: 27px; border-radius: 8px;
+            padding: 0 11px; font-size: 11px; font-weight: 600; color: var(--color-ink-500);
             display: inline-flex; align-items: center; justify-content: center; gap: 5px;
             white-space: nowrap; transition: color .18s; background: none; border: 0; cursor: pointer; }
+  /* Solo workspace: only All + Unread are shown → each fills half the bar
+     (full-width), matching the two-option design. `display:none` tabs drop out
+     of flex, so exactly the two visible ones stretch. Multi-member workspaces
+     keep the compact, scrollable tabs above. */
+  .ti-seg.is-duo button { flex: 1 1 0; }
   .ti-seg button.on { color: var(--color-ink-900); }
-  .ti-seg button .n { font-size: 8.5px; font-family: 'JetBrains Mono', monospace; font-weight: 700;
-            min-width: 15px; height: 14px; padding: 0 4px; border-radius: 99px;
-            background: rgba(11,31,28,.08); color: var(--color-ink-500); display: grid; place-items: center; transition: .18s; }
+  .ti-seg button .n { font-size: 8px; font-family: 'JetBrains Mono', monospace; font-weight: 600;
+            min-width: 14px; height: 13px; padding: 0 4px; border-radius: 99px;
+            background: rgba(11,31,28,.05); color: var(--color-ink-400); display: grid; place-items: center; transition: .18s; }
+  /* Unassigned is icon-only (label too long for 5 tabs) — keep the glyph crisp. */
+  .ti-seg button .ti-seg-ic { width: 13px; height: 13px; flex: 0 0 auto; }
   /* Empty count pills paint as bare coloured dots on first load (before
      renderCounts() fills or hides them) — that looks like a broken toggle.
      Hide any pill with no number until the JS injects a real count. */
@@ -2489,6 +2552,11 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
             background: linear-gradient(135deg, var(--ai-purple-bg), var(--color-paper-0));
             border: 1px solid rgba(91,61,138,.25); border-radius: 13px 13px 0 0; border-bottom: none;
             padding: 9px 13px; }
+  /* `.ti-aibar` (display:flex) and Tailwind's `.hidden` (display:none) have
+     EQUAL specificity, so source order won and `.ti-aibar` kept the bar
+     visible — the Dismiss (×) and the initial hidden state did nothing. This
+     two-class selector outranks both, so `hidden` truly hides the bar. */
+  .ti-aibar.hidden { display: none; }
   .ti-aibar .spark { width: 26px; height: 26px; border-radius: 9px; background: var(--ai-purple);
             color: #fff; display: grid; place-items: center; flex: 0 0 auto; }
   .ti-aibar .spark svg { width: 13px; height: 13px; }
@@ -2545,9 +2613,45 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .ti-rl-channels { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 100%; }
   .ti-rl-div { width: 26px; border: none; border-top: 1px solid rgba(255,255,255,.12); margin: 5px 0; }
   .ti-rl-nav { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 100%;
-               flex: 1 1 auto; overflow-y: auto; overflow-x: visible; min-height: 0; }
+               flex: 0 0 auto; overflow: hidden; min-height: 0; }
   .ti-rl-nav::-webkit-scrollbar { width: 0; height: 0; }
-  .ti-rl-sp { flex: 0 0 4px; }
+  /* Tools flyout — one rail button opens the feature icons as a floating grid,
+     so the rail never overflows however many channels connect. Revert = delete
+     this block + the <details> wrapper in team-inbox/index.blade.php. */
+  .ti-rl-tools { position: relative; width: 100%; display: flex; justify-content: center; }
+  .ti-rl-tools > summary { list-style: none; cursor: pointer; }
+  .ti-rl-tools > summary::-webkit-details-marker { display: none; }
+  .ti-rl-tools[open] > summary { background: var(--color-wa-deep); color: var(--color-paper-0); }
+  .ti-rl-nav-pop {
+    position: absolute; left: calc(100% + 10px); top: 0;
+    flex: none !important; overflow: visible !important; min-height: 0;
+    display: grid !important; grid-template-columns: repeat(5, 40px); gap: 6px;
+    width: max-content; padding: 10px; border-radius: 16px;
+    background: #12312B; border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 14px 40px rgba(0,0,0,.45); z-index: 40;
+  }
+  /* Small arrow pointing back to the Tools button. */
+  .ti-rl-nav-pop::before {
+    content: ""; position: absolute; left: -5px; top: 12px; width: 10px; height: 10px;
+    background: #12312B; border-left: 1px solid rgba(255,255,255,.10);
+    border-bottom: 1px solid rgba(255,255,255,.10); transform: rotate(45deg);
+  }
+  @media (max-width: 640px) {
+    .ti-rl-nav-pop { grid-template-columns: repeat(4, 40px); }
+  }
+  /* Flex-filler: pins the bottom utilities (Invite / Back) to the rail's
+     bottom now that the feature icons live in the Tools flyout — no floating
+     mid-rail gap. Was `flex:0 0 4px` (a fixed 4px). */
+  .ti-rl-sp { flex: 1 1 auto; min-height: 4px; }
+
+  /* Quick-access edge drawer in RTL. RTLCSS correctly flips the panel's
+     `right-0` anchor to the left edge (opposite the RTL sidebar), but the
+     Tailwind `translate-x-full` hide-transform is CSS-variable-based
+     (--tw-translate-x:100%) so RTLCSS can't mirror it — the CLOSED panel then
+     slid RIGHT, into view over the content. Flip the variable so the closed
+     drawer parks off-screen to the LEFT; opening (JS drops the class) reveals
+     it at the left edge exactly as intended. */
+  [dir="rtl"] #qad-panel.translate-x-full { --tw-translate-x: -100%; }
   .ti-rl-btn { position: relative; width: 40px; height: 40px; border-radius: 12px; display: grid;
                place-items: center; color: #7C948F; transition: .13s; flex: 0 0 auto; border: 0;
                background: none; cursor: pointer; }
@@ -2804,6 +2908,10 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   /* small toast */
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--color-ink-900); color:var(--color-paper-0); padding:8px 14px; border-radius:999px; font-size:12px; font-weight:500; box-shadow: 0 12px 28px -10px rgba(0,0,0,0.4); opacity:0; pointer-events:none; transition: opacity .18s, transform .18s; z-index:60; }
   #toast.show { opacity:1; transform: translate(-50%, -4px); }
+  /* toast() has always set toast-<kind>, but nothing styled those classes, so a
+     failure looked exactly like a success. Scoped to #toast to outrank the base. */
+  #toast.toast-error   { background: #7A1F1F; }
+  #toast.toast-success { background: var(--color-wa-deep); }
 /* === user-woocommerce-dashboard === */
 /* shop hero search backdrop (subtle grid) */
   .shop-hero {
@@ -3130,6 +3238,64 @@ html[data-theme="dark"] .dl-card-won      { border-color: #1F5A3E; }
 html[data-theme="dark"] .dl-count         { background: #1F4540; color: #C9D2CE; }
 html[data-theme="dark"] .dl-progress      { background: #1F4540; }
 html[data-theme="dark"] .dl-amount        { color: var(--wa-brand-text); }
+/* ── Pipeline settings: stage editor + lost-reason chips ──────────────────
+   The settings modal grew from one checkbox to a tabbed manager, so it needs
+   a wider shell and a row layout for the stage ladder. */
+.dl-modal-lg { max-width: 640px; }
+
+.dl-stage-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px; border-radius: 11px;
+    border: 1px solid var(--color-paper-200, var(--color-paper-200));
+    background: var(--color-paper-0, var(--color-paper-0));
+}
+.dl-stage-row.dragging { opacity: .4; }
+.dl-stage-grip { cursor: grab; color: var(--color-ink-400, #94a3b8); flex-shrink: 0; display: grid; place-items: center; }
+.dl-stage-grip:active { cursor: grabbing; }
+.dl-stage-color {
+    width: 24px; height: 24px; padding: 0; flex-shrink: 0;
+    border: 1px solid var(--color-paper-200, var(--color-paper-200));
+    border-radius: 7px; background: none; cursor: pointer;
+}
+.dl-stage-name {
+    flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+    background: transparent; border: none; outline: none;
+    color: inherit; padding: 2px 0;
+}
+.dl-stage-name:focus { border-bottom: 1px solid var(--color-wa-deep, var(--color-wa-deep)); }
+.dl-stage-prob { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--color-ink-500, #64748b); flex-shrink: 0; }
+.dl-stage-prob input {
+    width: 42px; font-size: 11px; text-align: right; padding: 2px 4px;
+    border: 1px solid var(--color-paper-200, var(--color-paper-200));
+    border-radius: 6px; background: transparent; color: inherit;
+}
+.dl-stage-kind {
+    font-size: 11px; padding: 3px 6px; border-radius: 7px; flex-shrink: 0;
+    border: 1px solid var(--color-paper-200, var(--color-paper-200));
+    background: transparent; color: inherit;
+}
+.dl-stage-del {
+    flex-shrink: 0; width: 24px; height: 24px; border-radius: 7px;
+    display: grid; place-items: center; color: #DC2626;
+}
+.dl-stage-del:hover { background: color-mix(in srgb, #DC2626 12%, transparent); }
+
+/* Lost-reason chips carry a delete button, so unlike the bare .dl-chip
+   they need their own surface. */
+.dl-chip[data-reason] {
+    background: var(--color-paper-100, #f1f5f9);
+    border: 1px solid var(--color-paper-200, var(--color-paper-200));
+    padding: 3px 6px 3px 9px;
+}
+.dl-chip[data-reason] button { font-size: 14px; line-height: 1; color: var(--color-ink-500, #64748b); padding: 0 2px; }
+.dl-chip[data-reason] button:hover { color: #DC2626; }
+
+html[data-theme="dark"] .dl-stage-row      { background: #13312D; border-color: #2D5A53; }
+html[data-theme="dark"] .dl-stage-color,
+html[data-theme="dark"] .dl-stage-kind,
+html[data-theme="dark"] .dl-stage-prob input { border-color: #2D5A53; }
+html[data-theme="dark"] .dl-chip[data-reason] { background: #13312D; border-color: #2D5A53; color: #F0EBE0; }
+
 html[data-theme="dark"] .dl-kpi           { background: #13312D; border-color: #2D5A53; }
 html[data-theme="dark"] .dl-kpi .v        { color: #FBFAF6; }
 html[data-theme="dark"] .dl-kpi .v.is-accent { color: var(--wa-brand-text); }

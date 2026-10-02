@@ -44,7 +44,8 @@ class WorkspacePermissions
         'inbox.view_assigned',      // see only my assigned conversations
         'inbox.reply',
         'inbox.note',               // post internal note
-        'inbox.assign',             // assign / reassign / unassign
+        'inbox.assign',             // assign / reassign / unassign anyone
+        'inbox.assign_self',        // claim a chat for MYSELF only
         'inbox.resolve',
         'inbox.snooze',
         'inbox.bulk',
@@ -69,7 +70,7 @@ class WorkspacePermissions
     private const MATRIX = [
         self::ROLE_OWNER => [
             'inbox.view_all_teams','inbox.view_team','inbox.view_assigned',
-            'inbox.reply','inbox.note','inbox.assign','inbox.resolve',
+            'inbox.reply','inbox.note','inbox.assign','inbox.assign_self','inbox.resolve',
             'inbox.snooze','inbox.bulk','inbox.tag','inbox.priority',
             'team.manage','tag.manage','routing.manage','sla.manage','savedreply.manage',
             'member.invite','member.role.assign',
@@ -77,7 +78,7 @@ class WorkspacePermissions
         ],
         self::ROLE_ADMIN => [
             'inbox.view_all_teams','inbox.view_team','inbox.view_assigned',
-            'inbox.reply','inbox.note','inbox.assign','inbox.resolve',
+            'inbox.reply','inbox.note','inbox.assign','inbox.assign_self','inbox.resolve',
             'inbox.snooze','inbox.bulk','inbox.tag','inbox.priority',
             'team.manage','tag.manage','routing.manage','sla.manage','savedreply.manage',
             'member.invite','member.role.assign',
@@ -85,13 +86,23 @@ class WorkspacePermissions
         ],
         self::ROLE_MANAGER => [
             'inbox.view_all_teams','inbox.view_team','inbox.view_assigned',
-            'inbox.reply','inbox.note','inbox.assign','inbox.resolve',
+            'inbox.reply','inbox.note','inbox.assign','inbox.assign_self','inbox.resolve',
             'inbox.snooze','inbox.bulk','inbox.tag','inbox.priority',
             'tag.manage','savedreply.manage','analytics.view',
         ],
         self::ROLE_AGENT => [
-            'inbox.view_team','inbox.view_assigned',
+            // An agent works the shared queue: the inbox list already returns
+            // every unassigned / unread / SLA-breached thread in the workspace
+            // to any member, so withholding view_all_teams only made the "All"
+            // tab (and ConversationPolicy::view) disagree with the rest of the
+            // inbox — a workspace with no teams and no assignees opened to
+            // nothing. Grant it so the list and the thread agree.
+            'inbox.view_all_teams','inbox.view_team','inbox.view_assigned',
             'inbox.reply','inbox.note','inbox.resolve','inbox.snooze',
+            // Claim-only assignment: an agent may take a chat for themselves
+            // but not hand one to a teammate — that stays with the manager.
+            // Enforced in ConversationPolicy::assign.
+            'inbox.assign_self',
             'inbox.tag',
         ],
         self::ROLE_VIEWER => [

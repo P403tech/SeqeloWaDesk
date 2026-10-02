@@ -36,6 +36,10 @@ use App\Services\Payment\Drivers\StripeDriver;
 use App\Services\Payment\Drivers\TapDriver;
 use App\Services\Payment\Drivers\TwocheckoutDriver;
 use App\Services\Payment\Drivers\XenditDriver;
+use App\Services\Payment\Drivers\KhaltiDriver;
+use App\Services\Payment\Drivers\EsewaDriver;
+use App\Services\Payment\Drivers\BinanceDriver;
+use App\Services\Payment\Drivers\JazzcashDriver;
 use RuntimeException;
 
 /**
@@ -92,6 +96,12 @@ class PaymentGatewayManager
         'skrill'         => SkrillDriver::class,
         'cinetpay'       => CinetpayDriver::class,
         'ligdicash'      => LigdicashDriver::class,
+
+        // Nepal + Pakistan local rails.
+        'khalti'         => KhaltiDriver::class,
+        'esewa'          => EsewaDriver::class,
+        'binance'        => BinanceDriver::class,
+        'jazzcash'       => JazzcashDriver::class,
     ];
 
     /**
@@ -135,6 +145,10 @@ class PaymentGatewayManager
         'skrill'         => ['name' => 'Skrill',          'desc' => 'Skrill wallet + 100+ local methods worldwide.'],
         'cinetpay'       => ['name' => 'CinetPay',        'desc' => 'Francophone West Africa — Orange Money, MTN, Moov, cards.'],
         'ligdicash'      => ['name' => 'LigdiCash',       'desc' => 'Burkina Faso / West Africa (XOF) — Orange Money, Moov Money, cards.'],
+        'khalti'         => ['name' => 'Khalti',          'desc' => 'Nepal (NPR) — Khalti wallet, mobile/internet banking, cards via KPG-2.'],
+        'esewa'          => ['name' => 'eSewa',           'desc' => 'Nepal (NPR) — eSewa wallet via ePay v2 (HMAC-signed).'],
+        'binance'        => ['name' => 'Binance Pay',     'desc' => 'Crypto — USDT/USDC/BNB/BTC via Binance Pay merchant checkout.'],
+        'jazzcash'       => ['name' => 'JazzCash',        'desc' => 'Pakistan (PKR) — JazzCash mobile wallet + cards via Hosted Checkout.'],
     ];
 
     /** Resolve a driver instance by slug. */

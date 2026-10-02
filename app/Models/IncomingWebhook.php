@@ -16,7 +16,7 @@ class IncomingWebhook extends Model
     protected $fillable = [
         'workspace_id', 'user_id', 'name', 'token',
         'forward_url', 'forward_enabled', 'is_active',
-        'received_count', 'last_received_at', 'lead_config',
+        'received_count', 'last_received_at', 'lead_config', 'template_config',
     ];
 
     protected $casts = [
@@ -26,12 +26,21 @@ class IncomingWebhook extends Model
         'received_count'   => 'integer',
         'last_received_at' => 'datetime',
         'lead_config'      => 'array',
+        'template_config'  => 'array',
     ];
 
     /** True when this hook should turn received payloads into Contacts. */
     public function leadCaptureEnabled(): bool
     {
         return (bool) ($this->lead_config['enabled'] ?? false);
+    }
+
+    /** True when this hook should fire an approved template on each payload. */
+    public function templateSendEnabled(): bool
+    {
+        return (bool) ($this->template_config['enabled'] ?? false)
+            && !empty($this->template_config['template_id'])
+            && !empty($this->template_config['sender']);
     }
 
     public function events(): HasMany

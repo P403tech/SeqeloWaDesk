@@ -214,6 +214,45 @@ class RazorpayDriver extends AbstractGatewayDriver
         }
     }
 
+    /**
+     * Webhook-independent reconcile: pull the live subscription from Razorpay
+     * so a renewal still applies even when the merchant never registered the
+     * `subscription.charged` webhook (the reported "auto-renewed but still on
+     * Free" case). GET /v1/subscriptions/{id} returns current_end + status.
+     */
+    public function fetchSubscription(string $gatewaySubscriptionId): ?array
+    {
+        $keyId     = (string) $this->cred('key_id');
+        $keySecret = (string) $this->cred('key_secret');
+        if ($keyId === '' || $keySecret === '' || $gatewaySubscriptionId === '') {
+            return null;
+        }
+        try {
+            $r = Http::withBasicAuth($keyId, $keySecret)->timeout(self::HTTP_TIMEOUT_SECONDS)
+                ->get('https://api.razorpay.com/v1/subscriptions/' . $gatewaySubscriptionId);
+            if (! $r->successful()) {
+                return null;
+            }
+            $s = $r->json();
+            // Razorpay sub statuses: created, authenticated, active, pending,
+            // halted, cancelled, completed, expired. Map to our vocabulary.
+            $status = match ((string) ($s['status'] ?? '')) {
+                'active', 'authenticated', 'completed' => 'active',
+                'pending', 'halted'                    => 'past_due',
+                'cancelled'                            => 'canceled',
+                'expired'                              => 'expired',
+                default                                => 'pending',
+            };
+            return [
+                'status'     => $status,
+                'period_end' => $s['current_end'] ?? null,   // unix ts
+                'paid_count' => isset($s['paid_count']) ? (int) $s['paid_count'] : null,
+            ];
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     public function cancelSubscription(string $gatewaySubscriptionId, array $context = []): PaymentResult
     {
         $keyId     = (string) $this->cred('key_id');

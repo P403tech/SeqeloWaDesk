@@ -113,7 +113,7 @@ class FacebookComposerAiController extends Controller
         $provider = $this->providerForModel($model);
 
         if (! $this->hasKeyFor($provider)) {
-            return ['ok' => false, 'error' => self::NO_KEY];
+            return ['ok' => false, 'error' => setup_hint(self::NO_KEY, 'AI assist is unavailable — add your own key under AI Keys, or contact support.')];
         }
 
         $text = $this->ai->callProvider($provider, $model, $this->wsId(), $system, $user, $maxTokens, $temp);
@@ -309,7 +309,7 @@ class FacebookComposerAiController extends Controller
 
         $key = $this->openAiKey();
         if (! $key) {
-            return response()->json(['ok' => false, 'error' => 'Image generation needs an OpenAI key. Add one in Admin → API keys.']);
+            return response()->json(['ok' => false, 'error' => setup_hint('Image generation needs an OpenAI key. Add one in Admin → API keys.', 'Image generation is temporarily unavailable. Please contact support.')]);
         }
 
         $size = (string) ($data['size'] ?? '1024x1024');

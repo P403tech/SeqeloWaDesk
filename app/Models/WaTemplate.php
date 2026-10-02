@@ -313,7 +313,7 @@ class WaTemplate extends Model
      */
     public function engineKey(): string
     {
-        if (in_array($this->channel, ['baileys', 'waba', 'twilio', 'instagram', 'facebook', 'telegram'], true)) {
+        if (in_array($this->channel, ['baileys', 'waba', 'twilio', 'instagram', 'facebook', 'telegram', 'line', 'wechat', 'viber'], true)) {
             return $this->channel;
         }
         if (!empty($this->twilio_content_sid)) return 'twilio';
@@ -331,6 +331,9 @@ class WaTemplate extends Model
             'instagram' => 'Instagram',
             'facebook'  => 'Facebook',
             'telegram'  => 'Telegram',
+            'line'      => 'LINE',
+            'wechat'    => 'WeChat',
+            'viber'     => 'Viber',
         ][$this->engineKey()] ?? 'Unofficial API';
     }
 

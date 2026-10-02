@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\DB;
  */
 class SocialPostAggregator
 {
-    public const CHANNELS = ['instagram', 'facebook', 'tiktok'];
+    public const CHANNELS = ['instagram', 'facebook', 'tiktok', 'threads'];
 
     /**
      * @param  array{statuses?:array,channels?:array,from?:Carbon,to?:Carbon,scheduled_only?:bool,limit?:int}  $opts
@@ -36,6 +36,9 @@ class SocialPostAggregator
         }
         if (in_array('tiktok', $channels, true) && \Schema::hasTable('tiktok_posts')) {
             $out = $out->merge($this->tiktok($workspaceId, $opts));
+        }
+        if (in_array('threads', $channels, true) && \Schema::hasTable('threads_scheduled_posts')) {
+            $out = $out->merge($this->threads($workspaceId, $opts));
         }
 
         // Status filter (normalized).
@@ -149,6 +152,32 @@ class SocialPostAggregator
                     accAvatar: null,
                 );
             });
+    }
+
+    private function threads(int $ws, array $opts): Collection
+    {
+        $rows = DB::table('threads_scheduled_posts as p')
+            ->leftJoin('threads_accounts as a', 'a.id', '=', 'p.threads_account_id')
+            ->where('p.workspace_id', $ws)
+            ->select('p.*', 'a.username as acc_username', 'a.name as acc_name', 'a.profile_pic_url as acc_avatar')
+            ->orderByDesc('p.id')->limit(400)->get();
+
+        return $rows->map(function ($r) {
+            $media = $this->firstMedia([$r->image_url ?? null, $r->video_url ?? null], $r->carousel_urls ?? null);
+
+            return $this->row(
+                channel: 'threads', id: $r->id,
+                status: $this->normStatus((string) $r->status),
+                text: (string) ($r->text ?? ''),
+                mediaUrl: $media, mediaType: (string) ($r->media_type ?? 'text'),
+                scheduledAt: $this->carbon($r->scheduled_at ?? null),
+                publishedAt: $this->carbon($r->published_at ?? $r->updated_at ?? null),
+                createdAt: $this->carbon($r->created_at ?? null),
+                error: (string) ($r->last_error ?? ''),
+                accName: (string) ($r->acc_username ?: $r->acc_name ?: 'Threads'),
+                accAvatar: $r->acc_avatar ?: null,
+            );
+        });
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@
 
 import axios from "axios";
 import moment from "moment";
-import { advanceFlowToPort, executeFlowNode, resumeGoogleForm } from "../services/flowService.js";
+import { advanceFlowToPort, executeFlowNode, resumeGoogleForm, syncParkedSession } from "../services/flowService.js";
 import { seedFlowUserVariables, fetchWorkspaceAttributes, mergeFlowVariables } from "../services/campaignService.js";
 
 // Start flow
@@ -98,6 +98,10 @@ export const startFlow = async (req, res, app) => {
       app.locals.activeFlowSessions[sessionKey] = {
         sessionId: sessionId,
         flowId: flowId,
+        // The enroll path (FlowEnrollmentService) passes the flow_subscribers
+        // row id; campaign / mobile-chat starts don't. Carrying it lets
+        // endFlowSession stamp completed_at so /flows/analytics is accurate.
+        flowSubscriberId: (req.body && req.body.flowSubscriberId) || null,
         flowData: flowData,
         currentNodeId: null,
         // Order/event variables (e.g. {{invoice_url}}, {{order_number}}) passed
@@ -123,6 +127,9 @@ export const startFlow = async (req, res, app) => {
         app.locals,
         sessionKey
       );
+      // Durable sessions: if the first node parked on a question, snapshot it so
+      // a Node restart can rehydrate the flow on the customer's reply.
+      await syncParkedSession(app.locals, sessionKey);
       console.log(`[FLOW-START] first node executed flow=${flowId} target=${targetPhoneNumber} session=${sessionId}`);
     } catch (error) {
       console.error(`[FLOW-START] ERROR flow=${flowId} target=${targetPhoneNumber}: ${error?.message || error}`);
@@ -382,9 +389,123 @@ export const resumePort = async (req, res, app) => {
       app.locals,
       sessionKey,
     );
+    // Durable sessions: the resumed flow may have parked on a new question.
+    await syncParkedSession(app.locals, sessionKey);
     return res.status(200).send({ ok: true, port, nodeId });
   } catch (e) {
     console.error("[FlowResumePort] advance failed:", e?.message);
     return res.status(500).send({ ok: false, error: e?.message || "advance_failed" });
   }
+};
+
+/**
+ * POST /api/flow/resume-delay
+ * Laravel's FlowDelayResumeSweeper hits this when a durable LONG delay comes
+ * due. Continues the flow from the delay node's default out-port (port 1).
+ *
+ *  - Same-process (no restart): the parked session is still in memory — we just
+ *    advance it. If it already moved past the delay node or completed, this is
+ *    an idempotent no-op so a duplicate resume can't double-fire.
+ *  - After a restart: the in-memory session is gone, so we rehydrate it from the
+ *    flow definition (GET /api/flows/:id) + the saved variables snapshot, then
+ *    advance. (A long delay INSIDE a sub-flow can't be rehydrated across a
+ *    restart — the id names the parent flow — so it fails safe: the node isn't
+ *    found and the flow ends instead of resuming.)
+ *
+ * Auth: X-Node-Token. Body mirrors FlowDelayResumeService::postResume.
+ */
+export const resumeDelay = async (req, res, app) => {
+  const expected = process.env.NODE_WEBHOOK_TOKEN || "";
+  const token    = req.headers["x-node-token"] || "";
+  if (!expected || token !== expected) {
+    return res.status(401).send({ ok: false, error: "unauthorized" });
+  }
+
+  const b = req.body || {};
+  const flowId          = b.flow_id;
+  const sessionKey      = b.session_key;
+  const nodeId          = b.node_id;
+  const devicePhone     = b.device_phone;
+  const customerPhone   = b.customer_phone;
+  if (!flowId || !sessionKey || !nodeId || !customerPhone) {
+    return res.status(400).send({ ok: false, error: "flow_id, session_key, node_id, customer_phone required" });
+  }
+
+  // Ack first, resume fire-and-forget (advancing may send messages + call back
+  // into Laravel; don't hold the sweeper's HTTP call open).
+  res.status(202).send({ ok: true, message: "RESUME ACCEPTED", node_id: nodeId });
+
+  (async () => {
+    try {
+      app.locals.activeFlowSessions = app.locals.activeFlowSessions || {};
+      let session = app.locals.activeFlowSessions[sessionKey];
+
+      if (session) {
+        // Idempotency: a duplicate resume must not double-advance a session that
+        // already moved on.
+        if (session.status === "completed") {
+          console.log(`[FLOW-RESUME] session ${sessionKey} already completed — skip`);
+          return;
+        }
+        if (session.currentNodeId && String(session.currentNodeId) !== String(nodeId)) {
+          // A parallel branch (e.g. an AI node) moved the session's current node
+          // while this delay was waiting. That must NOT cancel a due delay — fire
+          // it anyway. BUT if a genuinely DIFFERENT flow has since taken over this
+          // number's session, this delay is stale: running it against the wrong
+          // flow's data would send the wrong message, so skip it.
+          if (String(session.flowId) !== String(flowId)) {
+            console.log(`[FLOW-RESUME] delay ${nodeId} belongs to flow ${flowId} but session now runs flow ${session.flowId} — skip (superseded)`);
+            return;
+          }
+          console.log(`[FLOW-RESUME] continuing due delay ${nodeId} alongside current node ${session.currentNodeId} (same flow ${flowId})`);
+        }
+        // Refresh saved answers from the snapshot without dropping in-memory ones.
+        session.userVariables = Object.assign(
+          {}, session.userVariables || {},
+          (b.variables && typeof b.variables === "object") ? b.variables : {}
+        );
+        session.waitingForInput = null;
+      } else {
+        // Restart case — rebuild from the flow definition + snapshot.
+        const flowResponse = await axios.get(
+          `${app.locals.appDomainName}/api/flows/${flowId}`,
+          { timeout: 20000, headers: { "X-Node-Token": process.env.NODE_WEBHOOK_TOKEN || "" } }
+        );
+        if (!flowResponse.data?.success) {
+          console.warn(`[FLOW-RESUME] flow ${flowId} not found/inactive — cannot resume ${sessionKey}`);
+          return;
+        }
+        const flowData = flowResponse.data.data.flow_data;
+        if (!flowData || !Array.isArray(flowData.flowNodes) || !flowData.flowNodes.some((n) => n.id === nodeId)) {
+          console.warn(`[FLOW-RESUME] flow ${flowId} missing delay node ${nodeId} — cannot resume (sub-flow across restart?)`);
+          return;
+        }
+        session = {
+          sessionId: `${customerPhone}_${Date.now()}`,
+          flowId: flowId,
+          flowSubscriberId: b.flow_subscriber_id || null,
+          flowData: flowData,
+          currentNodeId: nodeId,
+          userVariables: (b.variables && typeof b.variables === "object") ? b.variables : {},
+          messageHistory: [],
+          status: "active",
+          startedAt: moment().format(),
+        };
+        app.locals.activeFlowSessions[sessionKey] = session;
+        console.log(`[FLOW-RESUME] rehydrated session ${sessionKey} flow=${flowId} at node ${nodeId}`);
+      }
+
+      const sock = app.locals.clients?.[devicePhone] || null;
+      await advanceFlowToPort(
+        nodeId, 1,
+        session.flowData, customerPhone, devicePhone,
+        sock, app.locals, sessionKey,
+      );
+      // Durable sessions: the resumed flow may have parked on a new question.
+      await syncParkedSession(app.locals, sessionKey);
+      console.log(`[FLOW-RESUME] advanced flow=${flowId} from delay ${nodeId} session=${sessionKey}`);
+    } catch (e) {
+      console.error(`[FLOW-RESUME] resume failed flow=${flowId} node=${nodeId}: ${e?.response?.status || e?.message}`);
+    }
+  })();
 };

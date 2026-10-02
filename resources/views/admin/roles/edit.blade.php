@@ -84,21 +84,8 @@
                             for="role-scope">{{ __('Scope') }}</label>
                         <select id="role-scope" name="scope"
                             class="w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                            <option value="workspace" selected>{{ __('Workspace level') }}</option>
-                            <option value="platform">{{ __('Platform level (admin only)') }}</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label
-                            class="text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]"
-                            for="role-template">{{ __('Start from template') }}</label>
-                        <select id="role-template" name="template"
-                            class="w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                            <option value="">{{ __('Blank · no permissions') }}</option>
-                            <option>{{ __('Owner · 28 permissions') }}</option>
-                            <option>{{ __('Manager · 22 permissions') }}</option>
-                            <option>{{ __('Agent · 8 permissions') }}</option>
-                            <option>{{ __('Viewer · 5 permissions') }}</option>
+                            <option value="workspace" @selected(old('scope', $role->scope ?? 'workspace') === 'workspace')>{{ __('Workspace level') }}</option>
+                            <option value="platform" @selected(old('scope', $role->scope ?? 'workspace') === 'platform')>{{ __('Platform level (admin only)') }}</option>
                         </select>
                     </div>
                     <div class="md:col-span-3">
@@ -107,7 +94,7 @@
                             for="role-desc">{{ __('Description') }}</label>
                         <textarea id="role-desc" name="description" rows="2"
                             class="w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
-                            placeholder="{{ __('What does this role do? Visible to admins.') }}">{{ old('description') }}</textarea>
+                            placeholder="{{ __('What does this role do? Visible to admins.') }}">{{ old('description', $role->description ?? '') }}</textarea>
                     </div>
                 </div>
             </div>

@@ -5,7 +5,14 @@
 @php $title = $title ?? brand_name(); @endphp
 
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+{{-- `dir` is REQUIRED, not optional. postcss-rtlcss runs in `combined` mode, so
+     the compiled stylesheet carries ~350 directional rules scoped to [dir=ltr]
+     and ~350 to [dir=rtl]. With no dir attribute on <html>, NEITHER set matches
+     and every one of those rules is silently dropped — which is what left the
+     sign-in page unstyled while user/admin/frontend (which all set dir) looked
+     fine. Keep this in sync with the other layouts. --}}
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}"
+    dir="{{ \App\Support\LocaleSettings::directionFor(app()->getLocale()) }}">
 
 <head>
     <meta charset="utf-8">
@@ -18,6 +25,17 @@
     <meta name="default-country-iso"  content="{{ $defCountry['iso'] }}">
     @php $__brandName = (string) brand_name(); @endphp
     <title>{{ $title }} — {{ $__brandName }}</title>
+    {{-- Favicon — the same uploaded asset admin/user/frontend already use. This
+         layout renders the auth AND error pages, which had no icon at all, so a
+         404 or the sign-in screen showed a blank browser tab while every other
+         page showed the brand. rescue()d because the 500 page renders through
+         here too: during a database outage the settings lookup itself throws,
+         and an exception inside the error view yields a blank white page. --}}
+    @php $__faviconUrl = rescue(fn() => \App\Support\Brand::faviconUrl(), null, false); @endphp
+    @if ($__faviconUrl)
+        <link rel="icon" type="image/x-icon" href="{{ $__faviconUrl }}">
+        <link rel="shortcut icon" href="{{ $__faviconUrl }}">
+    @endif
     {{-- SEO meta block — single source at /admin/settings/seo. The
  guest layout is what marketing/login pages render with, so
  this is the surface search engines see most. --}}

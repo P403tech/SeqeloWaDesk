@@ -21,15 +21,11 @@ class BookingPaymentController extends Controller
 
     public function callback(string $gateway, Request $request)
     {
-        $gw = PaymentGateway::where('slug', $gateway)->first();
-        if (! $gw) {
-            return $this->result('error', __('Unknown payment provider.'));
-        }
-        $driver  = $this->manager->driverFromModel($gw);
         $payload = array_merge($request->query() ?: [], $request->post() ?: []);
 
-        // Resolve the order: prefer our own ?bo= param (session-less, cross-site
-        // safe), then the gateway's own order id echoed back.
+        // Resolve the order FIRST: prefer our own ?bo= param (session-less,
+        // cross-site safe), then the gateway's own order id echoed back. We need
+        // the order to know WHICH workspace's merchant gateway to verify with.
         $order = null;
         if (ctype_digit((string) $request->query('bo'))) {
             $order = Order::find((int) $request->query('bo'));
@@ -43,6 +39,32 @@ class BookingPaymentController extends Controller
         }
         if (! $order) {
             return $this->result('error', __('We could not find that booking payment.'));
+        }
+
+        // Verify on the SAME gateway the checkout was created on — the client's
+        // OWN merchant gateway (workspace keys). Fall back to the platform
+        // gateway only for legacy orders that still carry a gateway_id.
+        $driver = null;
+        $merchant = \App\Models\WaMerchantGateway::query()->active()
+            ->where('workspace_id', (int) $order->workspace_id)
+            ->where('storefront_id', 0)
+            ->where('slug', $gateway)
+            ->first();
+        if ($merchant && $merchant->isConfigured()) {
+            try {
+                $driver = $this->manager->driverFromModel($merchant->toTransientPaymentGateway());
+            } catch (\Throwable $e) {
+                $driver = null;
+            }
+        }
+        if (! $driver) {
+            $gw = PaymentGateway::where('slug', $gateway)->first();
+            if ($gw) {
+                $driver = $this->manager->driverFromModel($gw);
+            }
+        }
+        if (! $driver) {
+            return $this->result('error', __('Unknown payment provider.'));
         }
 
         try {

@@ -8,6 +8,9 @@
  * markup is generated at runtime so it never needs class purging.
  */
 (function () {
+    // Platform brand name, injected by the blade (window.WADESK_API.brand) so the
+    // example payloads never show a hardcoded "WaDesk" on a re-branded install.
+    var BRAND = (window.WADESK_API && window.WADESK_API.brand) || 'WaDesk';
     'use strict';
 
     var SPEC_URL = (window.WADESK_API && window.WADESK_API.specUrl) || '/docs/api.json';
@@ -16,7 +19,7 @@
     // Names MUST match the tag names emitted by the spec (Scramble uses the
     // controller name minus "Controller" — singular).
     var GROUP_ORDER = [
-        'Message', 'Template', 'Media', 'Contact', 'ContactGroup', 'Broadcast',
+        'Channel', 'Message', 'WhatsAppDevice', 'Template', 'Media', 'Contact', 'ContactGroup', 'Broadcast',
         'Campaign', 'Scheduled', 'AutoReply', 'Flow', 'Device', 'Webhook',
         'Deal', 'Conversation', 'Account',
     ];
@@ -70,7 +73,7 @@
         if (k.indexOf('status') > -1) return 'sent';
         if (k.indexOf('type') > -1) return 'text';
         if (k === 'code') return 'invalid_request';
-        if (k.indexOf('message') > -1 || k.indexOf('body') > -1 || k.indexOf('text') > -1) return 'Hello from WaDesk';
+        if (k.indexOf('message') > -1 || k.indexOf('body') > -1 || k.indexOf('text') > -1) return 'Hello from ' + BRAND;
         if (k.indexOf('latitude') > -1 || k === 'lat') return 19.0760;
         if (k.indexOf('longitude') > -1 || k === 'lng' || k === 'lon') return 72.8777;
         if (k.indexOf('count') > -1 || k.indexOf('total') > -1) return 12;
@@ -153,7 +156,7 @@
                 device_limit: { label: 'Connected numbers', used: 1, limit: null, unlimited: true, percent: 0 }
             }
         },
-        Message: { id: 90432, to: '+919812345678', type: 'text', status: 'sent', body: 'Hello from WaDesk', created_at: '2026-06-13T10:24:00.000000Z' },
+        Message: { id: 90432, to: '+919812345678', type: 'text', status: 'sent', body: 'Hello from ' + BRAND, created_at: '2026-06-13T10:24:00.000000Z' },
         Contact: {
             id: 1024, name: 'Jane Doe', phone: '+919812345678', email: 'jane@example.com',
             tags: ['VIP'], attributes: [], created_at: '2026-06-13T10:24:00+00:00'
@@ -162,7 +165,7 @@
         Template: {
             id: 135, name: 'order_update', type: 'standard', category: 'marketing', language: 'en_US',
             header: 'Order shipped', header_location: null, body: 'Hi {{1}}, your order {{2}} is on the way!',
-            footer: 'WaDesk', buttons: [{ type: 'url', text: 'Track order', value: 'https://example.com/track' }],
+            footer: BRAND, buttons: [{ type: 'url', text: 'Track order', value: 'https://example.com/track' }],
             carousel_data: [], attachment_type: null, status: 'approved',
             created_at: '2026-06-13T10:24:00+00:00', updated_at: '2026-06-13T10:24:00+00:00'
         },

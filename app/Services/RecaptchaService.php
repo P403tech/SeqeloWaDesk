@@ -18,15 +18,60 @@ use Illuminate\Support\Facades\Log;
  */
 class RecaptchaService
 {
+    /**
+     * On a white-label custom domain, captcha resolves from the TENANT
+     * workspace's own keys — the platform site key is invalid for that host
+     * ("Invalid domain for site key"). A tenant that has NOT configured its own
+     * keys simply gets no captcha (enabled() = false) rather than an error. On
+     * the platform host this returns null → global admin settings are used.
+     */
+    private function tenant(): ?\App\Models\Workspace
+    {
+        try {
+            $ws = \App\Http\Middleware\ResolveTenantDomain::tenant();
+        } catch (\Throwable $e) {
+            return null;
+        }
+        return $ws && $ws->custom_domain ? $ws : null;
+    }
+
     public function enabled(): bool
     {
+        if ($ws = $this->tenant()) {
+            // Tenant domain: only when the workspace supplied its own keys.
+            return (bool) $ws->captcha_enabled
+                && trim((string) $ws->captcha_site_key) !== ''
+                && trim((string) $ws->captcha_secret) !== '';
+        }
+
         return (bool) SystemSetting::get('recaptcha_enabled', false)
             && $this->siteKey() !== '' && $this->secret() !== '';
     }
 
-    public function version(): string { return SystemSetting::get('recaptcha_version', 'v2') === 'v3' ? 'v3' : 'v2'; }
-    public function siteKey(): string { return trim((string) SystemSetting::get('recaptcha_site_key', '')); }
-    public function secret(): string  { return trim((string) SystemSetting::get('recaptcha_secret', '')); }
+    public function version(): string
+    {
+        if ($ws = $this->tenant()) {
+            return ($ws->captcha_version ?? 'v2') === 'v3' ? 'v3' : 'v2';
+        }
+        return SystemSetting::get('recaptcha_version', 'v2') === 'v3' ? 'v3' : 'v2';
+    }
+
+    public function siteKey(): string
+    {
+        if ($ws = $this->tenant()) {
+            return trim((string) $ws->captcha_site_key);
+        }
+        return trim((string) SystemSetting::get('recaptcha_site_key', ''));
+    }
+
+    public function secret(): string
+    {
+        if ($ws = $this->tenant()) {
+            return trim((string) $ws->captcha_secret);
+        }
+        return trim((string) SystemSetting::get('recaptcha_secret', ''));
+    }
+
     public function threshold(): float { return (float) (SystemSetting::get('recaptcha_v3_threshold', 0.5) ?: 0.5); }
 
     /**

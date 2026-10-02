@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+{{-- `dir` is required for the compiled stylesheet to apply — postcss-rtlcss
+     scopes ~350 directional rules to [dir=ltr] and ~350 to [dir=rtl], so with
+     no dir attribute NEITHER set matches and the page renders unstyled.
+     Hardcoded ltr here: the installer runs before any locale is configured. --}}
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="ltr">
 
 <head>
     <meta charset="utf-8">

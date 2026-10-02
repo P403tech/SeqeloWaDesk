@@ -14,12 +14,16 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Pipeline extends Model
 {
     protected $fillable = [
-        'workspace_id', 'name', 'is_default', 'currency', 'sort_order',
+        'workspace_id', 'name', 'is_default', 'currency', 'sort_order', 'lost_reasons',
     ];
 
     protected $casts = [
-        'is_default' => 'boolean',
-        'sort_order' => 'integer',
+        'is_default'   => 'boolean',
+        'sort_order'   => 'integer',
+        // Workspace-authored picklist for "why did we lose this?". Empty/null
+        // keeps the legacy free-text Mark-Lost box, so existing pipelines are
+        // unchanged until someone configures a list.
+        'lost_reasons' => 'array',
     ];
 
     /** The 6-stage ladder seeded into every workspace's first pipeline. */
@@ -130,6 +134,23 @@ class Pipeline extends Model
             if ($c !== '') return $c;
         } catch (\Throwable $e) { /* fall through to default */ }
         return (string) (\App\Models\SystemSetting::get('default_currency', 'USD'));
+    }
+
+    /**
+     * Make THIS the workspace's default pipeline, demoting every other one.
+     *
+     * Both writes run in one transaction: a half-applied change would leave the
+     * workspace with two defaults (or none), and index() picks the default with
+     * firstWhere('is_default', true) — so it would silently open the wrong board.
+     */
+    public function setAsDefault(): void
+    {
+        \Illuminate\Support\Facades\DB::transaction(function () {
+            static::where('workspace_id', $this->workspace_id)
+                ->where('id', '!=', $this->id)
+                ->update(['is_default' => false]);
+            $this->forceFill(['is_default' => true])->save();
+        });
     }
 
     /** Create the default stage ladder for this pipeline. */

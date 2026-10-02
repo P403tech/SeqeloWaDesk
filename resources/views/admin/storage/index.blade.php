@@ -146,7 +146,7 @@
                         </div>
 
                         <label class="space-y-1.5 block border-t border-paper-200 pt-4"><span class="text-[11.5px] font-semibold">{{ __('Base folder path') }} <span class="text-ink-500 font-normal">· {{ __('optional') }}</span></span>
-                            <input name="base_path" value="{{ old('base_path', $cfg['base_path'] ?? '') }}" placeholder="wadesk" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
+                            <input name="base_path" value="{{ old('base_path', $cfg['base_path'] ?? '') }}" placeholder="{{ strtolower(brand_token(12)) }}" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
                             <span class="text-[11px] text-ink-500">{{ __('Prefix prepended to every uploaded object.') }}</span></label>
                     </div>
                 </section>

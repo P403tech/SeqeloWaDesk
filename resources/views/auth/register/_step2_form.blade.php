@@ -104,7 +104,7 @@
 
         <div>
             <label class="text-[11.5px] font-semibold text-ink-700 mb-1 block" for="ws-timezone">{{ __('Timezone') }}</label>
-            @php $picked = old('timezone', 'Asia/Kolkata'); @endphp
+            @php $picked = old('timezone', \App\Models\SystemSetting::get('default_timezone', config('app.timezone', 'Asia/Kolkata'))); @endphp
             @php
                 // Every IANA timezone (same source campaigns / scheduled / admin use).
                 //

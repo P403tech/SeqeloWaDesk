@@ -92,6 +92,12 @@ class WaCampaignsController extends Controller
         if ((bool) \App\Models\SystemSetting::get('sms_enabled', false)) {
             $__engines[] = \App\Services\WorkspaceEngine::ENGINE_SMS;
         }
+        // Same for provider='email' (mail bridge) — a non-WhatsApp engine that
+        // enginesFor() never returns, so without this an email campaign would be
+        // created and then vanish from this list.
+        if ((bool) \App\Models\SystemSetting::get('email_enabled', false)) {
+            $__engines[] = \App\Services\WorkspaceEngine::ENGINE_EMAIL;
+        }
         $allCampaigns = WpCampaign::query()->forCurrentWorkspace()
             ->whereIn('wpcampaigns.provider', array_values(array_unique($__engines)))
             ->orderBy('id', 'desc')->get();
@@ -423,13 +429,22 @@ class WaCampaignsController extends Controller
         // Coexistence dedup: a number on BOTH WABA + Baileys shows as ONE sender
         // (WABA preferred), so a campaign can't be sent twice from the same number.
         //
-        // Channel chooser: the index sends ?channel=sms for the SMS card. SMS is a
-        // separate transport, so the picker is scoped to connected SMS numbers only
-        // (self-gated on sms_enabled). WhatsApp (default) keeps the WhatsApp trio.
-        $campaignChannel = $request->query('channel') === 'sms' ? 'sms' : 'whatsapp';
-        $senders = $campaignChannel === 'sms'
-            ? \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_SMS], false)
-            : \App\Services\WorkspaceEngine::senders($wsId, null, true);
+        // Channel chooser: the index sends ?channel=sms for the SMS card and
+        // ?channel=email for the Email card. Both are separate transports, so the
+        // picker is scoped to that channel's connected senders only (each branch is
+        // self-gated inside senders() on sms_enabled / email_enabled + a connected
+        // row). WhatsApp (default) keeps the WhatsApp trio, deduped.
+        // The 3rd senders() arg is dedupePreferWaba — collapse two senders that
+        // share ONE phone number down to the official (WABA) one. Only meaningful
+        // for the WhatsApp trio, so the single-channel branches pass false.
+        $campaignChannel = in_array($request->query('channel'), ['sms', 'email'], true)
+            ? (string) $request->query('channel')
+            : 'whatsapp';
+        $senders = match ($campaignChannel) {
+            'sms'   => \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_SMS], false),
+            'email' => \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_EMAIL], false),
+            default => \App\Services\WorkspaceEngine::senders($wsId, null, true),
+        };
 
         $contacts  = Contact::query()->forCurrentWorkspace()->orderByDesc('id')->get();
         $groups    = ContactGroup::query()->forCurrentWorkspace()->orderByDesc('id')->get();
@@ -474,10 +489,18 @@ class WaCampaignsController extends Controller
             $tagCounts[$tid] = $list->count();
         }
 
+        $canFollowups = \App\Services\PlanLimitGuard::hasFeature(auth()->user()?->currentWorkspace, 'access_campaign_followups');
+        $drips = $canFollowups
+            ? \App\Models\DripCampaign::where('workspace_id', $wsId)->orderBy('name')->get(['id', 'name'])
+            : collect();
+        $agents = $canFollowups
+            ? (auth()->user()?->currentWorkspace?->members()->get(['users.id', 'users.name']) ?? collect())
+            : collect();
+
         return view('user.wa-campaigns.create', compact(
             'devices', 'senders', 'contacts', 'groups', 'groupCounts',
             'templates', 'flows', 'requiresApprovedTemplates', 'campaign',
-            'tags', 'tagCounts', 'campaignChannel',
+            'tags', 'tagCounts', 'campaignChannel', 'canFollowups', 'drips', 'agents',
         ));
     }
 
@@ -542,11 +565,35 @@ class WaCampaignsController extends Controller
         // Multi-engine sender set (all enabled engines) for <x-sender-picker>.
         // Coexistence dedup: a number on BOTH WABA + Baileys shows as ONE sender
         // (WABA preferred), so a campaign can't be sent twice from the same number.
-        $senders = \App\Services\WorkspaceEngine::senders($wsId, null, true);
+        //
+        // Non-WhatsApp channels are scoped to their OWN senders, the same way
+        // create() scopes the ?channel= builder. senders(null) derives purely from
+        // connected WhatsApp engines, so an email/SMS campaign's mailbox/number was
+        // never in the list: the picker rendered "Select a sender" for a campaign
+        // that HAS one, and picking any listed option re-routed the blast to
+        // WhatsApp with no way back.
+        $senders = in_array($campaign->provider, [
+            \App\Services\WorkspaceEngine::ENGINE_EMAIL,
+            \App\Services\WorkspaceEngine::ENGINE_SMS,
+        ], true)
+            ? \App\Services\WorkspaceEngine::senders($wsId, [(string) $campaign->provider], false)
+            : \App\Services\WorkspaceEngine::senders($wsId, null, true);
+
+        // Follow-up rule builder needs the same option lists as create().
+        $canFollowups = \App\Services\PlanLimitGuard::hasFeature(auth()->user()?->currentWorkspace, 'access_campaign_followups');
+        $flows = $canFollowups ? \App\Models\Flow::query()->forCurrentWorkspace()->orderByDesc('id')->get() : collect();
+        $tags  = $canFollowups ? \App\Models\Tag::query()->where('workspace_id', $wsId)->orderBy('name')->get() : collect();
+        $drips = $canFollowups
+            ? \App\Models\DripCampaign::where('workspace_id', $wsId)->orderBy('name')->get(['id', 'name'])
+            : collect();
+        $agents = $canFollowups
+            ? (auth()->user()?->currentWorkspace?->members()->get(['users.id', 'users.name']) ?? collect())
+            : collect();
 
         return view('user.wa-campaigns.edit', compact(
             'campaign', 'devices', 'senders', 'contacts', 'templates',
             'requiresApprovedTemplates', 'recipientIds',
+            'canFollowups', 'flows', 'tags', 'drips', 'agents',
         ));
     }
 
@@ -764,8 +811,9 @@ class WaCampaignsController extends Controller
         // Contact for each one (so the dispatch pipeline + recipient log
         // stays homogeneous) and merge the new ids into $contactIds.
         $extraNumbers = $this->parseManualNumbers((string) $request->input('manual_numbers', ''));
+        $csvAttrsByPhone = [];   // digits => [attribute => value] from CSV columns
         if ($request->hasFile('csv_file')) {
-            $extraNumbers = $extraNumbers->merge($this->parseCsvNumbers($request->file('csv_file')));
+            $extraNumbers = $extraNumbers->merge($this->parseCsvNumbers($request->file('csv_file'), $csvAttrsByPhone));
         }
         $extraNumbers = $extraNumbers->map(fn ($n) => preg_replace('/\D+/', '', (string) $n))
             ->filter(fn ($n) => strlen((string) $n) >= 8)
@@ -776,10 +824,23 @@ class WaCampaignsController extends Controller
             $wsId = (int) (Auth::user()->current_workspace_id ?? 0);
             $uid  = Auth::id();
             foreach ($extraNumbers as $phone) {
+                $rowAttrs = $csvAttrsByPhone[(string) $phone] ?? [];
+                // Prefer a CSV "name" column over the phone-tail placeholder.
+                $csvName = (string) ($rowAttrs['name'] ?? '');
+                $displayName = $csvName !== '' ? $csvName : 'Recipient · ' . substr((string) $phone, -4);
                 // Auto-save (or reuse) a Contact for every manual/CSV number so
                 // it lands in the Contacts table — O(1) dedup by phone hash.
-                $c = Contact::rememberPhone($wsId, $uid, (string) $phone, 'Recipient · ' . substr((string) $phone, -4));
+                $c = Contact::rememberPhone($wsId, $uid, (string) $phone, $displayName);
                 if ($c) {
+                    // Persist the CSV's extra columns as this contact's
+                    // custom_attributes so campaign variables resolve per row.
+                    $merge = $rowAttrs;
+                    unset($merge['name']);
+                    if ($merge) {
+                        $existing = is_array($c->custom_attributes) ? $c->custom_attributes : [];
+                        $c->custom_attributes = array_merge($existing, $merge);
+                        $c->save();
+                    }
                     $contactIds->push($c->id);
                 }
             }
@@ -1044,6 +1105,9 @@ class WaCampaignsController extends Controller
             ]);
         }
 
+        // Persist follow-up automation rules (plan-gated inside the helper).
+        $this->saveFollowups($campaign, $request);
+
         $message = match ($scheduleType) {
             'now'       => 'Campaign launched.',
             'recurring' => 'Recurring campaign saved.',
@@ -1060,6 +1124,133 @@ class WaCampaignsController extends Controller
         }
 
         return redirect()->route('user.wa-campaigns.detail', $campaign->id)->with('status', $message);
+    }
+
+    /**
+     * Persist a campaign's follow-up automation rules from the wizard's
+     * "Follow-ups" step (a JSON array in `followups_json`). Replace-all semantics
+     * for create + edit. Plan-gated: a workspace without access_campaign_followups
+     * silently saves nothing. Only template-safe / non-messaging actions are
+     * accepted in phase 1 (free-form send is out until window-state per rule is
+     * modelled), so no rule can ever fire a free-form message outside the window.
+     */
+    private function saveFollowups(WpCampaign $campaign, Request $request): void
+    {
+        $ws = $request->user()?->currentWorkspace;
+        if (! \App\Services\PlanLimitGuard::hasFeature($ws, 'access_campaign_followups')) {
+            return;
+        }
+
+        // Only touch the rule set when the form actually submitted the field. A
+        // form WITHOUT it (e.g. an edit screen that doesn't render the step yet)
+        // must leave existing rules intact — never silently wipe them.
+        if (! $request->has('followups_json')) {
+            return;
+        }
+
+        $raw   = $request->input('followups_json');
+        $rules = is_string($raw) ? (json_decode($raw, true) ?: []) : (is_array($raw) ? $raw : []);
+
+        // Replace-all — but ONLY the campaign-owned rules. Rules created from the
+        // flow builder ("Campaign engagement" trigger) are marked
+        // action_payload_json->source = 'flow_trigger' and are owned by the flow,
+        // not the campaign — editing the campaign must not wipe them (both entry
+        // points coexist).
+        \App\Models\CampaignFollowup::where('campaign_id', $campaign->id)
+            ->where(function ($q) {
+                $q->whereNull('action_payload_json->source')
+                  ->orWhere('action_payload_json->source', '!=', 'flow_trigger');
+            })
+            ->delete();
+        if (! is_array($rules) || empty($rules)) return;
+
+        $events = [
+            \App\Models\CampaignFollowup::EVENT_REPLIED, \App\Models\CampaignFollowup::EVENT_CLICKED_BUTTON,
+            \App\Models\CampaignFollowup::EVENT_CLICKED_LINK, \App\Models\CampaignFollowup::EVENT_READ,
+            \App\Models\CampaignFollowup::EVENT_DELIVERED_NO_READ, \App\Models\CampaignFollowup::EVENT_READ_NO_REPLY,
+            \App\Models\CampaignFollowup::EVENT_SENT_NO_REPLY, \App\Models\CampaignFollowup::EVENT_NOT_DELIVERED,
+            \App\Models\CampaignFollowup::EVENT_FAILED,
+        ];
+        // Phase-1 actions — all template-safe or non-messaging, so any trigger
+        // (window open OR closed) is deliverable. Free-form send_message is
+        // deliberately excluded until per-rule window state is modelled.
+        $actions = [
+            \App\Models\CampaignFollowup::ACTION_START_FLOW, \App\Models\CampaignFollowup::ACTION_SEND_TEMPLATE,
+            \App\Models\CampaignFollowup::ACTION_ENROLL_DRIP, \App\Models\CampaignFollowup::ACTION_ADD_TAG,
+            \App\Models\CampaignFollowup::ACTION_REMOVE_TAG, \App\Models\CampaignFollowup::ACTION_ASSIGN_AGENT,
+            \App\Models\CampaignFollowup::ACTION_OPT_OUT,
+        ];
+
+        $order = 0;
+        foreach ($rules as $r) {
+            if (! is_array($r)) continue;
+            $event  = (string) ($r['trigger_event'] ?? '');
+            $action = (string) ($r['action_type'] ?? '');
+            if (! in_array($event, $events, true) || ! in_array($action, $actions, true)) continue;
+
+            // Delay value + unit → minutes, only for the delayed ("no_*") events.
+            $delayMin = null;
+            if (in_array($event, \App\Models\CampaignFollowup::DELAYED_EVENTS, true)) {
+                $val  = max(0, (int) ($r['delay_value'] ?? 0));
+                $unit = (string) ($r['delay_unit'] ?? 'hour');
+                $delayMin = match ($unit) { 'minute' => $val, 'day' => $val * 1440, default => $val * 60 };
+            }
+
+            // Actions that need a target (flow/template/drip/tag) must carry one.
+            $refId = (int) ($r['action_ref_id'] ?? 0);
+            $needsRef = in_array($action, [
+                \App\Models\CampaignFollowup::ACTION_START_FLOW, \App\Models\CampaignFollowup::ACTION_SEND_TEMPLATE,
+                \App\Models\CampaignFollowup::ACTION_ENROLL_DRIP, \App\Models\CampaignFollowup::ACTION_ADD_TAG,
+                \App\Models\CampaignFollowup::ACTION_REMOVE_TAG, \App\Models\CampaignFollowup::ACTION_ASSIGN_AGENT,
+            ], true);
+            if ($needsRef && $refId <= 0) continue;
+
+            \App\Models\CampaignFollowup::create([
+                'campaign_id'         => $campaign->id,
+                'workspace_id'        => $campaign->workspace_id,
+                'trigger_event'       => $event,
+                'delay_minutes'       => $delayMin,
+                'action_type'         => $action,
+                'action_ref_id'       => $refId ?: null,
+                'action_payload_json' => is_array($r['payload'] ?? null) ? $r['payload'] : null,
+                'is_active'           => true,
+                'sort_order'          => $order++,
+            ]);
+        }
+    }
+
+    /**
+     * "Best time to send" — JSON for the Schedule step's engagement heatmap +
+     * suggestion. Pure statistics (no AI). Also returns a ready-to-use next date
+     * + time so the UI can one-click fill the schedule fields.
+     */
+    public function bestTime(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $wsId = (int) ($request->user()->current_workspace_id ?? 0);
+        $data = app(\App\Services\Campaign\CampaignBestTimeService::class)->heatmap($wsId);
+
+        $data['best_label'] = null;
+        $data['next_date']  = null;
+        $data['next_time']  = null;
+
+        if (! empty($data['best'])) {
+            $best = $data['best'];
+            $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']; // WEEKDAY() 0=Mon
+            $h = (int) $best['hour'];
+            $data['best_label'] = $days[$best['dow']] . ' ' . sprintf('%02d:00', $h) . '–' . sprintf('%02d:00', ($h + 1) % 24);
+
+            // Next future occurrence of that weekday at that hour, in the ws TZ.
+            $carbonDow = ($best['dow'] + 1) % 7; // MySQL WEEKDAY(0=Mon) → Carbon dayOfWeek(0=Sun)
+            $next = \Illuminate\Support\Carbon::now($data['tz'])->setTime($h, 0, 0);
+            $guard = 0;
+            while (($next->dayOfWeek !== $carbonDow || $next->isPast()) && $guard++ < 14) {
+                $next->addDay()->setTime($h, 0, 0);
+            }
+            $data['next_date'] = $next->toDateString();
+            $data['next_time'] = sprintf('%02d:00', $h);
+        }
+
+        return response()->json($data);
     }
 
     /**
@@ -1151,7 +1342,7 @@ class WaCampaignsController extends Controller
             ->values();
     }
 
-    private function parseCsvNumbers($file): \Illuminate\Support\Collection
+    private function parseCsvNumbers($file, array &$attrsByPhone = []): \Illuminate\Support\Collection
     {
         $out = collect();
         if (!$file) return $out;
@@ -1184,7 +1375,31 @@ class WaCampaignsController extends Controller
                 }
             }
             $phone = trim((string) ($cols[$phoneIdx] ?? ''));
-            if ($phone !== '') $out->push($phone);
+            if ($phone !== '') {
+                $out->push($phone);
+                // Keep every OTHER column as a per-contact attribute keyed by
+                // the phone's digits, so campaign variables uploaded via CSV
+                // (e.g. {{promo_code}} / positional {{1}}) actually have a value
+                // instead of shipping "1,2,3". Stored under BOTH the raw header
+                // and a snake_case form so either placeholder spelling matches.
+                if ($headers) {
+                    $digits = preg_replace('/\D+/', '', $phone);
+                    $attrs  = [];
+                    foreach ($headers as $ci => $hname) {
+                        if ($ci === $phoneIdx) continue;
+                        $hname = trim((string) $hname);
+                        if ($hname === '' || in_array($hname, ['phone', 'mobile', 'number', 'contact'], true)) continue;
+                        $val = trim((string) ($cols[$ci] ?? ''));
+                        if ($val === '') continue;
+                        $attrs[$hname] = $val;
+                        $norm = strtolower(str_replace([' ', '-'], '_', $hname));
+                        if ($norm !== $hname) $attrs[$norm] = $val;
+                    }
+                    if ($digits !== '' && $attrs) {
+                        $attrsByPhone[$digits] = array_merge($attrsByPhone[$digits] ?? [], $attrs);
+                    }
+                }
+            }
         }
         fclose($handle);
         return $out;
@@ -1237,7 +1452,24 @@ class WaCampaignsController extends Controller
                 $variableMap = is_array($decoded) ? $decoded : [];
             }
             $variableMap = is_array($variableMap) ? $variableMap : [];
-            $full = app(\App\Services\AttributeResolver::class)->resolve($full, $variableMap, $workspaceId);
+            // #26 — {{company_name}} / {{business_name}} must reflect the SENDING
+            // number's business name, not a single workspace-wide attribute
+            // (which, with 2 WABAs, always resolved to the same/wrong one).
+            // Replace them from the sender config BEFORE the workspace-attribute
+            // pass below can claim them.
+            $senderBiz = trim((string) ($payload['sender_business_name'] ?? ''));
+            if ($senderBiz !== '') {
+                // Tolerant match: {{company_name}}, {{Company Name}}, {{business name}}
+                // all normalise to the same key (lowercase, spaces/dashes → _).
+                $full = preg_replace_callback('/\{\{\s*([a-zA-Z][\w .-]*?)\s*\}\}/u', function ($m) use ($senderBiz) {
+                    $key = strtolower(str_replace([' ', '-'], '_', trim($m[1])));
+                    return in_array($key, ['company_name', 'business_name', 'sender_name', 'brand_name'], true) ? $senderBiz : $m[0];
+                }, $full);
+            }
+            // Pass the recipient Contact so a positional {{1}} that maps to a
+            // CSV-imported column resolves to THIS contact's value instead of
+            // shipping the literal slot ("1,2,3").
+            $full = app(\App\Services\AttributeResolver::class)->resolve($full, $variableMap, $workspaceId, $contact);
         }
 
         // Per-contact substitution second: {{name}}, {{first_name}}, etc.
@@ -1468,6 +1700,21 @@ class WaCampaignsController extends Controller
             }
         };
 
+        // ADVANCED SCALING (opt-in): push the send onto a Redis queue WORKER —
+        // free of the ~20s afterResponse budget and horizontally scalable. Gated
+        // on the toggle, so a default install falls straight through to the proven
+        // afterResponse/inline path below (unchanged). The per-recipient claim +
+        // send_attempts cap keep the send exactly-once regardless of the path.
+        if (\App\Support\Scaling::enabled()) {
+            $ids = is_array($contactIds) ? array_values($contactIds)
+                : ($contactIds instanceof \Traversable ? iterator_to_array($contactIds) : (array) $contactIds);
+            \App\Jobs\SendCampaignBatchJob::dispatch($campaign->id, $ids, $type, $payload)
+                ->onConnection(\App\Support\Scaling::queueConnection())
+                ->onQueue('bulk');
+            Log::info('[CAMPAIGN] queued to bulk worker', ['campaign_id' => $campaign->id, 'recipients' => count($ids)]);
+            return;
+        }
+
         // Prefer after-response (instant page). If the runtime can't defer
         // (no fastcgi_finish_request — e.g. some CLI/proxy setups), run inline
         // so the campaign ALWAYS sends instead of silently never dispatching.
@@ -1480,6 +1727,31 @@ class WaCampaignsController extends Controller
     }
 
     /**
+     * Public entry for SendCampaignBatchJob (Advanced Scaling queue path). Loads
+     * the campaign and runs the SAME paced send the afterResponse closure runs —
+     * just on a worker with no request time cap.
+     */
+    public function runQueuedCampaignSend(int $campaignId, array $contactIds, string $type, array $payload): void
+    {
+        $campaign = WpCampaign::find($campaignId);
+        if (! $campaign) {
+            Log::warning('[CAMPAIGN] queued send — campaign gone', ['campaign_id' => $campaignId]);
+            return;
+        }
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        try {
+            $this->runCampaignNowPaced($campaign, $contactIds, $type, $payload);
+        } catch (\Throwable $e) {
+            Log::error('[CAMPAIGN] queued send threw', [
+                'campaign_id' => $campaignId,
+                'err'         => $e->getMessage(),
+                'at'          => $e->getFile() . ':' . $e->getLine(),
+            ]);
+        }
+    }
+
+    /**
      * Record a TRANSIENT send failure (network/provider/Node-down) with
      * bounded exponential backoff. While attempts remain, the row stays
      * non-terminal with a future next_attempt_at so a later sweeper pass
@@ -1488,10 +1760,30 @@ class WaCampaignsController extends Controller
      * incremented exactly once per recipient (on final give-up), never per
      * retry.
      */
-    private function recordSendFailure(?WpCampaignContact $logRow, WpCampaign $campaign, string $errMsg, int $maxAttempts, int $retryBackoff): void
+    private function recordSendFailure(?WpCampaignContact $logRow, WpCampaign $campaign, string $errMsg, int $maxAttempts, int $retryBackoff, bool $ambiguous = false): void
     {
         $err = mb_substr($errMsg, 0, 191);
         if (! $logRow) {
+            $campaign->increment('failed_count');
+            return;
+        }
+
+        // AMBIGUOUS outcome — a network timeout / connection reset / Meta 5xx /
+        // pool miss where we DON'T know whether Meta accepted the message. Meta
+        // has no idempotency key, so auto-retrying would send the recipient a
+        // SECOND copy whenever the first send had actually gone through — the
+        // exact "client got 2 messages, analytics says failed" bug. Record it
+        // TERMINAL (capped attempts, no next_attempt_at) so neither the paced
+        // loop nor reconcileStuckMetaBlocks ever resends it; the operator can
+        // Resend manually if the recipient truly received nothing. Never
+        // auto-duplicate to a customer.
+        if ($ambiguous) {
+            $logRow->update([
+                'status'          => 'failed',
+                'send_attempts'   => $maxAttempts,
+                'next_attempt_at' => null,
+                'error_message'   => mb_substr('Send result unknown (network timeout) — not auto-retried to avoid a duplicate. Resend manually if the recipient did not receive it. [' . $err . ']', 0, 191),
+            ]);
             $campaign->increment('failed_count');
             return;
         }
@@ -1613,7 +1905,9 @@ class WaCampaignsController extends Controller
             }
             $results = $sender->sendMany($tplCache, $recipients, null, $concurrency);
             foreach ($batch as $cid => $b) {
-                $res = $results[$cid] ?? ['ok' => false, 'error' => 'no result from pool', 'code' => 'meta_error'];
+                // A missing pool result is a pool MISS — ambiguous (the request may
+                // have reached Meta), so flag it so we don't auto-retry + duplicate.
+                $res = $results[$cid] ?? ['ok' => false, 'error' => 'no result from pool', 'code' => 'meta_error', 'ambiguous' => true];
                 if (!empty($res['ok'])) {
                     $b['logRow']?->update([
                         'status'              => 'sent',
@@ -1621,6 +1915,13 @@ class WaCampaignsController extends Controller
                         'whatsapp_message_id' => $res['wamid'] ?? null,
                     ]);
                     $campaign->increment('sent_count');
+                    // Campaign Follow-ups: schedule this recipient's time-delayed
+                    // rules ("no reply in X hours" …) off the just-stamped sent_at.
+                    // No-op (one cached query) when the campaign has no such rules.
+                    if ($b['logRow']) {
+                        try { app(\App\Services\Campaign\CampaignFollowupService::class)->scheduleDelayed($b['logRow']); }
+                        catch (\Throwable $e) { \Log::warning('[CAMPAIGN-FOLLOWUP] schedule: ' . $e->getMessage()); }
+                    }
                     if ($warmEnabled) { $warmer->recordSend($warmDevice); }
                     try {
                         $td = \App\Services\Whatsapp\TemplateDataBuilder::build($tplCache, (int) $wsId);
@@ -1637,7 +1938,7 @@ class WaCampaignsController extends Controller
                         );
                     } catch (\Throwable $e) { /* best-effort mirror */ }
                 } else {
-                    $this->recordSendFailure($b['logRow'], $campaign, (string) ($res['error'] ?? 'unknown'), $maxAttempts, $retryBackoff);
+                    $this->recordSendFailure($b['logRow'], $campaign, (string) ($res['error'] ?? 'unknown'), $maxAttempts, $retryBackoff, (bool) ($res['ambiguous'] ?? false));
                 }
             }
             $batch = [];
@@ -1759,7 +2060,7 @@ class WaCampaignsController extends Controller
             return 'Template "' . $tplName . '" is "' . ($tplCache->meta_status ?: 'not approved') . '" at Meta. Only APPROVED templates can be sent on the Official API.';
         }
         if (! \App\Models\SystemSetting::get('waba_templates_v2_enabled', false)) {
-            return 'WhatsApp Cloud template sending is disabled platform-wide. Enable "waba_templates_v2_enabled" in Admin → Settings → WhatsApp.';
+            return setup_hint('WhatsApp Cloud template sending is disabled platform-wide. Enable "waba_templates_v2_enabled" in Admin → Settings → WhatsApp.', 'WhatsApp template sending is currently unavailable. Please contact support.');
         }
         return 'The WhatsApp Cloud send path is unavailable for this campaign (provider "' . $engine . '").';
     }
@@ -1797,7 +2098,32 @@ class WaCampaignsController extends Controller
                 'error_message'   => 'Not sent — campaign ended after its ' . $expiryHrs . 'h send window (auto-expired)',
                 'updated_at'      => now(),
             ]);
-        $campaign->forceFill(['status' => 'completed', 'completed_at' => now()])->save();
+
+        // RECOMPUTE the denormalised counters from the per-recipient rows. The
+        // bulk update above marked rows `failed` through the query builder, which
+        // never touches the campaign's own sent_count/failed_count — so without
+        // this the detail-page "Failed" KPI card read 0 (and the status pill said
+        // a clean "Completed") while the recipient table + outcome donut, which
+        // read the REAL row statuses, showed every recipient failed. Recompute so
+        // both sources agree. Same aggregation the resend path uses.
+        $counts = WpCampaignContact::query()
+            ->where('campaign_id', $campaign->id)
+            ->selectRaw('status, COUNT(*) c')
+            ->groupBy('status')
+            ->pluck('c', 'status');
+        $sentCount   = (int) ($counts['sent'] ?? 0) + (int) ($counts['delivered'] ?? 0) + (int) ($counts['read'] ?? 0);
+        $failedCount = (int) ($counts['failed'] ?? 0);
+        $campaign->sent_count      = $sentCount;
+        $campaign->failed_count    = $failedCount;
+        $campaign->delivered_count = (int) ($counts['delivered'] ?? 0) + (int) ($counts['read'] ?? 0);
+        $campaign->read_count      = (int) ($counts['read'] ?? 0);
+
+        // A campaign that ended having sent NOTHING while recipients failed is a
+        // FAILED campaign, not a clean "Completed" — reflect that in the status
+        // pill (and the campaigns-list "failed" filter). A partial run (some sent,
+        // some failed) is a normal completion; resend-to-failed covers the rest.
+        $finalStatus = ($sentCount === 0 && $failedCount > 0) ? 'failed' : 'completed';
+        $campaign->forceFill(['status' => $finalStatus, 'completed_at' => now()])->save();
     }
 
     /**
@@ -1873,6 +2199,53 @@ class WaCampaignsController extends Controller
         if ($campaign->provider === \App\Services\WorkspaceEngine::ENGINE_SMS) {
             app(\App\Services\Sms\SmsCampaignRunner::class)->run($campaign, (array) $contactIds);
             return;
+        }
+
+        // Email campaigns are the same story: the Node WhatsApp bridge can't reach
+        // the mail bridge, so intercept here — the single funnel for immediate,
+        // scheduled, recurring, resumed and REST-dispatched sends alike — and run
+        // through the PHP mail transport instead.
+        if ($campaign->provider === \App\Services\WorkspaceEngine::ENGINE_EMAIL) {
+            app(\App\Services\Mailtrixy\EmailCampaignRunner::class)->run($campaign, (array) $contactIds);
+            return;
+        }
+
+        // ── LIVENESS: stamp last_run_at IMMEDIATELY, before any media work ──
+        // The stall sweep (CampaignScheduleSweeper) resumes any 'running'
+        // campaign whose last_run_at is NULL, treating it as a dead worker. An
+        // IMAGE / VIDEO template spends its first few seconds downloading +
+        // re-encoding + uploading the header BEFORE the send loop (and its 15s
+        // heartbeat) is ever reached — so last_run_at stayed NULL and the sweep
+        // RE-FIRED the campaign on top of the still-running one, sending the
+        // customer the message TWICE (proven in the client log: campaign #148,
+        // one recipient, two wamids one second apart, right after "resumed
+        // STALLED running campaign last_run_at:''"). Text templates send
+        // instantly, so they never sat in that NULL window — which is why only
+        // media templates double-sent. Stamping it now — like EmailCampaignRunner
+        // does — makes an active run visible to the sweep from the first instant,
+        // so it is never resumed while it is genuinely still sending.
+        try {
+            WpCampaign::whereKey($campaign->id)->update(['last_run_at' => now()]);
+        } catch (\Throwable $e) {
+            // Liveness is an optimisation — never fail a run over it.
+        }
+
+        // #26 — resolve the SENDING WhatsApp number's business name ONCE so
+        // {{company_name}}/{{business_name}} in the body reflect the number that
+        // is actually sending, not another WABA's (a workspace-wide attribute).
+        // campaigns.device_id is the polymorphic WaProviderConfig id for WABA;
+        // a non-match just leaves it unset and the old workspace-attribute path
+        // applies, so single-WABA / Baileys sends are unchanged.
+        if (empty($payload['sender_business_name']) && $campaign->device_id) {
+            $senderCfg = \App\Models\WaProviderConfig::query()
+                ->where('workspace_id', (int) $campaign->workspace_id)
+                ->where('provider', 'waba')
+                ->where('id', (int) $campaign->device_id)
+                ->first();
+            if ($senderCfg) {
+                $meta = (array) ($senderCfg->meta_json ?? []);
+                $payload['sender_business_name'] = (string) ($senderCfg->display_label ?: ($meta['verified_name'] ?? ''));
+            }
         }
 
         // Never message a contact who opted out (STOP keyword or the manual
@@ -2280,10 +2653,21 @@ class WaCampaignsController extends Controller
         $expiryHrs        = max(1, (int) \App\Models\SystemSetting::get('campaign_default_expiry_hours', 24));
         $autoExpiryOn     = (bool) \App\Models\SystemSetting::get('campaign_auto_expiry_enabled', true);
         $deadlineAt       = null;
+        // The platform "auto-end N hours after first send" default models the
+        // WhatsApp CLOUD API 24h customer-service window — a concept that ONLY
+        // exists on official engines (WABA / Twilio-WhatsApp). Unofficial
+        // (Baileys) has NO 24h window: a large, paced, or Warmer-throttled
+        // Baileys blast legitimately runs past 24h and must NOT have its unsent
+        // recipients killed with a "24h send window (auto-expired)" message. So
+        // the DEFAULT auto-expiry is skipped for Baileys. An explicit operator
+        // end date (expires_at) is a deliberate hard stop and still applies to
+        // every engine below.
+        $isUnofficial = strtolower((string) ($campaign->provider ?? ''))
+            === \App\Services\WorkspaceEngine::ENGINE_BAILEYS;
         if (!empty($campaign->expires_at)) {
             // Operator set an explicit end date → absolute hard stop.
             $deadlineAt = \Illuminate\Support\Carbon::parse($campaign->expires_at);
-        } elseif ($autoExpiryOn) {
+        } elseif ($autoExpiryOn && !$isUnofficial) {
             $intentionallyPaced = ($campaign->schedule_type === 'recurring')
                 || ((int) ($campaign->daily_limit ?? 0) > 0)
                 || (!empty($campaign->window_start) && !empty($campaign->window_end));
@@ -2370,6 +2754,9 @@ class WaCampaignsController extends Controller
         // before the kill and re-arm — CampaignScheduleSweeper resumes the rest
         // (idempotent: already-sent recipients are skipped).
         $runStart    = time();
+        // Last time this worker told the sweeper it is still alive (see the
+        // heartbeat inside the send loop).
+        $lastBeat    = time();
         $maxRunSec   = 20;   // safely under typical FPM timeouts and the 25s sweep lock
         $resumeInSec = 0;    // pending gap to honour when the next chunk resumes
         $operatorHalted = false; // set if the operator Cancels/Pauses mid-run
@@ -2545,6 +2932,58 @@ class WaCampaignsController extends Controller
                 }
             }
             $paceIdx++;
+
+            // ── ATOMIC CLAIM ────────────────────────────────────────────
+            // The "already sent?" check above is read-then-act: between it and
+            // the status write below there is a window where a SECOND worker on
+            // this campaign sees the same row still unsent and sends it too.
+            // That is the duplicate-message bug — two workers happen whenever a
+            // chunk outlives the sweeper's 45s stall threshold (media templates,
+            // large audiences) and the campaign gets "resumed" while still alive.
+            //
+            // One conditional UPDATE decides the winner: it matches only a row
+            // that is unclaimed (or whose claim has expired), so exactly one
+            // worker can ever come away with rows=1. The loser skips.
+            if ($logRow) {
+                $claimCutoff = now()->subSeconds(\App\Models\WpCampaignContact::CLAIM_TTL_SECONDS);
+
+                $won = WpCampaignContact::query()
+                    ->whereKey($logRow->id)
+                    ->whereNotIn('status', ['sent', 'delivered', 'read', 'responded'])
+                    ->where(function ($q) use ($claimCutoff) {
+                        $q->whereNull('claimed_at')
+                          ->orWhere('claimed_at', '<', $claimCutoff);
+                    })
+                    ->update(['claimed_at' => now()]);
+
+                if ($won === 0) {
+                    // Another worker owns this recipient, or it was sent between
+                    // our read and now. Either way: not ours to send.
+                    Log::debug('[CAMPAIGN] recipient already claimed — skipping', [
+                        'campaign_id' => $campaign->id,
+                        'contact_id'  => $contact->id,
+                    ]);
+                    continue;
+                }
+
+                $logRow->claimed_at = now();
+            }
+
+            // ── LIVENESS HEARTBEAT ──────────────────────────────────────
+            // last_run_at was stamped once when the campaign fired and never
+            // touched again, so a chunk that simply takes a while looked to the
+            // sweeper like a worker that died 45 seconds ago — and got "resumed"
+            // on top of itself. Refreshing it as we go is what tells the sweeper
+            // this worker is alive. Throttled to one write every ~15s so a
+            // thousand-recipient blast doesn't add a thousand UPDATEs.
+            if ((time() - $lastBeat) >= 15) {
+                $lastBeat = time();
+                try {
+                    WpCampaign::whereKey($campaign->id)->update(['last_run_at' => now()]);
+                } catch (\Throwable $e) {
+                    // Liveness is an optimisation — never fail a send over it.
+                }
+            }
 
             // A/B variant select — re-point ALL content inputs to this
             // recipient's assigned variant. Reset from the A/B snapshots every
@@ -2817,11 +3256,13 @@ class WaCampaignsController extends Controller
                                     // dropped every button and showed plain text.
                                     'buttons'       => (is_array($tplCache->buttons) && $tplCache->buttons) ? $tplCache->buttons : null,
                                     'campaign_id'   => $campaign->id,
+                                    // Target the sending number's thread (multi-number workspaces).
+                                    'receiving_device_id' => $campaign->device_id ?: null,
                                 ], fn ($v) => $v !== null),
                             );
                         } catch (\Throwable $e) { /* best-effort mirror — never break the send */ }
                     } else {
-                        $this->recordSendFailure($logRow, $campaign, (string) ($res['error'] ?? 'unknown'), $maxAttempts, $retryBackoff);
+                        $this->recordSendFailure($logRow, $campaign, (string) ($res['error'] ?? 'unknown'), $maxAttempts, $retryBackoff, (bool) ($res['ambiguous'] ?? false));
                     }
                 } catch (\Throwable $e) {
                     Log::warning('[CAMPAIGN] TemplateSender threw — marking failed (NOT falling back to legacy)', [
@@ -2896,6 +3337,31 @@ class WaCampaignsController extends Controller
                     ]);
                     $campaign->increment('sent_count');
 
+                    // Charge the wallet NOW, at send. This is the Unofficial
+                    // (Baileys) inline path — its delivery-status callback is
+                    // unreliable (delayed or dropped, exactly like the inbox
+                    // mirror note below), so waiting on nodeContactStatus meant
+                    // settleDelivered NEVER ran and the wallet was never charged.
+                    // settleDelivered is idempotent per message id, so the
+                    // callback backstop can't double-charge if it ever arrives.
+                    if (!empty($result['provider_id'])) {
+                        try {
+                            $billCat = $campaign->template_id
+                                ? optional($tplCache ?: \App\Models\WaTemplate::find($campaign->template_id))->effectiveCategory()
+                                : null;
+                            app(\App\Services\MessageBillingService::class)->settleDelivered(
+                                (int) $campaign->workspace_id,
+                                (string) $result['provider_id'],
+                                (string) $to,
+                                $billCat,
+                                (string) ($campaign->provider ?: 'baileys'),
+                                'campaign',
+                            );
+                        } catch (\Throwable $e) {
+                            Log::warning('[BILLING] campaign send-time settle failed', ['err' => $e->getMessage()]);
+                        }
+                    }
+
                     // Mirror into the team inbox RIGHT HERE, the instant the
                     // message leaves. This loop is the Unofficial/Twilio send
                     // path — PHP paces it in-process — so the bubble appears
@@ -2938,6 +3404,7 @@ class WaCampaignsController extends Controller
                                     'template_name' => $tplCache->template_name ?? null,
                                     'buttons'       => (!empty($tplCache) && is_array($tplCache->buttons) && $tplCache->buttons) ? $tplCache->buttons : null,
                                     'campaign_id'   => $campaign->id,
+                                    'receiving_device_id' => $campaign->device_id ?: null,
                                     'source'        => 'campaign',
                                     // Deterministic key so the later status
                                     // callback recognises THIS bubble even
@@ -3964,7 +4431,17 @@ class WaCampaignsController extends Controller
             ->limit(50)
             ->get();
         $failedTotal = $failureRows->count(); // capped at 50 for the visible table; the campaign counter has the real total
-        $failedCount = (int) $campaign->failed_count;
+        // "Resend to failed" count — the ACTUAL failed recipient rows, NOT the
+        // denormalised $campaign->failed_count. That counter only bumps on
+        // send-time failures; a message that SENT ok and then had its DELIVERY
+        // fail (Meta status webhook → row status='failed') never touches it, so
+        // the button read "No failed recipients" and stayed disabled even though
+        // the recipient table showed a Failed row. This matches exactly what the
+        // resend action targets (scope=failed → where status='failed').
+        $failedCount = (int) WpCampaignContact::query()
+            ->where('campaign_id', $campaign->id)
+            ->where('status', 'failed')
+            ->count();
 
         // Surface the EXACT WhatsApp/Meta reason for "sent but not delivered"
         // right on the page (not just the server log) so the operator sees WHY.
@@ -3974,6 +4451,42 @@ class WaCampaignsController extends Controller
             ->map(fn ($r) => trim((string) ($r->error_message ?? '')))
             ->first(fn ($m) => $m !== '');
 
+        // Follow-up rule performance — per-rule counts (pending/fired/skipped/
+        // failed) for the "Follow-ups" tab. Only computed when the campaign has
+        // rules, so a normal campaign pays nothing.
+        $followupStats = [];
+        $followupRules = $campaign->followups()->orderBy('sort_order')->get();
+        if ($followupRules->isNotEmpty()) {
+            $wid       = (int) $campaign->workspace_id;
+            $tplNames  = \App\Models\WaTemplate::where('workspace_id', $wid)->pluck('template_name', 'id');
+            $flowNames = \App\Models\Flow::where('workspace_id', $wid)->pluck('flow_name', 'id');
+            $dripNames = \App\Models\DripCampaign::where('workspace_id', $wid)->pluck('name', 'id');
+            $tagNames  = \App\Models\Tag::where('workspace_id', $wid)->pluck('name', 'id');
+            $agentNames = optional(auth()->user()?->currentWorkspace)->members()?->pluck('users.name', 'users.id') ?? collect();
+            $counts = \App\Models\CampaignFollowupRun::query()
+                ->whereIn('campaign_followup_id', $followupRules->pluck('id'))
+                ->selectRaw('campaign_followup_id, status, COUNT(*) c')
+                ->groupBy('campaign_followup_id', 'status')
+                ->get()->groupBy('campaign_followup_id');
+            foreach ($followupRules as $rule) {
+                $rc = ($counts->get($rule->id) ?? collect())->pluck('c', 'status');
+                $target = match ($rule->action_type) {
+                    'send_template'          => $tplNames[$rule->action_ref_id]  ?? null,
+                    'start_flow'             => $flowNames[$rule->action_ref_id] ?? null,
+                    'enroll_drip'            => $dripNames[$rule->action_ref_id] ?? null,
+                    'add_tag', 'remove_tag'  => $tagNames[$rule->action_ref_id]  ?? null,
+                    'assign_agent'           => $agentNames[$rule->action_ref_id] ?? null,
+                    default                  => null,
+                };
+                $followupStats[] = [
+                    'event'   => $rule->trigger_event, 'delay' => $rule->delay_minutes,
+                    'action'  => $rule->action_type,   'target' => $target,
+                    'pending' => (int) ($rc['pending'] ?? 0), 'fired' => (int) ($rc['fired'] ?? 0),
+                    'skipped' => (int) ($rc['skipped'] ?? 0), 'failed' => (int) ($rc['failed'] ?? 0),
+                ];
+            }
+        }
+
         return view('user.wa-campaigns.detail', compact(
             'campaign', 'timeline', 'messages', 'replies', 'header', 'chartData',
             'funnel', 'heatmap', 'segments',
@@ -3982,7 +4495,7 @@ class WaCampaignsController extends Controller
             'engagement', 'btnRows',
             'segmentTotals', 'recipientRows', 'recipientTotal', 'audienceStats',
             'failureRows', 'failedCount', 'deliveryIssueReason',
-            'optOutRows', 'optInCount',
+            'optOutRows', 'optInCount', 'followupStats',
         ));
     }
 
@@ -4532,6 +5045,9 @@ class WaCampaignsController extends Controller
             }
         }
 
+        // Persist follow-up automation rules (plan-gated inside the helper).
+        $this->saveFollowups($campaign, $request);
+
         if ($request->wantsJson()) {
             return response()->json([
                 'ok'       => true,
@@ -4830,9 +5346,36 @@ class WaCampaignsController extends Controller
             // Without it, `Contact::whereIn('id', [null, ...])` in
             // runCampaignNowPaced silently matches zero rows and the
             // campaign reports "Campaign is being sent" but never dispatches.
-            $allLogRows = WpCampaignContact::query()
-                ->where('campaign_id', $campaign->id)
-                ->get(['id', 'contact_id', 'phone_number']);
+            // PERF (O(N²) → shrinking): for ONE-SHOT sends, load ONLY recipients
+            // that still need sending. The paced send runs in ~20s chunks that
+            // re-fire via the drain loop / sweeper; loading ALL rows every chunk —
+            // including the ever-growing set of already sent/delivered/read/
+            // responded/unsubscribed/skipped — meant each chunk re-scanned +
+            // re-queried the whole completed set (Contact::whereIn + a per-recipient
+            // logRow + status query), so MySQL cost GREW as the blast progressed and
+            // pinned the CPU for its entire multi-hour duration on a single large
+            // campaign. These are EXACTLY the terminal statuses the paced loop
+            // already skips (runCampaignNowPaced's skip-guard + the contact-level
+            // unsubscribe / duplicate filters), so excluding them here is
+            // behaviour-identical for one-shot campaigns — the same recipients send,
+            // retryable failures still retry — but the per-chunk cost now shrinks
+            // toward zero as recipients complete instead of growing. Kept as ONE
+            // query (not batched) so the in-run duplicate-number guard still sees the
+            // whole remaining set; the re-arm/complete decision below is a separate
+            // fresh COUNT, so it is unaffected.
+            //
+            // RECURRING IS THE EXCEPTION: a recurring occurrence re-sends to EVERYONE
+            // each cadence, and the per-recipient reset to 'queued' happens AFTER
+            // this load (see advanceRecurring below), so at load time last cadence's
+            // rows are still terminal. Filtering them here would send to no one from
+            // the 2nd occurrence on — so recurring loads the FULL set, exactly as
+            // before. (One-shot scheduled/now blasts are the large ones that cause
+            // the O(N²); recurring runs are repeated, not huge.)
+            $sendableQuery = WpCampaignContact::query()->where('campaign_id', $campaign->id);
+            if ($campaign->schedule_type !== 'recurring') {
+                $sendableQuery->whereNotIn('status', ['sent', 'delivered', 'read', 'responded', 'unsubscribed', 'skipped']);
+            }
+            $allLogRows = $sendableQuery->get(['id', 'contact_id', 'phone_number']);
             $contactIds = $allLogRows->pluck('contact_id')->filter()->values()->all();
             $nullRows   = $allLogRows->whereNull('contact_id')->count();
 
@@ -4965,6 +5508,10 @@ class WaCampaignsController extends Controller
         foreach ($rows as $r) {
             $label = $providerLabel[$r->provider] ?? ucfirst($r->provider);
             $default = (string) ($r->default_model ?? '');
+            // An active key with a blank default_model used to be dropped
+            // silently, so the provider disappeared from the picker with no
+            // hint why. Fall back to a current model id for that brand.
+            if ($default === '') $default = \App\Services\AiAgentService::fallbackModel($r->provider);
             if ($default === '') continue;
             $extra = json_decode((string) ($r->extra_config ?? '[]'), true) ?: [];
             $extraModels = is_array($extra['models'] ?? null) ? $extra['models'] : [];
@@ -5019,7 +5566,7 @@ class WaCampaignsController extends Controller
     {
         $data = $request->validate([
             'model'              => 'required|string|max:120',
-            'provider'           => 'required|string|in:openai,anthropic,gemini,mistral,muse',
+            'provider'           => ['required', 'string', \Illuminate\Validation\Rule::in(\App\Services\AiAgentService::supportedProviders())],
             'business_name'      => 'required|string|max:191',
             'product'            => 'nullable|string|max:255',
             'goal'               => 'nullable|string|max:120',
@@ -5103,7 +5650,7 @@ SYS;
             return response()->json([
                 'ok'      => false,
                 'error'   => 'provider_failed',
-                'message' => 'AI provider returned no content — check API key + model id.',
+                'message' => $ai->lastProviderError() ?: 'AI provider returned no content — check API key + model id.',
             ], 502);
         }
 
@@ -5238,6 +5785,64 @@ SYS;
     }
 
     /**
+     * POST /api/campaigns/drain — the Node bridge's DEDICATED campaign engine
+     * tick. Runs ONLY the campaign sweep (fire due scheduled/recurring, resume
+     * stalled, drain the next paced chunk) and reports whether a campaign is
+     * still draining so Node can re-tick back-to-back until done. Decoupled from
+     * /api/node-heartbeat so a multi-thousand blast drains server-side without
+     * stalling device-liveness updates, and so it runs even with NO Baileys
+     * device registered (WABA / scheduled campaigns). No cron, no browser.
+     */
+    public function nodeCampaignDrain(Request $request): JsonResponse
+    {
+        if (!$this->nodeAuthOk($request)) {
+            return response()->json(['ok' => false, 'message' => 'forbidden'], 403);
+        }
+
+        // Mark this dedicated loop alive (90s TTL) so nodeHeartbeat SKIPS its own
+        // campaign sweep and stays a fast liveness ping. If this loop ever dies,
+        // the marker expires and the heartbeat resumes sweeping — no campaign is
+        // ever left stranded.
+        try {
+            \Illuminate\Support\Facades\Cache::put('campaign-drain-loop-alive', 1, now()->addSeconds(90));
+        } catch (\Throwable $e) {
+        }
+
+        $fired = 0;
+        try {
+            $fired = app(\App\Services\CampaignScheduleSweeper::class)->sweep();
+        } catch (\Throwable $e) {
+            Log::error('[CAMPAIGN DRAIN] sweep failed: ' . $e->getMessage());
+        }
+
+        // Drip follow-ups ride the SAME server-side loop. They must fire with
+        // nobody logged in — a 3-day patient follow-up that only goes out when
+        // an operator happens to open a page is not a follow-up. Wrapped
+        // separately so a drip fault can never stall the campaign engine.
+        try {
+            app(\App\Services\Drip\DripRunner::class)->drain(100);
+        } catch (\Throwable $e) {
+            Log::error('[DRIP DRAIN] failed: ' . $e->getMessage());
+        }
+
+        // Active = we fired one this pass OR one is mid-chunk ('running'). A
+        // future-scheduled campaign is NOT "active" — it's caught by the calm
+        // tick when it comes due. Mirrors nodeHeartbeat's campaigns_active.
+        $active = false;
+        try {
+            $active = $fired > 0 || WpCampaign::where('status', 'running')->exists();
+        } catch (\Throwable $e) {
+            $active = $fired > 0;
+        }
+
+        return response()->json([
+            'ok'               => true,
+            'campaigns_fired'  => $fired,
+            'campaigns_active' => $active,
+        ]);
+    }
+
+    /**
      * POST /api/campaigns/update-contact-status — per-recipient
      * callback fired by Node's campaignService.updateContactStatus().
      * Schema:
@@ -5273,6 +5878,18 @@ SYS;
                 $updates[$col] = $ts;
             }
         }
+
+        // Diagnostic: prove whether the (Baileys/Twilio/WABA) bridge is actually
+        // POSTing per-recipient delivery status back here — the callback that
+        // fires the wallet charge. No line after a send = the bridge isn't
+        // reporting delivery, so settleDelivered never runs → wallet untouched.
+        \Log::info('[CAMPAIGN-STATUS] node callback', [
+            'campaign_id' => $c->id,
+            'contact_id'  => $data['contact_id'] ?? null,
+            'status'      => $data['status'] ?? null,
+            'wamid'       => $data['whatsapp_message_id'] ?? null,
+            'provider'    => $c->provider ?? null,
+        ]);
 
         WpCampaignContact::query()
             ->where('campaign_id', $c->id)
@@ -5384,6 +6001,7 @@ SYS;
                             'buttons'       => ($tpl && is_array($tpl->buttons) && $tpl->buttons) ? $tpl->buttons : null,
                             'template_name' => $tpl?->template_name,
                             'campaign_id'   => $c->id,
+                            'receiving_device_id' => $c->device_id ?: null,
                             'source'        => 'campaign',
                             // Must match the key the send loop used.
                             'src_key'       => 'campaign:' . $c->id . ':contact:' . $data['contact_id'],
@@ -5557,8 +6175,7 @@ SYS;
             ->where('workspace_id', $c->workspace_id)
             ->get(['id', 'mobile', 'country_code'])
             ->first(function ($ct) use ($digits, $last10) {
-                $d = preg_replace('/\D+/', '', (string) ($ct->country_code . $ct->mobile))
-                    ?: preg_replace('/\D+/', '', (string) $ct->mobile);
+                $d = Contact::canonicalizePhone($ct->country_code, $ct->mobile);
                 return $d !== '' && ($d === $digits || ($last10 !== '' && str_ends_with($d, $last10)));
             });
 

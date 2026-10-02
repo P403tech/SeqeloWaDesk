@@ -47,6 +47,24 @@ class FacebookFlowNodeController extends Controller
     {
         if ($this->unauthorized($request)) return response()->json(['ok' => false], 401);
 
+        // DIAGNOSTIC — a flow node (usually a failed Facebook SEND, [FB-SEND✗])
+        // threw inside the Node runtime. Node's own console goes to the Passenger
+        // log, which is hard to read on cPanel — so surface it in laravel.log,
+        // which the operator CAN read. This is why "flow started but customer got
+        // nothing" is now visible: the Messenger/token error shows right here.
+        if ($request->input('event') === 'flow_error') {
+            Log::warning('[FB-FLOW-ERROR] node send/exec failed', [
+                'page_id'      => (string) $request->input('pageId', $request->input('page_id', '')),
+                'psid'         => (string) $request->input('psid', ''),
+                'workspace_id' => $request->input('workspaceId'),
+                'flow_id'      => $request->input('flowId'),
+                'node_id'      => $request->input('node_id'),
+                'node_type'    => $request->input('node_type'),
+                'error'        => (string) $request->input('error', ''),
+            ]);
+            return response()->json(['ok' => true, 'logged' => true]);
+        }
+
         // Node identifies the Page by its Meta page_id (same key the webhook
         // uses); resolve it to the connected FacebookPage row.
         $pageId    = (string) $request->input('pageId', $request->input('page_id', ''));
@@ -454,21 +472,49 @@ class FacebookFlowNodeController extends Controller
         $contact->save();
 
         // Optional pipeline deal — best-effort, never break the lead capture.
+        // Column set mirrors FlowNodeActionsController::deal (the working writer):
+        // deals.stage_id / pipeline_id are NOT NULL and there is no user_id or
+        // pipeline_stage_id column, so resolve a real pipeline + first stage
+        // (ordered by sort_order, the pipeline_stages order column) and bail if
+        // the workspace has none rather than throwing on the insert.
         if (($node['createDeal'] ?? true) !== false && class_exists(\App\Models\Deal::class)) {
             try {
-                $stage = class_exists(\App\Models\PipelineStage::class)
-                    ? \App\Models\PipelineStage::where('workspace_id', $wsId)->orderBy('position')->first()
+                // Same plan gate as every other deal writer (/deals board, REST
+                // API, team inbox, flow deal node) — a workspace without the
+                // feature cannot open the board, so never leave orphan rows there.
+                $dealsOk = \App\Services\PlanLimitGuard::hasFeature(
+                    \App\Models\Workspace::find($wsId),
+                    'access_sales_pipeline'
+                );
+                $pipeline = $dealsOk ? \App\Models\Pipeline::ensureDefaultForWorkspace($wsId) : null;
+                $stage    = $pipeline
+                    ? \App\Models\PipelineStage::where('workspace_id', $wsId)
+                        ->where('pipeline_id', $pipeline->id)
+                        ->orderBy('sort_order')
+                        ->orderBy('id')
+                        ->first()
                     : null;
-                \App\Models\Deal::create(array_filter([
-                    'workspace_id'     => $wsId,
-                    'user_id'          => (int) $page->user_id,
-                    'contact_id'       => $contact->id,
-                    'pipeline_stage_id'=> $stage?->id,
-                    'title'            => ($name !== '' ? $name : 'Facebook lead').' — Messenger',
-                    'source'           => 'facebook',
-                ], fn ($v) => $v !== null));
+
+                if (! $dealsOk) {
+                    Log::info('[FB-FLOW-NODE] fb_lead deal skipped: access_sales_pipeline not on plan (workspace '.$wsId.')');
+                } elseif (! $stage) {
+                    Log::info('[FB-FLOW-NODE] fb_lead deal skipped: no pipeline stage for workspace '.$wsId);
+                } else {
+                    \App\Models\Deal::create([
+                        'workspace_id'  => $wsId,
+                        'pipeline_id'   => $pipeline->id,
+                        'stage_id'      => $stage->id,
+                        'contact_id'    => $contact->id,
+                        'title'         => mb_substr(($name !== '' ? $name : 'Facebook lead').' — Messenger', 0, 191),
+                        'value_minor'   => 0,
+                        'currency'      => $pipeline->currency,
+                        'owner_user_id' => (int) $page->user_id ?: null,
+                        'source'        => 'facebook',
+                        'sort_order'    => 0,
+                    ]);
+                }
             } catch (\Throwable $e) {
-                Log::info('[FB-FLOW-NODE] fb_lead deal skipped: '.$e->getMessage());
+                Log::warning('[FB-FLOW-NODE] fb_lead deal create failed: '.$e->getMessage());
             }
         }
 

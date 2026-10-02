@@ -612,27 +612,27 @@ function startSettingsRefreshLoop() {
 // leaves Laravel showing "connected" forever.
 function startDeviceHeartbeat() {
   const HEARTBEAT_MS = 30 * 1000;
-  // ADAPTIVE TICK: while Laravel reports a campaign is actively draining
-  // (campaigns_active=true), re-tick every FAST_DRAIN_MS so the paced parallel
-  // chunks run BACK-TO-BACK instead of one 20s chunk per 30s heartbeat — a
-  // multi-thousand WABA blast then finishes in one continuous run. The instant no
-  // campaign is active it drops back to the calm 30s interval. The Laravel sweep
-  // is cache-locked, so an overlapping fast tick + the 30s tick can never
-  // double-fire a campaign.
-  const FAST_DRAIN_MS = 4 * 1000;
-  let fastDrainTimer  = null;
+  // Campaign draining used to piggy-back this heartbeat (an adaptive fast re-tick
+  // on campaigns_active). That is now a DEDICATED loop — startCampaignDrainLoop()
+  // below — so this stays a plain 30s device-liveness ping and never runs a send
+  // chunk. The timeout is kept generous only because nodeHeartbeat still runs the
+  // other cache-gated sweeps (scheduled-message / broadcast retry, appointments,
+  // etc.); a calm tick still returns in milliseconds.
+  const HB_TIMEOUT_MS = 90 * 1000;
 
   async function sendHeartbeat() {
     try {
       const phones = Object.keys(app.locals.clients || {});
-      // NOTE: the heartbeat (and therefore the scheduled-campaign sweeper)
-      // only runs when at least one device is CONNECTED. If no device is
-      // live, no heartbeat is sent and scheduled campaigns will NOT fire.
-      if (phones.length === 0) { console.warn('[heartbeat] skip — no clients registered'); return false; }
+      // The heartbeat drives the Laravel scheduler sweeps (scheduled campaigns,
+      // durable flow-delay resumes, etc.). It MUST fire even with zero connected
+      // Baileys devices — a WABA-only workspace has no live socket but still needs
+      // its delays/campaigns to run — so we send it regardless and just carry an
+      // empty device list when nothing is live.
+      if (phones.length === 0) console.warn('[heartbeat] no Baileys clients — sending scheduler heartbeat anyway');
       const live = phones
         .filter((p) => app.locals.client_ready?.[p])
         .map((p) => ({ wid: p, status: 'connected' }));
-      if (live.length === 0) { console.warn(`[heartbeat] skip — ${phones.length} client(s) but none ready/connected`); return false; }
+      if (live.length === 0 && phones.length > 0) console.warn(`[heartbeat] ${phones.length} client(s) but none ready — sending scheduler heartbeat`);
       const { default: ax } = await import('axios');
       const { laravelHeaders } = await import('./utils/helpers.js');
 
@@ -645,10 +645,11 @@ function startDeviceHeartbeat() {
 
       const hbRes = await ax.post(`${appDomainName}/api/node-heartbeat`,
         { devices: live },
-        { headers: hbHeaders, timeout: 5000 }
+        { headers: hbHeaders, timeout: HB_TIMEOUT_MS }
       );
       console.warn(`[heartbeat] OK ${hbRes.status} | resp=${JSON.stringify(hbRes.data)}`);
-      // Drives the adaptive fast-drain loop below.
+      // Campaign fast-draining is now startCampaignDrainLoop()'s job; this
+      // return is kept only for logging/back-compat and is otherwise unused.
       return !!(hbRes.data && hbRes.data.campaigns_active);
     } catch (e) {
       // 404 means the route isn't deployed yet on the Laravel side — ignore.
@@ -666,17 +667,56 @@ function startDeviceHeartbeat() {
     }
   }
 
-  async function tick() {
-    const active = await sendHeartbeat();
-    if (active) {
-      // Keep draining fast until the campaign is done. clearTimeout keeps a
-      // single fast chain even if the 30s interval also fires tick().
-      clearTimeout(fastDrainTimer);
-      fastDrainTimer = setTimeout(tick, FAST_DRAIN_MS);
+  // Plain liveness cadence. Campaign fast-draining lives in
+  // startCampaignDrainLoop(), not here.
+  setInterval(() => { sendHeartbeat().catch(() => {}); }, HEARTBEAT_MS);
+}
+
+// Dedicated campaign drain loop — decoupled from the device-liveness heartbeat
+// above. POSTs to /api/campaigns/drain, which runs ONLY the campaign sweep and
+// reports whether a campaign is still draining. While active it re-ticks every
+// DRAIN_FAST_MS so a multi-thousand blast runs back-to-back, server-side, with
+// no browser and no cron; when idle it settles to the calm interval. Runs
+// REGARDLESS of device connectivity so WABA / scheduled campaigns drain even
+// with no Baileys device registered. Long timeout so the ~20s paced chunk that
+// runs inside the request completes instead of aborting.
+function startCampaignDrainLoop() {
+  const DRAIN_CALM_MS    = 30 * 1000;
+  const DRAIN_FAST_MS    = 4 * 1000;
+  const DRAIN_TIMEOUT_MS = 90 * 1000;
+  let fastTimer = null;
+
+  async function drainOnce() {
+    try {
+      const { default: ax } = await import('axios');
+      const { laravelHeaders } = await import('./utils/helpers.js');
+      const res = await ax.post(`${appDomainName}/api/campaigns/drain`, {},
+        { headers: laravelHeaders(), timeout: DRAIN_TIMEOUT_MS });
+      const fired = res?.data?.campaigns_fired ?? 0;
+      if (fired > 0) console.warn(`[campaign-drain] fired ${fired} due campaign(s)`);
+      return !!(res.data && res.data.campaigns_active);
+    } catch (e) {
+      // 404 = /campaigns/drain not deployed yet on Laravel; the 30s heartbeat
+      // sweep still drains campaigns, so just stay calm until it ships.
+      if (e?.response?.status === 404) return false;
+      const st = e?.response?.status;
+      console.error(`[campaign-drain] FAILED status=${st ?? 'n/a'} | msg=${e?.message || e}`);
+      return false;
     }
   }
 
-  setInterval(tick, HEARTBEAT_MS);
+  async function tick() {
+    const active = await drainOnce();
+    if (active) {
+      // clearTimeout keeps a SINGLE fast chain even if the calm interval also
+      // fires tick() — the Laravel sweep is cache-locked, so an overlapping tick
+      // can never double-fire a campaign anyway.
+      clearTimeout(fastTimer);
+      fastTimer = setTimeout(tick, DRAIN_FAST_MS);
+    }
+  }
+
+  setInterval(tick, DRAIN_CALM_MS);
 }
 
   // Fetch all settings on startup
@@ -703,6 +743,11 @@ function startDeviceHeartbeat() {
   // inbox UI's "device offline" badge reflects reality instead of
   // showing the last known state from when Node crashed.
   startDeviceHeartbeat();
+
+  // Campaign engine — dedicated background drain loop so multi-thousand
+  // campaigns run to completion server-side (no browser, no cron) and the
+  // liveness heartbeat above stays fast during a blast.
+  startCampaignDrainLoop();
 
   console.log("\nServer is ready to handle requests\n");
 });

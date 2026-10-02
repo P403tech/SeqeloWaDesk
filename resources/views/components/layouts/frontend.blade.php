@@ -24,7 +24,8 @@
  no dashboard CSS leaks into the public pages.
 --}}
 <!doctype html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}"
+      dir="{{ \App\Support\LocaleSettings::directionFor(app()->getLocale()) }}">
 
 <head>
     <meta charset="utf-8" />
@@ -126,7 +127,7 @@
 
     {{-- Prototype's <style> block — lives in resources/css/frontend.css,
  served directly via its own Vite entry. --}}
-    @vite(['resources/css/frontend.css'])
+    @vite(['resources/css/frontend.css', 'resources/js/locale-switcher.js'])
     @include('partials.app-font')
 
     {{-- Admin → Settings → Custom code (CSS). Platform-admin only; injected

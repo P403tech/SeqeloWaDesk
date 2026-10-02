@@ -35,13 +35,7 @@ if ($wsId = auth()->user()?->current_workspace_id) {
                     class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-wa-mint text-wa-deep border border-wa-green/40 font-mono">{{ __('6 connected / 18 available') }}</span>
                 <a href="{{ url('/guidebook') }}"
                     class="px-3.5 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('View docs') }}</a>
-                <button
-                    class="px-3.5 py-1.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-2">
-                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M8 3v10M3 8h10" />
-                    </svg>
-                    {{ __('Custom integration') }}
-                </button>
+                {{-- "Custom integration" button removed — it had no handler/route and did nothing (#46). --}}
             </div>
         </div>
     </div>

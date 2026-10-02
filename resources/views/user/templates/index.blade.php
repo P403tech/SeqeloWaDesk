@@ -324,7 +324,46 @@
                                     class="count text-[10px] px-1.5 py-px rounded-full bg-paper-100 text-ink-600 font-mono">{{ number_format($categoryCounts[$tab['key']] ?? 0) }}</span>
                             </button>
                         @endforeach
+
+                        {{-- Quick STATUS pills in the main strip (same wiring + counts as
+                             the Status sidebar) so pending templates — including ones Sync
+                             reset from Meta to re-submit — are one click away. 'All' clears
+                             the status filter. Non-toggle values so paintActive() keeps the
+                             active pill highlighted after a partial reload. --}}
+                        @php
+                            $statusPills = [
+                                ['key' => 'all',      'label' => __('All status'), 'dot' => 'bg-paper-300'],
+                                ['key' => 'pending',  'label' => __('Pending'),    'dot' => 'bg-accent-amber'],
+                                ['key' => 'approved', 'label' => __('Approved'),   'dot' => 'bg-wa-green'],
+                                ['key' => 'rejected', 'label' => __('Rejected'),   'dot' => 'bg-accent-coral'],
+                            ];
+                        @endphp
+                        <span class="w-px h-5 bg-paper-200 mx-1 hidden sm:block"></span>
+                        @foreach ($statusPills as $sp)
+                            @php $spActive = ($currentStatus ?? 'all') === $sp['key']; @endphp
+                            <button type="button" data-tpl-filter="status" data-tpl-value="{{ $sp['key'] }}"
+                                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12.5px] border border-paper-200 transition whitespace-nowrap {{ $spActive ? 'bg-wa-deep text-paper-0 font-semibold' : 'text-ink-700 hover:bg-paper-50' }}">
+                                <span class="w-2 h-2 rounded-full {{ $sp['dot'] }}"></span>{{ $sp['label'] }}
+                                @if ($sp['key'] !== 'all')
+                                    <span data-tpl-status-count="{{ $sp['key'] }}"
+                                        class="count text-[10px] px-1.5 py-px rounded-full {{ $spActive ? 'bg-white/25 text-paper-0' : 'bg-paper-100 text-ink-600' }} font-mono">{{ number_format($statusCounts[$sp['key']] ?? 0) }}</span>
+                                @endif
+                            </button>
+                        @endforeach
                     </div>
+                    {{-- WABA number filter (#52) — only shown when the workspace
+                         has more than one connected number, otherwise it's noise. --}}
+                    @if (!empty($wabaNumbers) && count($wabaNumbers) > 1)
+                        <select
+                            class="hairline border border-paper-200 rounded-full px-3 py-1.5 text-[12px] mono font-mono bg-paper-0 hover:bg-paper-50 focus:outline-none focus:border-wa-deep shrink-0"
+                            title="{{ __('Filter by WhatsApp number') }}"
+                            onchange="(function(v){ var u = new URL(window.location); if (v) { u.searchParams.set('provider_config_id', v); } else { u.searchParams.delete('provider_config_id'); } window.location = u.toString(); })(this.value)">
+                            <option value="">{{ __('All numbers') }}</option>
+                            @foreach ($wabaNumbers as $n)
+                                <option value="{{ $n['id'] }}" @selected((int) ($currentProviderConfig ?? 0) === (int) $n['id'])>{{ $n['label'] }}</option>
+                            @endforeach
+                        </select>
+                    @endif
                     <select id="tpl-sort"
                         class="hairline border border-paper-200 rounded-full px-3 py-1.5 text-[12px] mono font-mono bg-paper-0 hover:bg-paper-50 focus:outline-none focus:border-wa-deep shrink-0">
                         <option value="newest" @selected($currentSort === 'newest')>{{ __('Newest') }}</option>
@@ -362,8 +401,14 @@
                     </span>
                 </div>
 
-                <!-- MESSAGE PRICING — what each template costs to send, up front -->
-                <x-message-pricing class="mb-4" />
+                <!-- MESSAGE PRICING — what each template costs to send, up front.
+                     Only shown when this workspace is actually billed per message
+                     (global pay-per-message ON, or a BSP/bill-through-us workspace).
+                     In classic plan mode nothing is charged per send, so showing a
+                     per-message price here just confuses the admin. -->
+                @if (\App\Services\MessageBillingService::payPerMessageFor(auth()->user()?->currentWorkspace))
+                    <x-message-pricing class="mb-4" />
+                @endif
 
                 <!-- TEMPLATE GRID -->
                 <div id="tpl-grid"

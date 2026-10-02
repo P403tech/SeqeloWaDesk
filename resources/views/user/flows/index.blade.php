@@ -113,6 +113,8 @@
                             </p>
                         </div>
                         <div class="flex items-center gap-2">
+                            {{-- Execution history, error logs and retry records for every
+                                 flow in this workspace. --}}
                             <a href="{{ route('user.flows.analytics') }}"
                                 class="px-4 py-2 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium flex items-center gap-2"
                                 title="{{ __('Flow execution history, error logs and retry records') }}">

@@ -62,13 +62,53 @@ class CatalogController extends Controller
         // single score + the offending rows so the operator can fix them.
         $health = $this->catalogHealth($wsId);
 
-        // Working send path — load EVERY WhatsApp number on this workspace,
-        // not just the primary engine. Catalog setup used WorkspaceEngine::for()
-        // (one engine) so a Baileys-paired phone was invisible when the
-        // platform default was WABA (and vice versa). That rendered
-        // "Connect a device first" and a 500/empty picker instead of letting
-        // the operator select a previously connected number.
-        $devicePayload = $this->catalogDevicePayload($wsId);
+        // Detect whether the operator has a working send path BEFORE
+        // we render. The Setup tab tailors itself per state:
+        //   • Meta catalog connected     → full sync UI
+        //   • A connected sender          → "you're ready" card + optional Meta connect
+        //   • Nothing                     → "connect a device first" prompt
+        //
+        // A working sender is engine-specific: Unofficial-API workspaces
+        // pair a phone (devices table), while WABA / Twilio workspaces
+        // have no `devices` row at all — their live number lives in
+        // wa_provider_configs. Checking only `devices` wrongly showed
+        // "connect a device first" to workspaces whose WABA number is
+        // already live. Mirror sendPage()'s engine-aware sender lookup.
+        // Show EVERY connected sender across ALL engines (not just the workspace's
+        // PRIMARY engine). WorkspaceEngine::for() returns a single engine, so on a
+        // coexistence workspace (WABA primary + a paired Unofficial phone) the
+        // else-branch queried only wa_provider_configs and DROPPED the connected
+        // Unofficial device. Merge both, normalised to the shape the card renders.
+        // The workspace's PRIMARY engine — the Setup tab renders differently for
+        // an official number (WABA/Twilio) than for a QR-paired one. The
+        // merge-every-engine rewrite below dropped this assignment while the
+        // view payload kept passing `$engine`, so /catalog died with
+        // "Undefined variable $engine" before rendering anything. Same source as
+        // sendPage() so both tabs agree on which engine is primary.
+        $engine = \App\Services\WorkspaceEngine::for($wsId);
+
+        $devices = collect();
+        foreach (\App\Models\Device::query()
+                ->forCurrentWorkspace()
+                ->where('status', 'connected')
+                ->orderByDesc('active')->get() as $d) {
+            $devices->push($d);
+        }
+        foreach (\App\Models\WaProviderConfig::query()
+                ->where('workspace_id', $wsId)
+                ->whereIn('provider', [\App\Services\WorkspaceEngine::ENGINE_WABA, \App\Services\WorkspaceEngine::ENGINE_TWILIO])
+                ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+                ->orderByDesc('connected_at')->get() as $c) {
+            $devices->push((object) [
+                'id'           => $c->id,
+                'device_name'  => $c->display_label ?: strtoupper((string) $c->provider),
+                'country_code' => '',
+                'phone_number' => $c->phone_number,
+                'status'       => 'connected',
+            ]);
+        }
+
+        $hasBaileysDevice = $devices->isNotEmpty();
 
         return view('user.catalog.index', [
             'tab'              => 'setup',
@@ -173,10 +213,20 @@ class CatalogController extends Controller
 
         // Recipient picker data — same shape as wa-campaigns/create so
         // the form patterns + JS stay consistent.
-        $contacts = \App\Models\Contact::orderByDesc('id')->get();
-        $groups   = \App\Models\ContactGroup::orderByDesc('id')->get();
+        // forCurrentWorkspace() is an OPT-IN scope, not a global one — without it
+        // these three queries loaded EVERY contact and group on the whole
+        // platform. Two consequences, both real:
+        //   • cross-workspace leak — the recipient picker listed other tenants'
+        //     contacts, and a catalog send could be addressed to them;
+        //   • 500 on any busy install — Contact.name/mobile/email are encrypted
+        //     casts, so every row gets decrypted in PHP. Pulling the entire
+        //     table (twice) exhausts memory/time, which is why /catalog/send
+        //     died while the other tabs, which never load contacts, were fine.
+        // Matches WaCampaignsController::create(), which this was meant to mirror.
+        $contacts = \App\Models\Contact::query()->forCurrentWorkspace()->orderByDesc('id')->get();
+        $groups   = \App\Models\ContactGroup::query()->forCurrentWorkspace()->orderByDesc('id')->get();
 
-        $allContacts = \App\Models\Contact::all(['id', 'contact_group']);
+        $allContacts = \App\Models\Contact::query()->forCurrentWorkspace()->get(['id', 'contact_group']);
         $groupCounts = [];
         foreach ($groups as $g) {
             $gid = (string) $g->id;
@@ -1208,12 +1258,31 @@ class CatalogController extends Controller
         $catalog = WaCatalog::where('workspace_id', $wsId)->first();
         if (!$catalog) return response()->json(['ok' => false, 'error' => 'No catalog'], 422);
 
+        // Rows that are `pending` with NO batch handle used to be excluded here
+        // by a whereNotNull(), which stranded them permanently: the push never
+        // returned a handle, so nothing could ever settle their status and
+        // "Refresh status" skipped them for good. Re-push them instead.
+        $handleless = WaProduct::where('workspace_id', $wsId)
+            ->whereNull('meta_batch_handle')
+            ->where('meta_sync_status', 'pending')
+            ->limit(50)
+            ->get();
+        $repushed = 0;
+        foreach ($handleless as $p) {
+            try { app(\App\Services\WhatsAppCatalog\CatalogSyncService::class)->pushOne($p); $repushed++; }
+            catch (Throwable $e) {
+                \Log::warning('[wa-catalog] re-push of handle-less product failed', [
+                    'product' => $p->id, 'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         $pending = WaProduct::where('workspace_id', $wsId)
             ->whereNotNull('meta_batch_handle')
             ->where('meta_sync_status', 'pending')
             ->get();
         if ($pending->isEmpty()) {
-            return response()->json(['ok' => true, 'pending' => 0]);
+            return response()->json(['ok' => true, 'pending' => 0, 'repushed' => $repushed]);
         }
 
         $handles = $pending->pluck('meta_batch_handle')->unique()->values()->all();
@@ -1228,7 +1297,26 @@ class CatalogController extends Controller
         DB::transaction(function () use ($pending, $byHandle, &$flipped) {
             foreach ($pending as $p) {
                 $row = $byHandle->get($p->meta_batch_handle);
-                if (!$row) { $flipped['pending']++; continue; }
+                if (!$row) {
+                    // Meta's batch handles EXPIRE. Once one does,
+                    // check_batch_request_status stops returning a row for it
+                    // and this used to re-count the product as `pending` on
+                    // every poll -- so it sat "pending" for days with no way
+                    // out. After 24h, call it failed and say why, so the
+                    // merchant gets an actionable state and the re-push above
+                    // can pick it up.
+                    if ($p->updated_at && $p->updated_at->lt(now()->subDay())) {
+                        $p->forceFill([
+                            'meta_sync_status'  => 'failed',
+                            'meta_batch_handle' => null,
+                            'meta_last_error'   => 'Meta no longer recognises this sync batch (handle expired). Press Sync to send it again.',
+                        ])->save();
+                        $flipped['failed']++;
+                    } else {
+                        $flipped['pending']++;
+                    }
+                    continue;
+                }
                 $status = strtolower($row['status'] ?? '');
                 if (in_array($status, ['finished', 'success', 'completed'], true)) {
                     $p->forceFill([

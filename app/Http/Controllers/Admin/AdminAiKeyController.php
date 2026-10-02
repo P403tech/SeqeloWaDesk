@@ -44,17 +44,19 @@ class AdminAiKeyController extends Controller
             'gpt-4o', 'gpt-4o-mini',
         ],
         'anthropic' => [
-            // Current — Opus 4.8 is the latest Opus-tier flagship; Fable 5 is
-            // Anthropic's most capable model overall (premium pricing).
-            'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-4-6', 'claude-haiku-4-5',
-            // Previous-gen, still fully supported
-            'claude-opus-4-7', 'claude-opus-4-6',
+            // Current flagships (newest first). Opus 5 is the default choice;
+            // Fable 5 is Anthropic's most capable model overall (premium pricing).
+            'claude-opus-5', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-4-5',
+            // Opus 4.x family + previous-gen Sonnet — still fully supported.
+            'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6',
         ],
         'gemini' => [
-            // Gemini 3.x — current
-            'gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite',
-            // Gemini 2.5 — still maintained
-            'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
+            // Gemini 3.x flash line (thinking models) — 3.6 is the default choice.
+            // NOTE: 2.5-flash / 3.5-flash now 404 for NEW keys ("no longer
+            // available to new users"), so keep the live 3.6 + stable aliases up top.
+            'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.5-flash',
+            // Pro + lite
+            'gemini-pro-latest', 'gemini-2.5-pro', 'gemini-2.5-flash-lite',
         ],
         'muse' => [
             'muse-spark-1.3',
@@ -80,6 +82,45 @@ class AdminAiKeyController extends Controller
             // reads only the key; it pins nova-2 in its own request.)
             'nova-3', 'nova-2',
         ],
+        // OpenRouter — ONE key, 400+ models across every major lab, all through
+        // the OpenAI-compatible /chat/completions API. This is a curated top-20;
+        // operators can paste ANY id from openrouter.ai/models (the model field
+        // accepts a stored value that isn't in this list). IDs follow the
+        // provider/model convention — verify exact strings at openrouter.ai/models.
+        'openrouter' => [
+            // Anthropic (Claude)
+            'anthropic/claude-opus-5', 'anthropic/claude-sonnet-5', 'anthropic/claude-haiku-4.5',
+            // OpenAI (GPT)
+            'openai/gpt-5.6', 'openai/gpt-5.6-mini', 'openai/gpt-5.5', 'openai/gpt-4.1', 'openai/gpt-4o-mini',
+            // Google (Gemini)
+            'google/gemini-3.5-flash', 'google/gemini-2.5-pro', 'google/gemini-2.5-flash',
+            // Meta (Llama)
+            'meta-llama/llama-4-maverick', 'meta-llama/llama-3.3-70b-instruct',
+            // DeepSeek
+            'deepseek/deepseek-chat', 'deepseek/deepseek-r1',
+            // Others — Qwen, Mistral, xAI, Z.ai
+            'qwen/qwen-2.5-72b-instruct', 'mistralai/mistral-large', 'mistralai/mistral-small',
+            'x-ai/grok-4', 'z-ai/glm-4.6',
+        ],
+        // ── Native AI brands (each = its own API + key). All below are
+        //    OpenAI-compatible (/chat/completions), routed via AiAgentService::OAI_BASE.
+        'deepseek'   => ['deepseek-chat', 'deepseek-reasoner'],
+        'xai'        => ['grok-4', 'grok-4-fast', 'grok-3'],
+        'perplexity' => ['sonar-pro', 'sonar', 'sonar-reasoning-pro'],
+        'groq'       => ['llama-3.3-70b-versatile', 'llama-4-maverick-17b-128e-instruct', 'moonshotai/kimi-k2-instruct'],
+        'together'   => ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct-Turbo'],
+        'fireworks'  => ['accounts/fireworks/models/llama-v3p3-70b-instruct', 'accounts/fireworks/models/deepseek-v3'],
+        'qwen'       => ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+        'moonshot'   => ['kimi-k2-0905-preview', 'moonshot-v1-128k', 'moonshot-v1-32k'],
+        'zai'        => ['glm-4.6', 'glm-4.5', 'glm-4.5-air'],
+        'cohere'     => ['command-a-03-2025', 'command-r-plus', 'command-r'],
+        'nvidia'     => ['meta/llama-3.3-70b-instruct', 'deepseek-ai/deepseek-r1'],
+        'llama'      => ['Llama-4-Maverick-17B-128E-Instruct-FP8', 'Llama-3.3-70B-Instruct'],
+        'huggingface'=> ['meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3'],
+        'baidu'      => ['ernie-4.5-turbo-128k', 'ernie-4.5-8k'],
+        'ai21'       => ['jamba-large', 'jamba-mini'],
+        'reka'       => ['reka-core', 'reka-flash'],
+        'yi'         => ['yi-lightning', 'yi-large'],
     ];
 
     /**
@@ -167,6 +208,36 @@ class AdminAiKeyController extends Controller
                 'hint' => 'Optional ceiling — a single AI request can never burn more than this many output tokens. Leave blank for the model default.',
             ],
         ],
+        'openrouter' => [
+            'api_key' => [
+                'label' => 'API key',
+                'type' => 'password',
+                'hint' => 'Create at openrouter.ai/keys — one key unlocks all 20 models (Claude, GPT, Gemini, Llama, DeepSeek, Mistral, Grok…).',
+                'required' => true,
+            ],
+            'max_tokens' => [
+                'label' => 'Max tokens per request',
+                'type' => 'text',
+                'placeholder' => 'e.g. 4096',
+                'hint' => 'Optional ceiling — a single AI request can never burn more than this many output tokens. Leave blank for the model default.',
+            ],
+        ],
+        // ── Native AI brands — each an OpenAI-compatible endpoint with its own key.
+        'deepseek'   => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Create at platform.deepseek.com/api_keys', 'required' => true]],
+        'xai'        => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Create at console.x.ai (xAI / Grok)', 'required' => true]],
+        'perplexity' => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Create at perplexity.ai/settings/api', 'required' => true]],
+        'groq'       => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Create at console.groq.com/keys (fastest inference)', 'required' => true]],
+        'qwen'       => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Alibaba DashScope — create at dashscope.console.aliyun.com', 'required' => true]],
+        'moonshot'   => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Moonshot / Kimi — platform.moonshot.ai/console/api-keys', 'required' => true]],
+        'zai'        => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Z.ai / GLM — z.ai/manage-apikey/apikey-list', 'required' => true]],
+        'cohere'     => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Create at dashboard.cohere.com/api-keys', 'required' => true]],
+        'nvidia'     => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'NVIDIA NIM — build.nvidia.com', 'required' => true]],
+        'llama'      => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Meta Llama API — llama.developer.meta.com', 'required' => true]],
+        'huggingface'=> ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Hugging Face — huggingface.co/settings/tokens', 'required' => true]],
+        'baidu'      => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Baidu Ernie (Qianfan) — console.bce.baidu.com/qianfan', 'required' => true]],
+        'ai21'       => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'AI21 (Jamba) — studio.ai21.com/account/api-key', 'required' => true]],
+        'reka'       => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => 'Reka — platform.reka.ai', 'required' => true]],
+        'yi'         => ['api_key' => ['label' => 'API key', 'type' => 'password', 'hint' => '01.AI (Yi) — platform.01.ai', 'required' => true]],
         'elevenlabs' => [
             'api_key' => [
                 'label' => 'API key',
@@ -192,6 +263,27 @@ class AdminAiKeyController extends Controller
 
     public function index()
     {
+        // Ensure every supported provider has a row so the page lists ALL of them
+        // (not only the ones that already have a saved key). A provider newly
+        // added to FIELD_SCHEMA appears immediately in an empty "add key" state,
+        // inactive until a key is saved. Existing rows keep their state.
+        $names = [
+            'openai' => 'OpenAI', 'anthropic' => 'Anthropic', 'gemini' => 'Google Gemini',
+            'mistral' => 'Mistral', 'deepseek' => 'DeepSeek', 'xai' => 'xAI (Grok)',
+            'perplexity' => 'Perplexity', 'groq' => 'Groq', 'qwen' => 'Alibaba Qwen',
+            'moonshot' => 'Moonshot (Kimi)', 'zai' => 'Z.ai (GLM)', 'cohere' => 'Cohere',
+            'nvidia' => 'NVIDIA', 'llama' => 'Meta Llama', 'huggingface' => 'Hugging Face',
+            'baidu' => 'Baidu (Ernie)', 'ai21' => 'AI21 (Jamba)', 'reka' => 'Reka',
+            'yi' => '01.AI (Yi)', 'openrouter' => 'OpenRouter',
+            'elevenlabs' => 'ElevenLabs', 'deepgram' => 'Deepgram',
+        ];
+        foreach (array_keys(self::FIELD_SCHEMA) as $i => $slug) {
+            AdminAiKey::firstOrCreate(
+                ['provider' => $slug],
+                ['name' => $names[$slug] ?? ucfirst($slug), 'is_active' => false, 'sort_order' => $i],
+            );
+        }
+
         $providers = AdminAiKey::orderBy('sort_order')->get()->map(function (AdminAiKey $k) {
             $k->fields_schema        = self::FIELD_SCHEMA[$k->provider] ?? [];
             $k->extra_config_decoded = $k->extra_config_array;

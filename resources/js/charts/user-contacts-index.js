@@ -529,6 +529,17 @@ export default function init() {
           // selects the matching option ("" → the "— none —" entry).
           setField("status", btn.dataset.status);
           setField("source", btn.dataset.source);
+          // Opt-in / opt-out select (value "0"/"1"). data-edit-field sets .value,
+          // which selects the matching <option>.
+          setField("is_unsubscribed", btn.dataset.isUnsubscribed || "0");
+          // Workspace custom attributes — prefill each [data-edit-attr] input
+          // from the contact's custom_attributes bag. Unknown/blank keys clear.
+          let customAttrs = {};
+          try { customAttrs = JSON.parse(btn.dataset.attributes || "{}") || {}; } catch (e) { customAttrs = {}; }
+          editForm.querySelectorAll("[data-edit-attr]").forEach((inp) => {
+            const key = inp.dataset.editAttr;
+            inp.value = (customAttrs && customAttrs[key] != null) ? String(customAttrs[key]) : "";
+          });
           let groupIds = [];
           try { groupIds = JSON.parse(btn.dataset.groups || "[]"); } catch (e) { groupIds = []; }
           const groupIdSet = new Set(groupIds.map(String));
@@ -796,6 +807,9 @@ export default function init() {
           <td class="py-3 pl-4 pr-2"><input class="row-check" type="checkbox" value="${c.id}"></td>
           <td class="py-3 px-3"><div class="flex items-center gap-3"><span class="avatar w-[38px] h-[38px] rounded-full border border-ink-900/15 grid place-items-center font-extrabold text-[12px] text-ink-900 shrink-0" style="background:${avatarBg(c.id)}">${escapeHtml(initialsFor(c.name))}</span><div><div class="font-semibold">${escapeHtml(c.name || "")}</div><div class="text-[11px] text-ink-500">${escapeHtml(c.language || "")}</div></div></div></td>
           <td class="py-3 px-3"><div class="flex flex-wrap gap-1">${buildGroupChipsHtml(c.groups)}</div></td>
+          <td class="py-3 px-3" data-tag-cell="${c.id}"><div class="flex flex-wrap gap-1">${
+            (c.tags || []).map((t) => `<span class="inline-flex items-center px-1.5 py-[2px] rounded-full text-[10px] font-semibold" style="background:color-mix(in srgb, ${escapeHtml(t.color || 'var(--color-wa-deep)')} 10%, transparent);color:${escapeHtml(t.color || 'var(--color-wa-deep)')}">${escapeHtml(t.name)}</span>`).join("") || '<span class="text-ink-500 text-[11px]">—</span>'
+          }</div></td>
           <td class="py-3 px-3 text-ink-700">${escapeHtml(c.email || "")}</td>
           <td class="py-3 px-3 mono font-mono text-[12px]">${escapeHtml(c.mobile_masked || c.mobile || "")}</td>
           <td class="py-3 px-3 text-ink-500 max-w-[220px] truncate">${escapeHtml(c.msg || "")}</td>
@@ -825,12 +839,15 @@ export default function init() {
         // Groups
         const groupsCell = tr.querySelector("td:nth-child(3) .flex");
         if (groupsCell) groupsCell.innerHTML = buildGroupChipsHtml(c.groups);
-        // Email / mobile / memo
-        const emailTd = tr.querySelector("td:nth-child(4)");
+        // Email / mobile / memo. Server row columns are: 1 checkbox · 2 Name ·
+        // 3 Groups · 4 Tags · 5 Email · 6 Mobile · 7 Msg · 8 Actions. The old
+        // 4/5/6 indices skipped the Tags column, so after an AJAX edit the
+        // mobile landed in the Email cell and everything shifted left by one (#33).
+        const emailTd = tr.querySelector("td:nth-child(5)");
         if (emailTd) emailTd.textContent = c.email || "";
-        const mobileTd = tr.querySelector("td:nth-child(5)");
+        const mobileTd = tr.querySelector("td:nth-child(6)");
         if (mobileTd) mobileTd.textContent = c.mobile_masked || c.mobile || "";
-        const memoTd = tr.querySelector("td:nth-child(6)");
+        const memoTd = tr.querySelector("td:nth-child(7)");
         if (memoTd) memoTd.textContent = c.msg || "";
         // Refresh edit button data attrs
         const editBtn = tr.querySelector("[data-edit-contact]");
@@ -849,6 +866,7 @@ export default function init() {
           editBtn.dataset.msg = c.msg || "";
           editBtn.dataset.status = c.status || "";
           editBtn.dataset.source = c.source || "";
+          editBtn.dataset.attributes = JSON.stringify(c.custom_attributes || {});
           editBtn.dataset.groups = JSON.stringify(c.group_ids || []);
         }
       }

@@ -58,14 +58,15 @@ $editPayload = $row
         // Instagram-native trigger (null on WhatsApp rows).
         'ig_trigger' => $row->ig_trigger,
         'stop_on_agent_reply' => (bool) $row->stop_on_agent_reply,
-        'resend_unit' => $row->resend_unit ?? 'hours',
-        'resend_value' => $row->cooldown
-            ? intdiv((int) $row->cooldown, ($row->resend_unit === 'minutes' ? 60 : ($row->resend_unit === 'days' ? 86400 : 3600)))
-            : null,
-        'resume_unit' => $row->resume_unit ?? 'hours',
-        'resume_value' => $row->resume_after
-            ? intdiv((int) $row->resume_after, ($row->resume_unit === 'minutes' ? 60 : ($row->resume_unit === 'days' ? 86400 : 3600)))
-            : null,
+        // Seconds → value+unit for redisplay. intdiv() against the SAVED unit
+        // truncated anything smaller than one unit to 0 — a 60s window reopened
+        // as "0 hours", and saving the untouched form turned it into 24h. Pick
+        // the largest unit that divides the stored seconds EXACTLY, so every
+        // value round-trips unchanged. An explicit 0 is preserved as 0, not blank.
+        'resend_unit' => \App\Services\Inbox\AutoResponderEvaluator::displayUnit($row->cooldown, $row->resend_unit),
+        'resend_value' => \App\Services\Inbox\AutoResponderEvaluator::displayValue($row->cooldown, $row->resend_unit),
+        'resume_unit' => \App\Services\Inbox\AutoResponderEvaluator::displayUnit($row->resume_after, $row->resume_unit),
+        'resume_value' => \App\Services\Inbox\AutoResponderEvaluator::displayValue($row->resume_after, $row->resume_unit),
         'working_hours' => is_array($row->working_hours) ? $row->working_hours : null,
         'excluded_numbers' => is_array($row->excluded_numbers) ? $row->excluded_numbers : [],
         'outside_message' => $row->relationLoaded('contents')
@@ -395,6 +396,7 @@ $editPayload = $row
                                                 class="w-24 px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep">
                                             <select id="wl-resend-unit"
                                                 class="flex-1 px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep">
+                                                <option value="seconds">{{ __('Seconds') }}</option>
                                                 <option value="minutes">{{ __('Minutes') }}</option>
                                                 <option value="hours" selected>{{ __('Hours') }}</option>
                                                 <option value="days">{{ __('Days') }}</option>
@@ -409,6 +411,7 @@ $editPayload = $row
                                                 class="w-24 px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep">
                                             <select id="wl-resume-unit"
                                                 class="flex-1 px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep">
+                                                <option value="seconds">{{ __('Seconds') }}</option>
                                                 <option value="minutes">{{ __('Minutes') }}</option>
                                                 <option value="hours" selected>{{ __('Hours') }}</option>
                                                 <option value="days">{{ __('Days') }}</option>

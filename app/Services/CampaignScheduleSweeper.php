@@ -133,6 +133,29 @@ class CampaignScheduleSweeper
             // (FPM killed the afterResponse worker before it re-armed). 45s — down
             // from 2 minutes — recovers a stranded blast far faster while staying
             // clear of a legitimately in-flight chunk.
+            // Release claims left behind by a killed worker. A claim is what
+            // stops two workers sending the same recipient; without expiry, a
+            // worker that dies mid-send would hold its rows forever and those
+            // contacts would silently never be messaged.
+            try {
+                $released = WpCampaignContact::query()
+                    ->whereNotNull('claimed_at')
+                    ->where('claimed_at', '<', Carbon::now()->subSeconds(WpCampaignContact::CLAIM_TTL_SECONDS))
+                    ->whereNotIn('status', ['sent', 'delivered', 'read', 'responded'])
+                    ->limit(1000)
+                    ->update(['claimed_at' => null]);
+
+                if ($released > 0) {
+                    Log::info('[CAMPAIGN SWEEP] released stale recipient claims', ['rows' => $released]);
+                }
+            } catch (\Throwable $e) {
+                // Pre-migration installs have no claimed_at column yet.
+            }
+
+            // A campaign whose worker is alive now refreshes last_run_at every
+            // ~15s from inside the send loop, so this threshold only catches a
+            // genuinely dead worker — it is no longer tripped by a merely slow
+            // chunk (which is what produced duplicate sends).
             $staleBefore = Carbon::now('UTC')->subSeconds(45);
             $maxAttempts = max(1, (int) SystemSetting::get('campaign_retry_attempts', 3));
             $stuck = WpCampaign::query()

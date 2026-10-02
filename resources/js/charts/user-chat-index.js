@@ -32,6 +32,7 @@ import TomSelect from 'tom-select';
 import { mountPanel as mountTemplateMapping } from './template-live-mapping.js';
 import 'tom-select/dist/css/tom-select.css';
 import { themeColor } from '../theme-colors.js';
+import { createPoller } from '../lib/poller.js';
 
 // Palette for the dynamic split-preview bar — one colour per
 // device slot, recycled if the operator picks more than five.
@@ -2363,8 +2364,12 @@ export default function init() {
     const POLL_MS = 5000;
     let pollTimer = null;
 
+    /**
+     * @returns {Promise<boolean>} true when something actually moved, which is
+     * what tells the shared poller to stay on the fast cadence. The hidden-tab
+     * check the old loop did itself now lives in the poller.
+     */
     async function pollTick() {
-        if (document.hidden) return;
         try {
             // 1. Refresh queue list (status counts, sort by recency).
             const params = { filter: activeFilter, sort: activeSort, q: searchInput.value.trim() };
@@ -2377,9 +2382,14 @@ export default function init() {
             conversations = res.data || [];
             applyCounts(res.meta);
             renderQueues();
+            // Tracks whether ANY queue changed state this tick — returned to the
+            // poller so a busy account keeps the fast cadence while an idle one
+            // is allowed to back off.
+            let queueChanged = false;
             for (const c of conversations) {
                 const prev = beforeById.get(c.id);
                 if (!prev || prev === c.status) continue;
+                queueChanged = true;
                 if (c.status === 'sent' && prev !== 'sent') {
                     showToast(`✓ "${c.title}" — sent`);
                 } else if (c.status === 'failed' && prev !== 'failed') {
@@ -2419,24 +2429,31 @@ export default function init() {
                 }
                 if (hadFlip || newMsgs.length !== beforeMsgs.length) {
                     renderThread(data.conversation);
+                    return true;
                 }
+                return false;
             }
+
+            // No thread open — "changed" means a queue status moved, which the
+            // diff above already toasted.
+            return queueChanged;
         } catch (e) {
             // Silent on poll errors — don't toast spam if Laravel is briefly down.
+            return false;
         }
     }
 
-    function startPolling() {
-        if (pollTimer) return;
-        pollTimer = setInterval(pollTick, POLL_MS);
+    // Shared poller: no overlapping requests, no polling while the tab is
+    // hidden, and the gap widens to 30s on a quiet queue instead of holding a
+    // flat 5s forever. It handles visibilitychange itself, so the manual
+    // stop/start pair this replaced is gone.
+    if (!pollTimer) {
+        pollTimer = createPoller(async () => await pollTick(), {
+            interval: POLL_MS, maxInterval: 30000,
+        });
     }
-    function stopPolling() {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    }
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) stopPolling();
-        else { pollTick(); startPolling(); }
-    });
+    function startPolling() { pollTimer.start(); }
+    function stopPolling()  { pollTimer.stop(); }
     // Refresh immediately when window regains focus (covers the case
     // where the tab WAS visible but unfocused — the tick interval is
     // still running but user just came back, so kick a fresh fetch).

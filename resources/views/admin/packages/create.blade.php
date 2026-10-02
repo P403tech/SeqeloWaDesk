@@ -42,6 +42,7 @@
         'translation_chars_monthly' => 'Translation chars / mo',
         'api_rate_limit_per_minute' => 'API rate limit / min (0 = default)',
         'sms_monthly_limit' => 'SMS / month (0 = unlimited)',
+        'email_monthly_limit' => 'Emails / month (0 = unlimited)',
     ];
     $featureLabels = [
         'autoreply' => 'Auto-reply system',
@@ -55,6 +56,7 @@
         'template' => 'Templates',
         'access_wa_forms' => 'WhatsApp Forms',
         'access_sms' => 'SMS (Twilio / MSG91)',
+        'access_email' => 'Email (linked mailbox)',
         'access_wa_links' => 'WhatsApp Link Generator',
         'access_carousel_templates' => 'Carousel templates',
         'role_based_permissions' => 'Role-based permissions',
@@ -76,6 +78,12 @@
         'tiktok_comments' => 'TikTok — comments',
         'access_telegram' => 'Telegram channel',
         'telegram_broadcasts' => 'Telegram — broadcasts',
+        'access_line' => 'LINE channel',
+        'line_broadcasts' => 'LINE — broadcasts',
+        'access_wechat' => 'WeChat channel',
+        'wechat_broadcasts' => 'WeChat — broadcasts',
+        'access_viber' => 'Viber channel',
+        'viber_broadcasts' => 'Viber — broadcasts',
         'remove_branding' => 'Remove ' . brand_name() . ' branding',
         'integration_shopify' => 'Shopify integration',
         'integration_woocommerce' => 'WooCommerce integration',
@@ -129,6 +137,7 @@
             'active_campaign_limit',
             'daily_media_size_allowance',
             'sms_monthly_limit',
+            'email_monthly_limit',
         ],
         'Workspace caps' => [
             'device_limit',
@@ -186,10 +195,14 @@
         // the sub-toggles gate individual capabilities within that channel.
         'Channels' => [
             'access_sms',
+            'access_email',
             'access_facebook', 'facebook_inbox', 'facebook_posts',
             'facebook_comments', 'facebook_ai_agent',
             'access_tiktok', 'tiktok_inbox', 'tiktok_posts', 'tiktok_comments',
             'access_telegram', 'telegram_broadcasts',
+            'access_line', 'line_broadcasts',
+            'access_wechat', 'wechat_broadcasts',
+            'access_viber', 'viber_broadcasts',
         ],
         'Inbox & team' => [
             'access_internal_notes',
@@ -290,7 +303,7 @@
         </div>
         <div class="ml-auto flex items-center gap-2 flex-wrap justify-end">
             <span class="font-mono text-[11px] text-ink-500 mr-2">{{ __('Step') }} <span id="cur-step">1</span> /
-                4</span>
+                {{ $hasIgStep ? 5 : 4 }}</span>
             <a href="{{ route('admin.packages.index') }}"
                 class="px-3.5 py-1.5 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('Cancel') }}</a>
             <button type="button" id="prevBtn" disabled

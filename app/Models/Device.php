@@ -52,6 +52,11 @@ class Device extends Model
         // dropped it, leaving every freshly-connected device with a NULL
         // workspace_id (rescued only later by the connect-heartbeat backfill).
         'workspace_id',
+        'default_ai_agent_id',
+        // Per-number business/segment tag — auto-applied to every inbound
+        // conversation + its contact so contacts are grouped by which number
+        // (business) they came in on. See RoutingEngine::applyNumberDefaults.
+        'default_tag',
         'activate_after_pairing',
         'device_name',
         'country_code',

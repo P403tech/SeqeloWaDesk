@@ -18,15 +18,34 @@ class Referral extends Model
 {
     public $timestamps = false; // only created_at
 
+    // Pipeline. `pending` = friend joined, not yet paid. `paid` = friend made
+    // their first paid top-up and both sides were rewarded. `expired` = the
+    // qualifying window closed with no purchase. `void` = reversed (refund/fraud).
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_PAID    = 'paid';
+    public const STATUS_EXPIRED = 'expired';
+    public const STATUS_VOID    = 'void';
+
     protected $fillable = [
-        'referrer_user_id', 'referred_user_id', 'code_used',
-        'credits_awarded', 'award_transaction_id', 'created_at',
+        'referrer_user_id', 'referred_user_id', 'code_used', 'status',
+        'credits_awarded', 'reward_minor', 'referee_reward_minor',
+        'award_transaction_id', 'referee_award_transaction_id',
+        'created_at', 'qualified_at',
     ];
 
     protected $casts = [
-        'credits_awarded' => 'integer',
-        'created_at'      => 'datetime',
+        'credits_awarded'      => 'integer',
+        'reward_minor'         => 'integer',
+        'referee_reward_minor' => 'integer',
+        'created_at'           => 'datetime',
+        'qualified_at'         => 'datetime',
     ];
+
+    /** True once the referee has paid and both sides were rewarded. */
+    public function isPaid(): bool
+    {
+        return $this->status === self::STATUS_PAID || $this->award_transaction_id !== null;
+    }
 
     public function referrer(): BelongsTo
     {

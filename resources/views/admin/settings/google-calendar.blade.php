@@ -248,6 +248,20 @@
                             </label>
                         </div>
                         <div class="p-5 grid grid-cols-2 gap-4">
+                            {{-- Self-serve BYO Google app — lets a workspace owner paste
+                                 their OWN OAuth keys on /google-account and connect without
+                                 these platform credentials. --}}
+                            <div class="col-span-2 flex items-center justify-between gap-4 rounded-xl border border-paper-200 bg-paper-50/60 px-4 py-3">
+                                <div class="min-w-0">
+                                    <div class="text-[12.5px] font-semibold text-ink-900">{{ __('Let workspaces use their OWN Google app') }}</div>
+                                    <div class="text-[11.5px] text-ink-500 mt-0.5">{{ __('On: the workspace owner pastes their own OAuth Client ID + Secret on the Google account page and connects — no platform keys needed. Off: everyone uses the platform app above.') }}</div>
+                                </div>
+                                <label class="flex items-center gap-2 cursor-pointer shrink-0">
+                                    <input type="hidden" name="google_allow_manual_app" value="0">
+                                    <input type="checkbox" name="google_allow_manual_app" value="1"
+                                        @checked($manualAllowed ?? false) class="w-5 h-5 accent-wa-deep">
+                                </label>
+                            </div>
                             <label class="space-y-1.5 col-span-2">
                                 <span class="text-[11.5px] font-semibold">{{ __('Client ID') }} <span
                                         class="text-accent-coral">*</span></span>

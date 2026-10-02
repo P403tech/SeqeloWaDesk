@@ -537,6 +537,18 @@ if (!$varMapJson) {
                     </div>
                 </div>
             </aside>
+
+            @if (!empty($canFollowups))
+            <div class="xl:col-span-2 bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
+                <div class="p-5">
+                    <div class="font-serif text-[18px] leading-none text-ink-900 mb-1">{{ __('Follow-ups') }}</div>
+                    <p class="text-[12px] text-ink-500 mb-4 leading-relaxed">
+                        {{ __('React automatically to how each recipient engages — start a flow when they reply, send a reminder template when they don\'t, tag a clicker. Rules run after the campaign sends.') }}
+                    </p>
+                    @include('user.wa-campaigns._followups-fields')
+                </div>
+            </div>
+            @endif
         </form>
     </section>
 

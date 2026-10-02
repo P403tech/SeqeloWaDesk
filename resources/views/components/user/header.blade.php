@@ -55,6 +55,17 @@ $allNavItems = [
         'promo' => true,
     ],
     [
+        // OpenAI (ChatGPT) Ads — like Meta Ads, kept off the top bar (promo)
+        // and surfaced as a card on the /more page; admin can promote it.
+        'key' => 'openaiads',
+        'tier' => 'admin',
+        'href' => url('/openai-ads'),
+        'label' => __('OpenAI Ads'),
+        'icon' => '<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11M2.5 8h11"/>',
+        'sw' => 1.5,
+        'promo' => true,
+    ],
+    [
         'key' => 'wa-campaigns',
         'tier' => 'admin',
         'href' => url('/wa-campaigns'),
@@ -219,6 +230,12 @@ $navItems = array_values(
         if (!empty($it['requires_provider']) && $it['requires_provider'] !== $activeSendMethod) {
                 return false;
             }
+            // Admin feature toggle (/admin/settings/features): a globally
+            // disabled feature drops from the top bar (and its /more card is
+            // hidden separately). Default ON — only removes explicit off's.
+            if (!\App\Support\FeatureRegistry::visible((string) ($it['key'] ?? ''))) {
+                return false;
+            }
             return true;
         }),
     );
@@ -290,7 +307,10 @@ $logoName = $brandName;
 
         @php
             $authUser = auth()->user();
-            $allWorkspaces = $authUser ? $authUser->workspaces()->orderByDesc('last_active_at')->get() : collect();
+            // White-label tenant domain: the user is LOCKED to this one workspace,
+            // so there are no other workspaces to switch to and no "create" link.
+            $__lockWs = ($isTenantDomain ?? false);
+            $allWorkspaces = ($authUser && !$__lockWs) ? $authUser->workspaces()->orderByDesc('last_active_at')->get() : collect();
             $currentWs = $authUser ? $authUser->current_workspace : null;
             // Plan gate — hide every "Create new workspace" affordance once the
             // owner has hit their plan's workspaces_per_owner_limit (admins bypass).
@@ -301,7 +321,7 @@ $logoName = $brandName;
             $__wsRole = $authUser?->workspaceRole();
             $__isWsAdmin = in_array($__wsRole, ['owner', 'admin'], true)
                 || in_array($authUser->role ?? null, ['admin', 'super-admin', 'super_admin', 'platform-admin'], true);
-            $canCreateWorkspace = $authUser ? ($authUser->canCreateWorkspace() && $__isWsAdmin) : false;
+            $canCreateWorkspace = ($authUser && !$__lockWs) ? ($authUser->canCreateWorkspace() && $__isWsAdmin) : false;
         @endphp
         @if ($authUser && $currentWs)
             {{-- Hidden on mobile/tablet — the lone avatar circle confused users
@@ -339,6 +359,7 @@ $logoName = $brandName;
                         <path d="M3 5l3 3 3-3" />
                     </svg>
                 </button>
+                @unless ($__lockWs)
                 <div data-ws-menu
                     class="hidden absolute left-0 mt-2 w-[280px] bg-paper-0 border border-paper-200 rounded-2xl shadow-soft p-2 z-30">
                     <div class="px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
@@ -382,6 +403,7 @@ $logoName = $brandName;
                     </div>
                     @endif
                 </div>
+                @endunless
             </div>
         @endif
 

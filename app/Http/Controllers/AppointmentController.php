@@ -178,11 +178,11 @@ class AppointmentController extends Controller
         // linked) never touches Google, so the toggle (which DEFAULTS to off) must
         // not block them — otherwise the booking node returns "no slots" forever.
         $hasCalendar = $this->gcal->resolveCalendarId($workspace) !== null;
-        if ($hasCalendar && !$this->gcal->isEnabled()) {
+        if ($hasCalendar && !$this->gcal->isEnabled($workspace)) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'integration_disabled',
-                'message' => 'Google integration is disabled platform-wide. Ask your admin to re-enable it at /admin/settings/google-calendar.',
+                'message' => __('Google Calendar is not available for this workspace right now.'),
             ], 503);
         }
 
@@ -229,11 +229,11 @@ class AppointmentController extends Controller
         $ws = Workspace::find($data['workspace_id']);
         if (!$ws) return response()->json(['ok' => false, 'error' => 'no_workspace'], 404);
         $hasCalendar = $this->gcal->resolveCalendarId($ws) !== null;
-        if ($hasCalendar && !$this->gcal->isEnabled()) {
+        if ($hasCalendar && !$this->gcal->isEnabled($ws)) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'integration_disabled',
-                'message' => 'Google integration is disabled platform-wide. Ask your admin to re-enable it at /admin/settings/google-calendar.',
+                'message' => __('Google Calendar is not available for this workspace right now.'),
             ], 503);
         }
 
@@ -397,6 +397,40 @@ class AppointmentController extends Controller
             if ($workspace) $this->gcal->deleteEvent($workspace, $appt->google_calendar_id, $appt->google_event_id);
         }
         $appt->update(['status' => 'cancelled']);
+
+        // (1) Tear down the pending WhatsApp reminder(s) so the customer doesn't
+        //     still get "your appointment is coming up" after it was cancelled,
+        //     and (2) send a cancellation notification. Deferred so the Node
+        //     round-trips don't hold this request open; both are best-effort.
+        $apptId = $appt->id;
+        $cancelWsId = $wsId;
+        app()->terminating(function () use ($apptId, $cancelWsId) {
+            try {
+                $fresh = Appointment::find($apptId);
+                if (!$fresh) return;
+                $scheduler = app(\App\Services\Appointments\AppointmentReminderScheduler::class);
+                $scheduler->unschedule($fresh);
+
+                // Notify the customer their appointment was cancelled.
+                $ws    = Workspace::find($cancelWsId);
+                $phone = (string) ($fresh->meta['customer_phone'] ?? '');
+                if ($ws && $phone !== '') {
+                    $settings = $ws->appointment_settings ?? [];
+                    $tz   = $settings['google_oauth']['calendar_timezone'] ?? ($ws->timezone ?: 'UTC');
+                    $when = $fresh->starts_at ? $fresh->starts_at->copy()->setTimezone($tz)->format('D j M · g:i A') : '';
+                    $tpl  = (string) ($settings['cancel_template']
+                        ?? 'Your appointment "{title}" on {time} has been cancelled. Contact us to rebook.');
+                    $body = strtr($tpl, ['{title}' => (string) $fresh->title, '{time}' => $when]);
+                    // Immediate send via the scheduler (Node fires within seconds),
+                    // with a DISTINCT synthetic id so it never collides with the
+                    // reminder ids we just unscheduled.
+                    $scheduler->schedule($ws, $fresh, $phone, now()->addSeconds(3), -3000000 - $fresh->id, $body);
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('[APPT] cancel notify/unschedule failed: ' . $e->getMessage());
+            }
+        });
+
         return back()->with('success', 'Appointment cancelled.');
     }
 

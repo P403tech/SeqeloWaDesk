@@ -49,11 +49,24 @@ class SystemSetting extends Model
         'instagram_ig_app_secret',        // Separate Instagram-Login app secret, when configured
         'instagram_webhook_verify_token', // Meta webhook subscription verify token (IG)
         'instagram_giphy_key',            // GIPHY API key for the inbox GIF picker
+        'threads_app_secret',             // Meta/Threads app secret for the Threads channel
         'fb_app_secret',                  // Meta app secret for the Facebook Pages channel
         'fb_webhook_verify_token',        // Meta webhook subscription verify token (Facebook)
         'instaflow_secret',               // shared secret for the Instaflow deployment handshake
+        'mailtrixy_secret',               // shared secret for the MailTrixy deployment handshake
         'fcm_service_account_json',       // Firebase service-account JSON (contains a private key) for mobile FCM push
         'ti_vapid_private',               // Team-Inbox PWA Web-Push VAPID private key
+        // Provider secrets that were stored plaintext while their siblings were
+        // encrypted. All are read via SystemSetting::get() (decrypts transparently,
+        // tolerates legacy plaintext), so this is safe: new saves encrypt, and
+        // existing rows keep reading until they are next saved.
+        'bsp_meta_system_user_token',     // BSP partner Meta System-User token (financial scope)
+        'tiktok_client_secret',           // TikTok Login Kit app client secret
+        'tiktok_business_app_secret',     // TikTok Business Messaging app secret
+        'tiktok_shop_app_secret',         // TikTok Shop app secret
+        'telegram_api_hash',              // my.telegram.org api_hash (MTProto)
+        'message_facebook_token',         // system Facebook message-provider token
+        'message_twilio_token',           // system Twilio message-provider token
     ];
 
     private static function isEncryptedKey(string $key): bool

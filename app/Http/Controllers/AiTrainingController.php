@@ -234,6 +234,7 @@ class AiTrainingController extends Controller
             'tone'             => 'nullable|string|max:32',
             'language'         => 'nullable|string|max:16',
             'ai_provider'      => 'nullable|in:openai,anthropic,gemini,mistral,muse',
+            'ai_provider'      => 'nullable|in:openai,anthropic,gemini,mistral,deepseek,xai,perplexity,groq,qwen,moonshot,zai,cohere,nvidia,llama,huggingface,baidu,ai21,reka,yi,openrouter',
             'ai_model'         => 'nullable|string|max:80',
             'reply_max_tokens' => 'nullable|integer|min:50|max:4000',
             'temperature'      => 'nullable|numeric|min:0|max:2',
@@ -349,7 +350,7 @@ class AiTrainingController extends Controller
 
         $data = $request->validate([
             'assistant_id' => 'nullable|integer',
-            'kind'         => 'required|in:url,text,qa',
+            'kind'         => 'required|in:url,text,qa,catalog',
             'label'        => 'required|string|max:200',
             'url'          => 'nullable|string|max:1024',
             'content'      => 'nullable|string|max:200000',
@@ -396,6 +397,20 @@ class AiTrainingController extends Controller
             }
             $src->status = 'ready';
             $src->tokens_estimate = (int) ceil((mb_strlen($data['question']) + mb_strlen($data['answer'])) / 4);
+        } elseif ($data['kind'] === 'catalog') {
+            // Live products — no body to store; renderedText() pulls them fresh.
+            // One catalog source per scope (assistant, or workspace-wide) is
+            // enough: it already covers the whole catalog, so block duplicates.
+            $dupe = AiTrainingSource::where('workspace_id', $wsId)
+                ->where('kind', 'catalog')
+                ->where('assistant_id', $data['assistant_id'])
+                ->exists();
+            if ($dupe) {
+                return response()->json(['ok' => false, 'error' => 'catalog_already_added'], 422);
+            }
+            $src->content = null;
+            $src->status  = 'ready';
+            $src->tokens_estimate = (int) ceil(mb_strlen(AiTrainingSource::renderCatalog($wsId)) / 4);
         }
 
         $src->save();
@@ -732,147 +747,9 @@ class AiTrainingController extends Controller
      */
     private function fetchUrlAsText(string $url): array
     {
-        // SSRF guard. Without this an operator with workspace access
-        // could point the training URL at http://localhost:6379 /
-        // 169.254.169.254 (AWS IMDS) / 192.168.x.x and read internal
-        // services through our server's network. We only allow public
-        // HTTP/HTTPS URLs whose resolved IPs are NOT private/loopback/
-        // link-local/CGNAT.
-        try {
-            // Follow redirects MANUALLY so the SSRF guard runs on EVERY hop.
-            // Laravel/Guzzle auto-follows 3xx by default and never re-checks
-            // the redirect target, so a public host returning 302 ->
-            // http://169.254.169.254/... would bypass a one-shot guard. We
-            // disable auto-redirects and re-validate each Location ourselves.
-            $current      = $url;
-            $maxRedirects = 5;
-            $res          = null;
-            for ($hop = 0; $hop <= $maxRedirects; $hop++) {
-                $ssrfErr = $this->guardSsrf($current);
-                if ($ssrfErr) return [false, null, $ssrfErr];
-
-                $res = Http::timeout(20)
-                    ->withOptions(['allow_redirects' => false])
-                    ->withHeaders(['User-Agent' => 'WaDeskAITrainingBot/1.0'])
-                    ->get($current);
-
-                if ($res->redirect()) {
-                    $loc = (string) $res->header('Location');
-                    if ($loc === '') break; // 3xx without Location — treat as final
-                    if ($hop === $maxRedirects) {
-                        return [false, null, 'too many redirects'];
-                    }
-                    $current = $this->resolveRedirectUrl($current, $loc);
-                    continue;
-                }
-                break;
-            }
-            if (!$res || !$res->ok()) {
-                return [false, null, 'fetch failed: HTTP ' . ($res ? $res->status() : 0)];
-            }
-            $html = (string) $res->body();
-            // Strip script/style blocks first, then all tags.
-            $html = preg_replace('#<script\b[^>]*>(.*?)</script>#is', ' ', $html) ?? $html;
-            $html = preg_replace('#<style\b[^>]*>(.*?)</style>#is',  ' ', $html) ?? $html;
-            $text = html_entity_decode(strip_tags($html));
-            // Collapse whitespace.
-            $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-            $text = trim($text);
-            if ($text === '') return [false, null, 'fetched page contained no text'];
-            // Cap so a giant page doesn't blow the budget.
-            if (mb_strlen($text) > 80000) $text = mb_substr($text, 0, 80000);
-            return [true, $text, null];
-        } catch (\Throwable $e) {
-            return [false, null, 'fetch exception: ' . $e->getMessage()];
-        }
-    }
-
-    /**
-     * Resolve a redirect Location (which may be absolute or relative)
-     * against the URL it was returned from, so the SSRF guard can be
-     * re-applied to the concrete next hop. Relative paths inherit the
-     * base scheme/host/port.
-     */
-    private function resolveRedirectUrl(string $base, string $location): string
-    {
-        $location = trim($location);
-        // Absolute URL (has a scheme) — use as-is; the guard vets the scheme.
-        if (preg_match('#^[a-zA-Z][a-zA-Z0-9+.\-]*://#', $location)) {
-            return $location;
-        }
-        $b = parse_url($base);
-        if (!$b || empty($b['scheme']) || empty($b['host'])) {
-            return $location;
-        }
-        $origin = $b['scheme'] . '://' . $b['host'] . (isset($b['port']) ? ':' . $b['port'] : '');
-        if ($location === '') return $origin;
-        if ($location[0] === '/') {
-            // Protocol-relative //host/path
-            if (isset($location[1]) && $location[1] === '/') {
-                return $b['scheme'] . ':' . $location;
-            }
-            return $origin . $location; // absolute path
-        }
-        // Relative path — resolve against the base directory.
-        $path = $b['path'] ?? '/';
-        $dir  = substr($path, 0, strrpos($path, '/') + 1) ?: '/';
-        return $origin . $dir . $location;
-    }
-
-    /**
-     * SSRF guard for training-source URL fetch.
-     *
-     * Returns NULL when the URL is safe to fetch, or a human-readable
-     * error string when it should be refused. Refuses:
-     *   - Non-http(s) schemes (file://, gopher://, dict://, …)
-     *   - Hostnames that resolve to private/loopback/link-local/
-     *     reserved IP ranges (RFC1918, 127.0.0.0/8, 169.254.0.0/16,
-     *     ::1, fc00::/7, etc.)
-     *   - Cloud metadata endpoints (169.254.169.254 covered by the
-     *     link-local check; also explicit *.metadata.* domains).
-     *
-     * Combined with the 20s timeout + 80KB cap this makes the URL
-     * source kind safe for operator-supplied input.
-     */
-    private function guardSsrf(string $url): ?string
-    {
-        $p = parse_url($url);
-        if (!$p || empty($p['scheme']) || empty($p['host'])) {
-            return 'invalid URL';
-        }
-        $scheme = strtolower($p['scheme']);
-        if ($scheme !== 'http' && $scheme !== 'https') {
-            return "scheme {$scheme} not allowed (use http or https)";
-        }
-        $host = strtolower($p['host']);
-        // Block explicit metadata-service domains some clouds expose.
-        if (str_contains($host, 'metadata.') || str_ends_with($host, '.internal')) {
-            return 'metadata host not allowed';
-        }
-        // Resolve to IPs and refuse if ANY resolved IP is private/
-        // reserved. gethostbynamel returns null on resolution failure.
-        $ips = @gethostbynamel($host) ?: [];
-        // Also resolve literal IPv6 / numeric IPv4 directly.
-        if (filter_var($host, FILTER_VALIDATE_IP)) $ips = [$host];
-        if (empty($ips)) {
-            // Try IPv6 + numeric directly via @dns_get_record AAAA.
-            $aaaa = @dns_get_record($host, DNS_AAAA);
-            foreach ((array) $aaaa as $rec) {
-                if (!empty($rec['ipv6'])) $ips[] = $rec['ipv6'];
-            }
-        }
-        if (empty($ips)) {
-            return 'hostname did not resolve to a public IP';
-        }
-        foreach ($ips as $ip) {
-            // FILTER_FLAG_NO_PRIV_RANGE  → block RFC1918 (10/8, 172.16/12, 192.168/16)
-            // FILTER_FLAG_NO_RES_RANGE   → block loopback, link-local, multicast, reserved
-            $public = filter_var($ip, FILTER_VALIDATE_IP,
-                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
-            if ($public === false) {
-                return "host resolves to private/reserved IP ({$ip}) — refusing to fetch";
-            }
-        }
-        return null;
+        // Delegates to the shared, SSRF-safe fetcher so the AI-Training URL
+        // source and the AI voice agent's knowledge-base URL crawl through ONE
+        // hardened path (redirect re-validation, private-IP refusal, caps).
+        return app(\App\Services\AiTraining\UrlTextFetcher::class)->fetch($url);
     }
 }

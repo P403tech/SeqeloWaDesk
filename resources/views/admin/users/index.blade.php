@@ -74,9 +74,9 @@
                 <div class="text-[11px] text-ink-500 mt-2">{{ __('policy violations') }}</div>
             </div>
             <div class="bg-paper-0 border border-paper-200 rounded-2xl p-4 shadow-card">
-                <div class="text-[11px] text-ink-600 font-medium">{{ __('Owners') }}</div>
-                <div class="font-serif text-[34px] leading-none mt-1">{{ number_format($stats['owners']) }}</div>
-                <div class="text-[11px] text-ink-500 mt-2">{{ __('workspace owners') }}</div>
+                <div class="text-[11px] text-ink-600 font-medium">{{ __('Users') }}</div>
+                <div class="font-serif text-[34px] leading-none mt-1">{{ number_format($stats['users']) }}</div>
+                <div class="text-[11px] text-ink-500 mt-2">{{ __('standard user accounts') }}</div>
             </div>
             <div class="bg-paper-0 border border-accent-coral/40 rounded-2xl p-4 shadow-card">
                 <div class="text-[11px] text-ink-600 font-medium">{{ __('Trashed') }}</div>
@@ -93,14 +93,14 @@
                 $pills = [
                     'all' => 'All',
                     'admin' => 'Admins',
-                    'owner' => 'Owners',
+                    'user' => 'Users',
                     'agent' => 'Agents',
                     'suspended' => 'Suspended',
                 ];
                 $countsByRole = [
                     'all' => $stats['total'],
                     'admin' => $stats['admin'],
-                    'owner' => $stats['owners'],
+                    'user' => $stats['users'],
                     'agent' => null,
                     'suspended' => $stats['suspended'],
                 ];

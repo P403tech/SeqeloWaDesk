@@ -74,6 +74,12 @@ return Application::configure(basePath: dirname(__DIR__))
             // before the workspace-slug catch-all so /facebook isn't swallowed.
             require __DIR__ . '/../routes/facebook.php';
 
+            // Meta Lead Ads — runs ON a connected Facebook Page but is sold and
+            // gated separately (access_lead_ads), so it keeps its own file and
+            // its own /lead-ads prefix. Same slot, before the workspace-slug
+            // catch-all so /lead-ads isn't swallowed.
+            require __DIR__ . '/../routes/lead-ads.php';
+
             // TikTok channel — part of core (Phase 1: Connect). Same slot,
             // before the workspace-slug catch-all so /tiktok isn't swallowed.
             require __DIR__ . '/../routes/tiktok.php';
@@ -81,6 +87,13 @@ return Application::configure(basePath: dirname(__DIR__))
             // Telegram channel — part of core (Bot API). Same slot, before the
             // workspace-slug catch-all so /telegram isn't swallowed.
             require __DIR__ . '/../routes/telegram.php';
+            require __DIR__ . '/../routes/threads.php';
+
+            // Chat-widget flow-engine bridge — Node → Laravel callbacks. The
+            // widget has no external API, so flow sends come back here to be
+            // written as inbox rows. Same slot: before the workspace-slug
+            // catch-all, or '/api/widget/...' is read as a workspace slug.
+            require __DIR__ . '/../routes/widget-flow.php';
 
             // SMS channel — part of core (Twilio / MSG91). Settings + connect
             // (session) and raw inbound/status webhooks. Same slot, before the
@@ -150,6 +163,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth.apikey.throttle' => \App\Http\Middleware\ApiPlanRateLimit::class,
             'platform.role'      => \App\Http\Middleware\EnsurePlatformRole::class,
             'workspace.member'   => \App\Http\Middleware\EnsureWorkspaceMembership::class,
+            // Shopify embedded app: verifies the App Bridge session token
+            // (Authorization: Bearer <id token>) when one is present. Additive —
+            // a request without the header still authenticates by session, so
+            // Blade form posts from inside the iframe keep working.
+            'shopify.token'      => \App\Http\Middleware\VerifyShopifySessionToken::class,
             'workspace.role'     => \App\Http\Middleware\EnsureWorkspaceRole::class,
             'agent.activity'     => \App\Http\Middleware\RecordAgentActivity::class,
             // Mobile-app workspace/device scoping — resolves X-Workspace-Id /
@@ -260,6 +278,12 @@ return Application::configure(basePath: dirname(__DIR__))
             // correct app.locale. Reads from users.locale → session →
             // workspace.default_language → platform default.
             \App\Http\Middleware\SetLocale::class,
+            // White-label tenancy: when the host is a workspace's verified custom
+            // domain, lock the whole request to that workspace (and gate members).
+            // Runs BEFORE the workspace-dependent middleware below (impersonation
+            // banner, suspended-user bounce) so they see the forced workspace.
+            // No-op on the platform host + any non-tenant host.
+            \App\Http\Middleware\ResolveTenantDomain::class,
             // Admin "Maintenance mode" toggle enforcement. No-op when the toggle
             // is OFF; when ON, serves the 503 page to everyone except platform
             // staff (and keeps /login open so an admin can sign in and get through).
@@ -274,6 +298,16 @@ return Application::configure(basePath: dirname(__DIR__))
             // route bounces to /account/plans until a plan is bought.
             // Allowlists billing/account/logout; admins + paid plans bypass.
             \App\Http\Middleware\EnsureTrialActive::class,
+            // Admin Feature Toggles hard gate — a feature switched OFF at
+            // /admin/settings/features is 404'd even by direct URL, not just
+            // hidden from the nav. No-op unless a matched feature is disabled.
+            \App\Http\Middleware\EnforceFeatureAccess::class,
+            // Cron-free auto-renewal safety net: after the response is sent,
+            // reconcile the current workspace's subscription against its gateway
+            // so a renewal charge applies even if the merchant never registered
+            // the gateway webhook. No-op unless a subscription is near/after
+            // expiry (throttled to one gateway poll per few hours).
+            \App\Http\Middleware\ReconcileSubscription::class,
             // Security enforcement — each is a no-op when its policy
             // toggle is OFF, so this block has zero cost for clients
             // who haven't tightened security.
@@ -301,6 +335,18 @@ return Application::configure(basePath: dirname(__DIR__))
         // not a browser session. Path matches the URL the shipped bot
         // already POSTs to (utils/helpers.js → /api/update-schedule-status).
         $middleware->validateCsrfTokens(except: [
+            // Install wizard. It runs BEFORE the app is configured — no database,
+            // often no writable session yet, and on a fresh box the session
+            // cookie frequently does not survive the redirect (secure-cookie or
+            // domain mismatch, IP vs hostname). CSRF then rejects every step and
+            // Laravel redirects back to the same page: the wizard "reloads and
+            // does nothing", with no error and no controller log, because the
+            // request never reaches the controller.
+            //
+            // Safe to exempt: these routes only exist while storage/installed is
+            // absent (EnsureInstalled 302s them away afterwards), they hold no
+            // user data, and there is no authenticated session to ride on.
+            'install/*',
             // Developer file-sync push — a machine-to-machine deploy call with
             // no browser session; authed by the WD_SYNC_KEY header, not a token.
             'wd-sync',
@@ -386,12 +432,28 @@ return Application::configure(basePath: dirname(__DIR__))
             'api/tiktok/flow-node',
             // Telegram Bot API inbound push — per-bot secret-token verified, no session.
             'api/telegram/inbound/*',
+            'api/line/inbound/*',
+            'api/wechat/inbound/*',
+            'api/viber/inbound/*',
+            'api/wechat/flow-send',
+            'api/wechat/flow-node',
+            'api/viber/flow-log',
+            'api/viber/flow-node',
+            // Email flow-engine bridge (Node → Laravel) — X-Node-Token guarded.
+            'api/email/flow-send',
+            'api/email/flow-node',
+            'api/email/flow-log',
+            'api/widget/flow-send',
+            'api/widget/flow-node',
             // SMS provider webhooks (Twilio/MSG91) — signature-verified, no session.
             'api/sms/inbound',
             'api/sms/status',
             // Telegram flow-engine bridge (Node → Laravel) — X-Node-Token guarded.
             'api/telegram/flow-log',
             'api/telegram/flow-node',
+            // LINE flow-engine bridge (Node → Laravel) — X-Node-Token guarded.
+            'api/line/flow-log',
+            'api/line/flow-node',
             // Facebook flow-engine bridge (Node → Laravel) — X-Node-Token guarded,
             // no browser session, so CSRF must be skipped (mirrors the WhatsApp /
             // Instagram flow-node bridge routes).
@@ -456,6 +518,9 @@ return Application::configure(basePath: dirname(__DIR__))
             // are cross-origin and signature-verified per gateway.
             'payment/webhook/*',
             'payment/callback/*',
+            // Invoice "Pay now" — the merchant-gateway redirect POSTs back here
+            // cross-site; verified via the driver, no session to ride on.
+            'i/pay/callback/*',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -494,6 +559,26 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->withInput($request->except(['_token', 'password', 'password_confirmation']))
                 ->with('status', 'Your session expired for security. Please try again.');
         };
+
+        // Upload bigger than PHP post_max_size. Laravel's ValidatePostSize
+        // middleware throws this BEFORE the request reaches any controller, so
+        // the updater's own (helpful) size-check never runs and the admin just
+        // sees the bare "The POST data is too large." Turn it into the actionable
+        // reason + the exact server limits to raise. JSON callers (the updater
+        // uploader is one) get it as JSON; anything else as a redirect-back.
+        $exceptions->render(function (\Illuminate\Http\Exceptions\PostTooLargeException $e, \Illuminate\Http\Request $request) {
+            $postMax = ini_get('post_max_size') ?: '?';
+            $upMax   = ini_get('upload_max_filesize') ?: '?';
+            $sentMb  = round(((int) $request->server('CONTENT_LENGTH', 0)) / 1048576, 1);
+            $msg = "The upload is larger than this server allows (sent ~{$sentMb} MB; "
+                 . "PHP post_max_size={$postMax}, upload_max_filesize={$upMax}). "
+                 . "Raise post_max_size AND upload_max_filesize to 64M in php.ini "
+                 . "(and nginx client_max_body_size 64M), restart php-fpm + reload nginx, then retry.";
+            if ($request->expectsJson() || $request->is('*/update/*') || $request->is('admin/update*')) {
+                return response()->json(['success' => false, 'message' => $msg], 413);
+            }
+            return redirect()->back()->with('error', $msg);
+        });
 
         // The canonical CSRF-mismatch exception.
         $exceptions->render(function (\Illuminate\Session\TokenMismatchException $e, \Illuminate\Http\Request $request) use ($graceful419) {

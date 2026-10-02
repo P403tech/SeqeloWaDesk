@@ -58,10 +58,19 @@ async function graphSend(auth, message) {
         : "text";
   console.log(`[FB-SEND→] host=${base} page=${pageId} kind=${kind} body=${JSON.stringify(message)}`);
 
+  // appsecret_proof — REQUIRED when the FB app has "Require App Secret" on, else
+  // Graph rejects with #100 "API calls from the server require an appsecret_proof
+  // argument". Laravel (FbFlowBridge) computes it (HMAC of the token with the app
+  // secret) and passes it in auth; attach it whenever present.
+  const proof = String(auth?.appsecret_proof || "");
   const r = await axios.post(
     `${base}/${pageId}/messages`,
     message,
-    { params: { access_token: token }, timeout: 30000, validateStatus: () => true }
+    {
+      params: { access_token: token, ...(proof ? { appsecret_proof: proof } : {}) },
+      timeout: 30000,
+      validateStatus: () => true,
+    }
   );
   if (r.status >= 400 || r.data?.error) {
     const e = r.data?.error || { message: `HTTP ${r.status}` };
@@ -214,6 +223,26 @@ function nextNode(flow, nodeId, port = "out") {
   return port === "out" ? any : null;
 }
 
+/**
+ * ALL nodes wired to nodeId on `port` (in edge order) — the fan-out counterpart
+ * of nextNode. A Trigger (or any node) connected to several nodes returns every
+ * one, so the walker can fire them all instead of only the first edge.
+ */
+function nextTargets(flow, nodeId, port = "out") {
+  const out = [];
+  for (const e of edgesOf(flow)) {
+    if (String(e?.source) !== String(nodeId)) continue;
+    if (String(e?.sourceHandle || "out") === port) out.push(String(e?.target || ""));
+  }
+  // A plain node whose edges carry no explicit handle still flows on "out".
+  if (out.length === 0 && port === "out") {
+    for (const e of edgesOf(flow)) {
+      if (String(e?.source) === String(nodeId)) out.push(String(e?.target || ""));
+    }
+  }
+  return out.filter(Boolean);
+}
+
 function entryNode(flow) {
   for (const n of nodesOf(flow)) if (String(n?.type) === "trigger") return n;
   return null;
@@ -241,15 +270,74 @@ const chatOptionsToQuickReplies = (d) =>
     .filter((o) => o.title !== "")
     .slice(0, 13);
 
-function evalCondition(d, vars) {
-  const left = subst(d?.variable ?? d?.left ?? "{{text}}", vars).toLowerCase().trim();
-  const right = subst(d?.value ?? d?.right ?? "", vars).toLowerCase().trim();
-  switch (String(d?.operator ?? d?.op ?? "contains")) {
-    case "equals": case "=": case "==": return left === right;
-    case "not_equals": case "!=": return left !== right;
-    case "starts_with": return left.startsWith(right);
-    default: return right === "" ? true : left.includes(right);
+// Evaluate a condition node. The builder saves one or more condition ROWS under
+// `d.conditions[]`, joined by `d.operators[]` ("and"/"or"). The whole expression
+// decides the yes/no port. (Older/flat nodes may put a single
+// {variable,operator,value} on `d` itself — still supported.)
+//
+// This MUST mirror `_flowEvalCondition` / `evaluateFlowConditions` in
+// flowService.js (the WhatsApp engine) and `checkCond` in the builder's Test
+// preview, or the port that fires live disagrees with what the author sees.
+//
+// The previous version read `d.variable/operator/value` DIRECTLY off the node —
+// but those live inside `d.conditions[0]`, so all three were undefined: the
+// operator fell back to "contains" and the value to "", and the default branch
+// `right === "" ? true` made EVERY condition return true. That sent every input
+// down the first "yes" port (e.g. always "we have price"), never reaching the
+// later branches.
+export function evalCondition(d, vars) {
+  const rows    = Array.isArray(d?.conditions) && d.conditions.length ? d.conditions : [d];
+  const joiners = Array.isArray(d?.operators) ? d.operators : [];
+
+  // A bare name ("text") is a lookup in vars; a "{{text}}" template is
+  // substituted. Blank names resolve to nothing (comparisons then fall back to
+  // the inbound message below).
+  const resolveVar = (name) => {
+    const raw = String(name ?? "").trim();
+    if (raw === "") return "";
+    if (raw.includes("{{")) return subst(raw, vars);
+    return String(vars?.[raw] ?? "");
+  };
+
+  const evalOne = (c) => {
+    const op = String(c?.operator ?? c?.op ?? "equals").toLowerCase().trim().replace(/\s+/g, "_");
+    const resolvedRaw = resolveVar(c?.variable ?? c?.left);
+
+    // Presence tests read the variable ITSELF (no message fallback).
+    if (op === "exists" || op === "is_set")         return String(resolvedRaw).trim() !== "";
+    if (op === "not_exists" || op === "is_not_set") return String(resolvedRaw).trim() === "";
+
+    // Comparisons fall back to the customer's last message when the named
+    // variable is blank — same historical behaviour as the WhatsApp engine.
+    let userRaw = resolvedRaw;
+    if (!userRaw) userRaw = String(vars?.text ?? vars?.user_message ?? "");
+    const checkRaw = c?.value ?? c?.right ?? "";
+    const u = String(userRaw).toLowerCase().trim();
+    const v = String(checkRaw).toLowerCase().trim();
+    switch (op) {
+      case "equals": case "=": case "==":  return u === v;
+      case "not_equals": case "!=":        return u !== v;
+      case "contains":                     return u.includes(v);
+      case "not_contains":                 return !u.includes(v);
+      case "gt": case "greater_than":      return parseFloat(userRaw) > parseFloat(checkRaw);
+      case "lt": case "less_than":         return parseFloat(userRaw) < parseFloat(checkRaw);
+      case "is_empty":                     return u === "";
+      case "is_not_empty":                 return u !== "";
+      case "starts_with":                  return u.startsWith(v);
+      case "ends_with":                    return u.endsWith(v);
+      default:
+        console.warn(`[FB-COND] unknown operator "${c?.operator}" → FALSE`);
+        return false;
+    }
+  };
+
+  let result = evalOne(rows[0]);
+  for (let i = 1; i < rows.length; i++) {
+    const join = String(joiners[i - 1] || "AND").toUpperCase();
+    const next = evalOne(rows[i]);
+    result = join === "OR" ? (result || next) : (result && next);
   }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,17 +348,42 @@ function evalCondition(d, vars) {
  * customer. Delays are REAL awaits — this runs detached from any HTTP request,
  * which is the whole reason Messenger flows moved into Node.
  */
-async function walk(ctx, startId) {
+async function walk(ctx, startId, opts = {}) {
+  const nodes = indexNodes(ctx.flow);
+  const visited = new Set();
+  const state = { parked: false, steps: 0 };
+  console.log(`[FB-WALK] start flow=${ctx.flowId} psid=${ctx.psid} from=${startId} fan-out nodes=${nodes.size} vars=${JSON.stringify(ctx.vars || {})}`);
+  if (opts.fromPort) {
+    // Resume: the parked node already ran — fan out from ITS targets on the
+    // chosen port, marking it visited so it can't run again.
+    visited.add(String(startId));
+    for (const t of nextTargets(ctx.flow, startId, opts.fromPort)) {
+      await walkNode(ctx, nodes, t, visited, state);
+    }
+  } else {
+    await walkNode(ctx, nodes, startId, visited, state);
+  }
+  // End the flow only when nothing in this delivery parked waiting for input.
+  if (!state.parked) clearSession(ctx.pageId, ctx.psid);
+}
+
+/**
+ * Run ONE node, then fan out to EVERY node wired to its active port — so a
+ * Trigger (or any node) connected to several nodes fires ALL of them, one after
+ * another, instead of only the first edge. `visited` makes each node run at most
+ * once per delivery (guards merges/loops); the FIRST input node (buttons/ask)
+ * reached parks the chat while the other send branches still fire.
+ */
+async function walkNode(ctx, nodes, id, visited, state) {
+  if (!id) return;
+  if (state.steps++ > 300) { console.warn(`[FB-WALK] step guard — possible loop flow=${ctx.flowId}`); return; }
+  const key = String(id);
+  if (visited.has(key)) return;
+  visited.add(key);
+  const node = nodes.get(key);
+  if (!node) { console.warn(`[FB-WALK] node id="${id}" NOT FOUND — flow=${ctx.flowId}`); return; }
+
   const { auth, flow, psid, appDomain, pageId, flowId, workspaceId } = ctx;
-  const nodes = indexNodes(flow);
-  let current = startId;
-  let guard = 0;
-
-  console.log(`[FB-WALK] start flow=${flowId} psid=${psid} from=${startId} nodes=${nodes.size} vars=${JSON.stringify(ctx.vars || {})}`);
-
-  while (current && guard++ < 100) {
-    const node = nodes.get(String(current));
-    if (!node) { console.warn(`[FB-WALK] node id="${current}" NOT FOUND — ending flow=${flowId}`); break; }
     const type = String(node.type || "");
     const d = node.data || {};
     let port = "out";
@@ -279,6 +392,7 @@ async function walk(ctx, startId) {
 
     try {
       switch (type) {
+        case "trigger": break;   // entry node — no send, just fan out
         // ---- shared nodes (same types the WhatsApp builder uses) ----------
         case "message": {
           const body = subst(d.text, ctx.vars);
@@ -325,7 +439,7 @@ async function walk(ctx, startId) {
           // Mirror the buttons into the inbox so the operator sees the same
           // tappable card, not just "What next?" as plain text.
           await logToLaravel(appDomain, { pageId, psid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null, buttons: opts.map((o) => ({ title: String(o.title ?? o) })) });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the tap
         }
 
@@ -335,7 +449,7 @@ async function walk(ctx, startId) {
             const r = await sendText(auth, psid, q);
             await logToLaravel(appDomain, { pageId, psid, workspaceId, direction: "out", body: q, source: "flow", mid: r?.message_id || null });
           }
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the answer
         }
 
@@ -408,7 +522,7 @@ async function walk(ctx, startId) {
           const body = subst(d.text, ctx.vars);
           const r = await sendQuickReplies(auth, psid, body, (d.options || []));
           await logToLaravel(appDomain, { pageId, psid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -418,7 +532,7 @@ async function walk(ctx, startId) {
             const r = await sendText(auth, psid, q);
             await logToLaravel(appDomain, { pageId, psid, workspaceId, direction: "out", body: q, source: "flow", mid: r?.message_id || null });
           }
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -428,7 +542,7 @@ async function walk(ctx, startId) {
           const img = subst(d.imageUrl ?? d.image_url, ctx.vars).trim();
           const r = await sendButtons(auth, psid, body, btns, img || undefined);
           await logToLaravel(appDomain, { pageId, psid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null, buttons: btns.map((b) => ({ title: String(b.title || ""), url: String(b.url || "") })) });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -468,7 +582,9 @@ async function walk(ctx, startId) {
         }
 
         case "end":
-          clearSession(pageId, psid);
+          // End THIS branch only. The session is cleared at the top of walk()
+          // once every branch settles and none parked — clearing it here would
+          // wipe a sibling branch's parked input node.
           console.log(`[FB-FLOW-NODE] end flow=${flowId} psid=${psid}`);
           return;
 
@@ -479,14 +595,26 @@ async function walk(ctx, startId) {
       }
     } catch (e) {
       console.error(`[FB-FLOW-NODE] node ${node.id} (${type}) failed: ${e?.message}`);
+      // ALSO report to Laravel so the failure lands in laravel.log — the Node
+      // console (Passenger on cPanel) is hard to read. This is how a failed
+      // Facebook SEND ([FB-SEND✗] — e.g. a Messenger 24h-policy / token error)
+      // becomes visible without SSH/pm2. Fire-and-forget; never break the walk.
+      try {
+        await logToLaravel(appDomain, {
+          event: "flow_error", source: "flow",
+          pageId, psid, workspaceId, flowId,
+          node_id: node.id, node_type: type,
+          error: String(e?.message || e).slice(0, 300),
+        });
+      } catch (_) { /* logging must never strand the customer */ }
       // Keep walking: one bad node shouldn't strand the customer mid-conversation.
     }
 
-    current = nextNode(flow, node.id, port);
-  }
-
-  if (guard >= 100) console.warn(`[FB-FLOW-NODE] walk hit the 100-node guard — possible loop (flow=${flowId})`);
-  clearSession(pageId, psid);
+    // Fan out to every node wired to this node's active port (in edge order) —
+    // one node connected to several nodes fires them all, not just the first.
+    for (const t of nextTargets(flow, node.id, port)) {
+      await walkNode(ctx, nodes, t, visited, state);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +658,7 @@ export async function runFlow({ auth, flow, psid, text, commentId, flowId, pageI
     vars: { text: String(text || ""), psid: String(psid), page_id: String(pageId || ""), comment_id: String(commentId || ""), ...(vars || {}) },
   };
   console.log(`[FB-FLOW-NODE] START flow=${flowId} page=${pageId} psid=${psid}`);
-  await walk(ctx, nextNode(flow, start.id, "out"));
+  await walk(ctx, start.id);   // walk() fans out from the trigger's connections
   return true;
 }
 
@@ -592,7 +720,7 @@ export async function resumeFlow({ pageId, psid, text }) {
   FB_SESSIONS.delete(key);   // consumed
   sess.vars.text = String(text || "");
   console.log(`[FB-FLOW-NODE] RESUME flow=${sess.flowId} from=${sess.nodeId} port=${port}`);
-  await walk({ ...sess, vars: sess.vars }, nextNode(sess.flow, sess.nodeId, port));
+  await walk({ ...sess, vars: sess.vars }, sess.nodeId, { fromPort: port });   // fan out from the parked node's chosen port
   return true;
 }
 

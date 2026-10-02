@@ -80,7 +80,7 @@ class WorkspaceMembersController extends Controller
         \App\Services\PlanLimitGuard::check(
             $ws,
             'user_seat_limit',
-            \DB::table('workspace_user')->where('workspace_id', $ws->id)->count(),
+            $ws->seatsUsed(),   // canonical count — same source the usage meter shows (#29)
         );
 
         $data = $request->validate([

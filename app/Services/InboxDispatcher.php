@@ -170,10 +170,34 @@ class InboxDispatcher
             return $this->dispatchTelegram($msg);
         }
 
+        // LINE (Messaging API). Engine-agnostic; replies via the FREE reply token
+        // when fresh (~1 min), else the (billable) push API.
+        if ($convChannel === 'line' || $msg->provider === 'line') {
+            return $this->dispatchLine($msg);
+        }
+
+        // WeChat (Official Account). Engine-agnostic; replies via the customer-
+        // service message API, gated on the 48-hour window.
+        if ($convChannel === 'wechat' || $msg->provider === 'wechat') {
+            return $this->dispatchWeChat($msg);
+        }
+
+        // Viber (REST Bot API). Engine-agnostic; send_message to a subscribed user.
+        if ($convChannel === 'viber' || $msg->provider === 'viber') {
+            return $this->dispatchViber($msg);
+        }
+
         // SMS (Twilio / MSG91 reply). Engine-agnostic with a real outbound path —
         // routed before the local-only short-circuit like Telegram/Facebook.
         if ($convChannel === 'sms' || $msg->provider === 'sms') {
             return $this->dispatchSms($msg);
+        }
+
+        // Email — delivered by the SEPARATE MailTrixy deployment (it owns the
+        // mailbox + SMTP). Engine-agnostic with a real outbound path, so it
+        // must be routed before the local-only short-circuit like Instagram.
+        if ($convChannel === 'email' || $msg->provider === 'email') {
+            return $this->dispatchMailtrixy($msg);
         }
 
         if (in_array($convChannel, \App\Models\Conversation::ENGINE_AGNOSTIC_CHANNELS, true)) {
@@ -835,6 +859,203 @@ class InboxDispatcher
         return ['ok' => $ok, 'platform' => 'TELEGRAM', 'provider_id' => (string) data_get($r, 'result.message_id', ''), 'local_only' => false, 'error' => $ok ? null : ($r['error'] ?? 'telegram send failed')];
     }
 
+    /**
+     * LINE outbound. Parses 'line:<rowId>:<userId>' → the recipient, resolves the
+     * connection, builds LINE message objects, and prefers the FREE reply token
+     * (single-use, ~1 min) captured on the freshest inbound; otherwise push
+     * (billable). Media rides as a URL-based LINE message (LINE fetches a public
+     * https URL — we never upload bytes here).
+     */
+    private function dispatchLine(InboxMessage $msg): array
+    {
+        $conv  = $msg->conversation;
+        $parts = explode(':', (string) $conv?->raw_jid);   // line : rowId : userId
+        $to    = $parts[2] ?? ($parts[1] ?? '');
+
+        $channel = \App\Models\LineChannel::forConversation($conv);
+        if (! $channel) {
+            return ['ok' => false, 'platform' => 'LINE', 'provider_id' => null, 'local_only' => false, 'error' => 'LINE channel not connected'];
+        }
+        if ($to === '') {
+            return ['ok' => false, 'platform' => 'LINE', 'provider_id' => null, 'local_only' => false, 'error' => 'LINE recipient missing'];
+        }
+
+        $client = new \App\Services\Line\LineClient((string) $channel->activeAccessToken());
+        $text   = (string) $msg->body;
+
+        // Build ≤5 message objects. Media → a URL message (forced https); any caption
+        // text rides as a leading text message.
+        $messages = [];
+        if (! empty($msg->media_path)) {
+            $url  = preg_match('#^https?://#i', (string) $msg->media_path) ? (string) $msg->media_path : media_url((string) $msg->media_path);
+            $url  = preg_replace('#^http://#i', 'https://', (string) $url);
+            $kind = (string) $msg->media_type;
+            $media = match (true) {
+                in_array($kind, ['image', 'photo', 'sticker'], true) => \App\Services\Line\LineClient::imageMessage($url),
+                $kind === 'video'                                    => \App\Services\Line\LineClient::videoMessage($url, $url),
+                in_array($kind, ['audio', 'voice'], true)            => \App\Services\Line\LineClient::audioMessage($url, 60000),
+                default                                              => \App\Services\Line\LineClient::textMessage($text !== '' ? $text : $url),
+            };
+            if ($text !== '' && ($media['type'] ?? '') !== 'text') {
+                $messages[] = \App\Services\Line\LineClient::textMessage($text);
+            }
+            $messages[] = $media;
+        } else {
+            $messages[] = \App\Services\Line\LineClient::textMessage($text !== '' ? $text : ' ');
+        }
+
+        // FREE reply path — use the freshest inbound replyToken if < ~55s old (LINE
+        // tokens live ~1 min, single use), else push. Consume it so a second send
+        // this turn falls back to push instead of reusing a spent token.
+        $replyToken = null;
+        $freshest = InboxMessage::where('conversation_id', $conv->id)->where('direction', 'in')
+            ->orderByDesc('id')->first(['id', 'meta']);
+        $rt   = (string) data_get($freshest?->meta, 'line.reply_token', '');
+        $rtAt = (int) data_get($freshest?->meta, 'line.reply_token_at', 0);
+        if ($rt !== '' && $rtAt > 0 && (now()->timestamp - $rtAt) < 55) {
+            $replyToken = $rt;
+            $meta = (array) $freshest->meta;
+            unset($meta['line']['reply_token']);
+            $freshest->forceFill(['meta' => $meta])->saveQuietly();
+        }
+
+        $r  = $replyToken ? $client->reply($replyToken, $messages) : $client->push($to, $messages);
+        $ok = ! empty($r['ok']);
+
+        return ['ok' => $ok, 'platform' => 'LINE', 'provider_id' => null, 'local_only' => false, 'error' => $ok ? null : ($r['error'] ?? 'line send failed')];
+    }
+
+    /**
+     * WeChat Official Account reply — customer-service message API, JSON, gated on
+     * the 48-hour window (free-form send only within 48h of the user's last
+     * inbound; outside → a Template Message, which is Phase 2). Media is uploaded
+     * to WeChat for a media_id, then sent; text goes as a text message.
+     */
+    private function dispatchWeChat(InboxMessage $msg): array
+    {
+        $conv  = $msg->conversation;
+        $parts = explode(':', (string) $conv?->raw_jid);   // wechat : rowId : openid
+        $to    = $parts[2] ?? '';
+
+        $channel = \App\Models\WeChatChannel::forConversation($conv);
+        if (! $channel) {
+            return ['ok' => false, 'platform' => 'WeChat', 'provider_id' => null, 'local_only' => false, 'error' => 'WeChat channel not connected'];
+        }
+        if ($to === '') {
+            return ['ok' => false, 'platform' => 'WeChat', 'provider_id' => null, 'local_only' => false, 'error' => 'WeChat recipient missing'];
+        }
+
+        // 48h customer-service window — free-form send only within 48h of the
+        // user's last inbound. Outside → a Template Message is required (Phase 2).
+        $lastIn = InboxMessage::where('conversation_id', $conv->id)->where('direction', 'in')->max('created_at');
+        if (! $lastIn || \Illuminate\Support\Carbon::parse($lastIn)->lt(now()->subHours(48))) {
+            return ['ok' => false, 'platform' => 'WeChat', 'provider_id' => null, 'local_only' => false,
+                'error' => 'Outside the 48-hour WeChat window — a template message is required.'];
+        }
+
+        $client = new \App\Services\WeChat\WeChatClient($channel);
+        $text   = (string) $msg->body;
+
+        $message = null;
+        if (! empty($msg->media_path)) {
+            $local  = $this->readTelegramLocal((string) $msg->media_path);   // generic local-bytes reader
+            $kind   = (string) $msg->media_type;
+            $wxType = match (true) {
+                in_array($kind, ['audio', 'voice'], true) => 'voice',
+                $kind === 'video'                         => 'video',
+                default                                   => 'image',
+            };
+            if ($local) {
+                $up = $client->uploadMedia($wxType, $local['bytes'], $local['name']);
+                if ($up['ok'] ?? false) {
+                    $mid = (string) $up['media_id'];
+                    $message = match ($wxType) {
+                        'voice' => \App\Services\WeChat\WeChatClient::voiceMessage($mid),
+                        'video' => \App\Services\WeChat\WeChatClient::videoMessage($mid, $mid),
+                        default => \App\Services\WeChat\WeChatClient::imageMessage($mid),
+                    };
+                }
+            }
+            if ($message === null) {
+                // Upload failed → send the caption / a link as text so nothing is lost.
+                $message = \App\Services\WeChat\WeChatClient::textMessage($text !== '' ? $text : media_url((string) $msg->media_path));
+            } elseif ($text !== '') {
+                // Caption rides as its own text message (WeChat media carries no caption).
+                $client->sendCustomMessage($to, \App\Services\WeChat\WeChatClient::textMessage($text));
+            }
+        } else {
+            $message = \App\Services\WeChat\WeChatClient::textMessage($text !== '' ? $text : ' ');
+        }
+
+        $r  = $client->sendCustomMessage($to, $message);
+        $ok = ! empty($r['ok']);
+
+        return ['ok' => $ok, 'platform' => 'WeChat', 'provider_id' => null, 'local_only' => false, 'error' => $ok ? null : ($r['error'] ?? 'wechat send failed')];
+    }
+
+    /**
+     * Viber reply — send_message to a subscribed user. No time window (unlike
+     * WhatsApp/WeChat); the only gate is that the user has subscribed (opened the
+     * chat). Media is sent by URL (Viber pulls it — must be public HTTPS). A
+     * "receiverNotSubscribed" (status 6) is surfaced as a clear outcome.
+     */
+    private function dispatchViber(InboxMessage $msg): array
+    {
+        $conv  = $msg->conversation;
+        $parts = explode(':', (string) $conv?->raw_jid);   // viber : rowId : userId
+        $to    = $parts[2] ?? '';
+
+        $channel = \App\Models\ViberChannel::forConversation($conv);
+        if (! $channel) {
+            return ['ok' => false, 'platform' => 'Viber', 'provider_id' => null, 'local_only' => false, 'error' => 'Viber channel not connected'];
+        }
+        if ($to === '') {
+            return ['ok' => false, 'platform' => 'Viber', 'provider_id' => null, 'local_only' => false, 'error' => 'Viber recipient missing'];
+        }
+
+        $client = new \App\Services\Viber\ViberClient((string) $channel->auth_token, $channel->senderObject());
+        $text   = (string) $msg->body;
+
+        // Media → a picture/video/file/url message by kind (Viber pulls the public
+        // URL); else a text message.
+        if (! empty($msg->media_path)) {
+            $url  = preg_match('#^https?://#i', (string) $msg->media_path) ? (string) $msg->media_path : media_url((string) $msg->media_path);
+            $url  = preg_replace('#^http://#i', 'https://', (string) $url);
+            $kind = (string) $msg->media_type;
+            $message = match (true) {
+                in_array($kind, ['image', 'photo'], true) => \App\Services\Viber\ViberClient::pictureMessage($url, $text),
+                $kind === 'video'                         => \App\Services\Viber\ViberClient::videoMessage($url, 1),
+                in_array($kind, ['document', 'file', 'audio', 'voice'], true) => \App\Services\Viber\ViberClient::fileMessage($url, 1, basename((string) $msg->media_path)),
+                default                                   => \App\Services\Viber\ViberClient::textMessage($text !== '' ? $text : $url),
+            };
+            // A caption on non-picture media rides as its own text message first.
+            if ($text !== '' && ($message['type'] ?? '') !== 'picture' && ($message['type'] ?? '') !== 'text') {
+                $client->sendMessage($to, \App\Services\Viber\ViberClient::textMessage($text));
+            }
+        } else {
+            $message = \App\Services\Viber\ViberClient::textMessage($text !== '' ? $text : ' ');
+        }
+
+        $r  = $client->sendMessage($to, $message);
+        $ok = ! empty($r['ok']);
+        $token = (string) (data_get($r, 'data.message_token') ?: '');
+        $err = $ok ? null : ((int) ($r['status'] ?? 0) === 6
+            ? 'The Viber user must open a chat with you before you can message them.'
+            : ($r['error'] ?? 'viber send failed'));
+
+        // Stamp the message_token so delivered/seen webhooks can flip this outbound
+        // message's delivered_at / read_at (Viber read receipts).
+        if ($ok && $token !== '') {
+            try {
+                $meta = (array) $msg->meta;
+                $meta['viber'] = array_merge((array) ($meta['viber'] ?? []), ['message_token' => $token]);
+                $msg->forceFill(['meta' => $meta])->saveQuietly();
+            } catch (\Throwable $e) { /* non-fatal */ }
+        }
+
+        return ['ok' => $ok, 'platform' => 'Viber', 'provider_id' => $token ?: null, 'local_only' => false, 'error' => $err];
+    }
+
     /** Read a stored media path's bytes for a Telegram upload; null if not local. */
     private function readTelegramLocal(string $path): ?array
     {
@@ -893,6 +1114,20 @@ class InboxDispatcher
             return ['ok' => false, 'platform' => 'instagram', 'provider_id' => null, 'local_only' => true,
                 'error' => 'Instagram account not found for this workspace.'];
         }
+
+        // Diagnostic for subcode 2534037 ("not the owner of the thread"): does the
+        // account we're SENDING from actually own this thread? raw_jid's first
+        // segment is the account that RECEIVED the DM; if it doesn't match the
+        // resolved account's ig_user_id, we fell back to the wrong account and
+        // its token isn't a participant → Instagram rejects the send.
+        Log::info('[IG-SEND-ADDON] account resolve', [
+            'msg_id'              => $msg->id,
+            'raw_jid_account_ig'  => $acctIgId,
+            'resolved_account_id' => $account->id,
+            'resolved_ig_user_id' => (string) $account->ig_user_id,
+            'account_matches'     => ((string) $account->ig_user_id === (string) $acctIgId),
+            'customer_igsid'      => $customer,
+        ]);
 
         [$type, $mediaUrl, $qrArg, $buttonsArg] = $this->igSendShape($msg);
         $text = (string) $msg->body;
@@ -982,7 +1217,7 @@ class InboxDispatcher
                 'secret_set'        => trim((string) \App\Models\SystemSetting::get('instaflow_secret', '')) !== '',
             ]);
             return ['ok' => false, 'platform' => 'instagram', 'provider_id' => null, 'local_only' => true,
-                'error' => 'Instagram is not connected. Connect ' . ig_brand_name() . ' in Admin → Add-ons.'];
+                'error' => setup_hint('Instagram is not connected — connect ' . ig_brand_name() . ' in Admin → Add-ons.', 'Instagram is not connected. Please contact support to enable it.')];
         }
 
         // Media + template-button shaping is shared with the addon-native path.
@@ -1016,6 +1251,178 @@ class InboxDispatcher
             'local_only'  => false,
             'error'       => $ok ? null : ($res['error'] ?? 'Instaflow send failed'),
         ];
+    }
+
+    /**
+     * Email outbound — delegate to the separate MailTrixy deployment.
+     *
+     * Email conversations carry NO WhatsApp engine; MailTrixy owns the SMTP
+     * send. We hand it the MailTrixy conversation id (the third segment of the
+     * thread's raw_jid "email:<mirrorRowId>:<mtxConversationId>") plus the
+     * operator's text, and surface its result in the dispatcher's standard
+     * shape so TeamInboxController marks the reply row sent/failed exactly
+     * like a WhatsApp send. MailTrixy creates the outbound Message row on its
+     * side, so both inboxes stay in agreement.
+     *
+     * CAMPAIGN THREADS. A thread EmailCampaignRunner mirrored has no MailTrixy
+     * conversation to reply on — the bridge's one-off send endpoint returns no
+     * thread id — so its 3rd segment is the recipient ADDRESS instead. Replying
+     * on one is still a real reply the operator expects to leave, so it goes out
+     * as a fresh one-off from the same mailbox rather than failing the row.
+     */
+    private function dispatchMailtrixy(InboxMessage $msg): array
+    {
+        $conv = \DB::table('conversations')->where('id', $msg->conversation_id)->first();
+        $rawJid = (string) ($conv->raw_jid ?? '');
+        $parts = explode(':', $rawJid);
+        $mtxConvId = (count($parts) >= 3 && $parts[0] === 'email') ? (string) $parts[2] : '';
+
+        // A campaign-mirrored thread carries the recipient address here instead
+        // of a numeric conversation id — that reply is sent one-off (below).
+        $mtxAddress = ($mtxConvId !== '' && ! ctype_digit($mtxConvId)
+            && filter_var($mtxConvId, FILTER_VALIDATE_EMAIL)) ? $mtxConvId : '';
+
+        Log::info('[EMAIL-SEND] dispatchMailtrixy start', [
+            'msg_id'      => $msg->id,
+            'conv_id'     => $msg->conversation_id,
+            'raw_jid'     => $rawJid,
+            'mtx_conv_id' => $mtxConvId,
+            'body_len'    => mb_strlen((string) $msg->body),
+        ]);
+
+        if (! $conv || $mtxConvId === '' || (! ctype_digit($mtxConvId) && $mtxAddress === '')) {
+            Log::warning('[EMAIL-SEND] ABORT — no MailTrixy conversation id or address (raw_jid not email:<row>:<conv|address>)', [
+                'msg_id' => $msg->id, 'raw_jid' => $rawJid,
+            ]);
+            return ['ok' => false, 'platform' => 'EMAIL', 'provider_id' => null, 'local_only' => true,
+                'error' => __('This email thread has no linked conversation to reply on.')];
+        }
+
+        // The mirror row proves the mailbox is still linked to this workspace —
+        // an unlinked account must not keep sending through the bridge.
+        $acct = \App\Models\WorkspaceEmailAccount::forConversation($conv);
+        if (! $acct || $acct->status !== 'connected') {
+            // The mirror id embedded in the thread's raw_jid can be stale — a
+            // backfilled thread, or one whose binding was re-pointed/healed. A
+            // workspace has ONE live mailbox, and MailTrixy resolves the actual
+            // sending account from the conversation id anyway, so fall back to
+            // the workspace's connected mirror instead of blocking the reply.
+            $wsId = (int) ($conv->workspace_id ?? 0);
+            $fallback = $wsId > 0
+                ? \App\Models\WorkspaceEmailAccount::forWorkspace($wsId)->connected()->first()
+                : null;
+            if ($fallback) {
+                Log::info('[EMAIL-SEND] mirror fallback to workspace connected mailbox', [
+                    'msg_id' => $msg->id, 'raw_jid' => $rawJid, 'mirror' => $fallback->id,
+                ]);
+                $acct = $fallback;
+            } else {
+                Log::warning('[EMAIL-SEND] ABORT — no connected email mailbox for workspace', [
+                    'msg_id' => $msg->id, 'raw_jid' => $rawJid, 'ws' => $wsId,
+                ]);
+                return ['ok' => false, 'platform' => 'EMAIL', 'provider_id' => null, 'local_only' => true,
+                    'error' => __('The email account for this thread is no longer linked. Re-link it on the Numbers page.')];
+            }
+        }
+
+        $client = \App\Services\Mailtrixy\MailtrixyClient::fromSettings();
+        if (! $client->isConfigured()) {
+            // The most common cause of "reply saved but never sends": the send
+            // bridge (URL + shared secret) isn't set, so the reply can't leave.
+            // Log WHICH half is missing so it's a 10-second fix.
+            Log::error('[EMAIL-SEND] ABORT — email send bridge not configured', [
+                'msg_id'            => $msg->id,
+                'mailtrixy_url_set' => trim((string) \App\Models\SystemSetting::get('mailtrixy_url', '')) !== '',
+                'secret_set'        => trim((string) \App\Models\SystemSetting::get('mailtrixy_secret', '')) !== '',
+            ]);
+            return ['ok' => false, 'platform' => 'EMAIL', 'provider_id' => null, 'local_only' => true,
+                'error' => setup_hint(
+                    __('Email is not connected — connect :brand in Admin → Add-ons.', ['brand' => mailtrixy_brand_name()]),
+                    __('Email is not connected. Please contact support to enable it.')
+                )];
+        }
+
+        if ($mtxAddress !== '') {
+            // One-off from the campaign's own mailbox. The body is plain text, so
+            // escape it before it becomes HTML mail (an ampersand or angle bracket
+            // must not break — or inject into — the rendered message).
+            $body = (string) $msg->body;
+            $res  = $client->send(
+                (int) $acct->mailtrixy_account_id,
+                $mtxAddress,
+                $this->emailThreadSubject($msg),
+                nl2br(e($body), false),
+                $body
+            );
+        } else {
+            $res = $client->reply($mtxConvId, (string) $msg->body, null);
+        }
+        $ok  = ($res['ok'] ?? false) === true;
+        Log::info('[EMAIL-SEND] mailtrixy reply result', [
+            'msg_id'           => $msg->id,
+            'mtx_conversation' => $mtxConvId,
+            'mtx_address'      => $mtxAddress,
+            'ok'               => $ok,
+            'message_id'       => $res['message_id'] ?? null,
+            'delivery_status'  => $res['delivery_status'] ?? null,
+            'error'            => $res['error'] ?? null,
+            'raw'              => $ok ? null : mb_substr(json_encode($res), 0, 500),
+        ]);
+
+        // Stamp the MailTrixy message id onto THIS outbound row so the echo of
+        // the same message (MailTrixy pushes/pulls the sent mail back) dedups
+        // in MailtrixyIngestService instead of rendering a SECOND bubble. Ingest
+        // matches on meta->email->mtx_message_id within the thread.
+        if ($ok && ! empty($res['message_id'])) {
+            try {
+                $meta = is_array($msg->meta) ? $msg->meta : [];
+                $meta['email'] = array_merge((array) ($meta['email'] ?? []), [
+                    'mtx_message_id'      => $res['message_id'],
+                    'mtx_conversation_id' => $mtxConvId !== '' ? $mtxConvId : ($meta['email']['mtx_conversation_id'] ?? null),
+                ]);
+                $msg->meta = $meta;
+                $msg->save();
+            } catch (\Throwable $e) {
+                Log::warning('[EMAIL-SEND] mtx id stamp failed: ' . $e->getMessage());
+            }
+        }
+
+        return [
+            'ok'          => $ok,
+            'platform'    => 'EMAIL',
+            'provider_id' => $res['message_id'] ?? null,
+            'local_only'  => false,
+            'error'       => $ok ? null : ($res['error'] ?? __('Email send failed.')),
+        ];
+    }
+
+    /**
+     * Subject for a one-off reply on a campaign-mirrored email thread. Reuses
+     * the thread's own last subject (EmailCampaignRunner stores it under
+     * meta.email.subject) so the recipient sees a normal "Re:", and strips
+     * CR/LF because the far side puts it straight into a mail header.
+     */
+    private function emailThreadSubject(InboxMessage $msg): string
+    {
+        try {
+            $rows = InboxMessage::query()
+                ->where('conversation_id', $msg->conversation_id)
+                ->where('id', '<', $msg->id)
+                ->orderByDesc('id')->limit(5)->get(['id', 'meta']);
+            foreach ($rows as $row) {
+                $meta = is_array($row->meta) ? $row->meta : [];
+                $subject = trim((string) preg_replace('/[\r\n]+/', ' ', (string) ($meta['email']['subject'] ?? '')));
+                if ($subject === '') continue;
+
+                return \Illuminate\Support\Str::startsWith(mb_strtolower($subject), 're:')
+                    ? mb_substr($subject, 0, 255)
+                    : mb_substr('Re: ' . $subject, 0, 255);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[EMAIL-SEND] subject lookup failed: ' . $e->getMessage(), ['msg_id' => $msg->id]);
+        }
+
+        return __('Message');
     }
 
     private function dispatchNode(InboxMessage $msg): array
@@ -1271,6 +1678,37 @@ class InboxDispatcher
 
         $to = preg_replace('/\D+/', '', (string) $msg->to_number);
 
+        // GROUP send. A Cloud API group is addressed by Meta's opaque group id
+        // — base64-ish, letters and all — so the digits-only strip above would
+        // shred it into a meaningless number. Take the id straight off the
+        // thread instead, and remember that this send is a group send so the
+        // payload can carry recipient_type=group.
+        $isGroupSend = false;
+        $conv = $msg->conversation;
+        if ($conv && (string) $conv->provider === 'waba') {
+            $rawJid = trim((string) $conv->raw_jid);
+            // Decide group vs individual from the raw_jid SHAPE — NOT "is it all
+            // digits". The old check treated ANY non-digit raw_jid as a group id,
+            // which mis-classified an individual Baileys JID
+            // (<number>@s.whatsapp.net) as a group and sent the whole JID as the
+            // recipient → Meta #100 "Object with ID '…@s.whatsapp.net' does not
+            // exist". Cloud API wants a PLAIN phone number for individuals and an
+            // opaque id for groups.
+            if (str_ends_with($rawJid, '@g.us')) {
+                // Real WhatsApp group JID → group send.
+                $to          = $rawJid;
+                $isGroupSend = true;
+            } elseif (str_contains($rawJid, '@')) {
+                // Individual JID (…@s.whatsapp.net / @lid) → strip to digits.
+                $to = preg_replace('/\D+/', '', $rawJid) ?: $to;
+            } elseif ($rawJid !== '' && ! ctype_digit($rawJid)) {
+                // Opaque non-phone id → Cloud API group.
+                $to          = $rawJid;
+                $isGroupSend = true;
+            }
+            // else: plain-digit raw_jid → keep $to (already digits from to_number).
+        }
+
         // Upload media to Meta FIRST and send by media_id — so delivery does
         // NOT depend on the file URL being publicly fetchable by Meta (which
         // breaks on private/local storage). Falls back to a link send only if
@@ -1296,7 +1734,7 @@ class InboxDispatcher
             $audioMime  = $audioPrep['mime']  ?? null;
             $mediaId    = $this->uploadMediaToMeta($token, $phoneId, $version, $msg, $audioBytes, $audioMime);
         }
-        $body = $this->buildCloudPayload($msg, $to, $mediaId);
+        $body = $this->buildCloudPayload($msg, $to, $mediaId, $isGroupSend);
 
         try {
             // 10s was too tight — the first (cold) connection to graph.facebook.com
@@ -1317,7 +1755,35 @@ class InboxDispatcher
                     'error'       => null,
                 ];
             }
-            $err = $res->json('error.message') ?? ('HTTP ' . $res->status());
+            // FULL Meta error + request context. The top-level message is just
+            // "(#100) Invalid parameter" and HIDES which field Meta rejected —
+            // error_data.details names the real culprit, error_subcode + fbtrace_id
+            // let us match it in Meta's Business logs, and the payload shape
+            // (type / to / send-from phone_id) shows whether we sent the wrong
+            // thing (e.g. a text to a recipient outside any session, a bad number,
+            // or a phone_id that isn't the number the customer actually messaged).
+            $ej = (array) ($res->json('error') ?? []);
+            Log::warning('[INBOX-DISPATCH][WABA-FAIL] Meta rejected the send', [
+                'msg_id'             => $msg->id,
+                'workspace_id'       => $workspaceId,
+                'config_id'          => $cfg->id ?? null,
+                'send_from_phone_id' => $phoneId,
+                'to'                 => $to,
+                'is_group'           => $isGroupSend,
+                'payload_type'       => $body['type'] ?? null,
+                'body_len'           => mb_strlen((string) $msg->body),
+                'media_type'         => $msg->media_type,
+                'http_status'        => $res->status(),
+                'error_code'         => $ej['code']          ?? null,
+                'error_subcode'      => $ej['error_subcode'] ?? null,
+                'error_type'         => $ej['type']          ?? null,
+                'error_message'      => $ej['message']       ?? null,
+                'error_details'      => $ej['error_data']['details'] ?? null,   // ← the real "which param" reason
+                'fbtrace_id'         => $ej['fbtrace_id']    ?? null,
+            ]);
+            // Surface the DETAIL to the result/UI too, not just the generic #100.
+            $detail = (string) ($ej['error_data']['details'] ?? '');
+            $err = trim(((string) ($ej['message'] ?? ('HTTP ' . $res->status()))) . ($detail !== '' ? ' — ' . $detail : ''));
             return ['ok' => false, 'platform' => 'WB', 'provider_id' => null, 'local_only' => false, 'error' => $err];
         } catch (\Throwable $e) {
             return ['ok' => false, 'platform' => 'WB', 'provider_id' => null, 'local_only' => false, 'error' => $e->getMessage()];
@@ -1536,8 +2002,11 @@ class InboxDispatcher
         return null;
     }
 
-    private function buildCloudPayload(InboxMessage $msg, string $to, ?string $mediaId = null): array
+    private function buildCloudPayload(InboxMessage $msg, string $to, ?string $mediaId = null, bool $isGroup = false): array
     {
+        // Groups flip recipient_type; everything else about the payload shape
+        // (text, media, template) is identical to a 1-on-1 send.
+        $recipientType = $isGroup ? 'group' : 'individual';
         $meta = is_array($msg->meta) ? $msg->meta : [];
 
         // Template path — the inbox composer set template_id, so the
@@ -1570,6 +2039,7 @@ class InboxDispatcher
                     ->buildSend($tpl, $sendVars);
                 return [
                     'messaging_product' => 'whatsapp',
+                    'recipient_type'    => $recipientType,
                     'to'                => $to,
                     'type'              => 'template',
                     'template'          => $tplObject,
@@ -1595,6 +2065,7 @@ class InboxDispatcher
             }
             return [
                 'messaging_product' => 'whatsapp',
+                'recipient_type'    => $recipientType,
                 'to'                => $to,
                 'type'              => $mediaType,
                 $mediaType          => array_filter($mediaPayload),
@@ -1624,6 +2095,7 @@ class InboxDispatcher
             if (!empty($meta['footer'])) $interactive['footer'] = ['text' => mb_substr((string) $meta['footer'], 0, 60)];
             return [
                 'messaging_product' => 'whatsapp',
+                'recipient_type'    => $recipientType,
                 'to'                => $to,
                 'type'              => 'interactive',
                 'interactive'       => $interactive,
@@ -1632,6 +2104,7 @@ class InboxDispatcher
 
         return [
             'messaging_product' => 'whatsapp',
+            'recipient_type'    => $recipientType,
             'to'                => $to,
             'type'              => 'text',
             'text'              => ['body' => (string) $msg->body],

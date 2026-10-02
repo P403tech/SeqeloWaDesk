@@ -11,6 +11,7 @@ use App\Services\Shopify\ShopifyService;
 use App\Support\ChannelSetupReturn;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
@@ -35,13 +36,22 @@ class ShopifyController extends Controller
             : null;
 
         $activeTab = $request->string('tab')->toString() ?: 'overview';
+        // Ready to connect when EITHER the admin configured a global Shopify app
+        // OR this workspace brought its OWN app (self-serve, no admin needed).
         $appEnabled = $this->shopify->isEnabled() && $this->shopify->clientId() !== '';
 
+        $workspace = $wsId ? \App\Models\Workspace::find($wsId) : null;
+
         $viewData = [
-            'integration'   => $integration,
-            'activeTab'     => $activeTab,
-            'appEnabled'    => $appEnabled,
-            'eventTopics'   => ShopifyService::WEBHOOK_TOPICS,
+            'integration'       => $integration,
+            'activeTab'         => $activeTab,
+            'appEnabled'        => $appEnabled,
+            'eventTopics'       => ShopifyService::WEBHOOK_TOPICS,
+            // Self-serve BYO Shopify app (owner-only, gated by admin toggle).
+            'shopifyOwnApp'      => $workspace?->ownShopifyApp(),
+            'shopifyIsOwner'     => $workspace && (int) $workspace->owner_user_id === (int) ($user?->id ?? 0),
+            'shopifyManualAllowed'=> (bool) SystemSetting::get('shopify_allow_manual_app', false),
+            'shopifyRedirectUri' => $this->shopify->redirectUri(),
         ];
 
         if ($integration && $integration->isConnected()) {
@@ -49,6 +59,103 @@ class ShopifyController extends Controller
         }
 
         return view('user.shopify.dashboard', $viewData);
+    }
+
+    /**
+     * POST /shopify/own-app — save this workspace's OWN Shopify app (API key +
+     * secret) so it connects Shopify through its own app, no admin config or
+     * approval. Owner-only. Blank both = clear (back to the platform/admin app).
+     * Blank secret with a key present keeps the stored secret.
+     */
+    public function saveOwnApp(Request $request)
+    {
+        $user = Auth::user();
+        $ws   = $user?->currentWorkspace;
+        if (! $ws) abort(403);
+        if (! (bool) SystemSetting::get('shopify_allow_manual_app', false)) {
+            abort(403, __('Connecting Shopify with your own app is not enabled.'));
+        }
+        if ((int) $ws->owner_user_id !== (int) $user->id) {
+            abort(403, __('Only the workspace owner can change this.'));
+        }
+
+        $data = $request->validate([
+            'shopify_client_id'     => ['nullable', 'string', 'max:191'],
+            'shopify_client_secret' => ['nullable', 'string', 'max:191'],
+        ]);
+
+        $ws->shopify_client_id = trim((string) ($data['shopify_client_id'] ?? '')) ?: null;
+        $secret = trim((string) ($data['shopify_client_secret'] ?? ''));
+        if ($secret !== '') {
+            $ws->shopify_client_secret = $secret;         // encrypted cast
+        } elseif ($ws->shopify_client_id === null) {
+            $ws->shopify_client_secret = null;            // fully cleared → back to admin app
+        }
+        $ws->save();
+
+        return back()->with('success', $ws->fresh()->ownShopifyApp()
+            ? __('Your Shopify app is saved. Now enter your store domain and connect.')
+            : __('Your Shopify app keys were cleared. Shopify will use the platform app if the admin has configured one.'));
+    }
+
+    /**
+     * POST /shopify/{id}/widget — toggle the WaDesk chat widget on the store.
+     *
+     * ON  → register a storefront ScriptTag pointing at the selected widget's
+     *       self-injecting embed.js, so the launcher shows on every storefront
+     *       page and visitor chats land in the team inbox (AI can reply) exactly
+     *       like the normal widget.
+     * OFF → remove the ScriptTag.
+     * The ScriptTag id + state live on the integration's metadata.
+     */
+    public function saveWidget(Request $request, int $id): RedirectResponse
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        $integration = ShopifyIntegration::where('workspace_id', $wsId)->findOrFail($id);
+
+        $enable   = $request->boolean('widget_enabled');
+        $widgetId = (int) $request->input('widget_id', 0);
+        $meta     = $integration->metadata ?? [];
+
+        // Always clear any existing ScriptTag first (idempotent — a re-enable or
+        // a widget change replaces it cleanly).
+        $existingTag = (string) ($meta['widget_script_tag_id'] ?? '');
+        if ($existingTag !== '') {
+            $this->shopify->deleteScriptTag($integration, $existingTag);
+            $meta['widget_script_tag_id'] = null;
+        }
+
+        if (! $enable) {
+            $meta['widget_enabled'] = false;
+            $meta['widget_id'] = null;
+            $integration->update(['metadata' => $meta]);
+            return back()->with('success', __('Chat widget removed from your Shopify store.'));
+        }
+
+        $widget = \App\Models\ChatbotWidget::where('workspace_id', $wsId)
+            ->where('status', 'active')
+            ->when($widgetId > 0, fn ($q) => $q->where('id', $widgetId))
+            ->orderBy('id')
+            ->first();
+        if (! $widget) {
+            return back()->withErrors(['widget' => __('Create and activate a chat widget first (Chat Widget in the sidebar), then enable it here.')]);
+        }
+
+        $src = url('/widget/' . $widget->embed_token . '/embed.js');
+        $res = $this->shopify->registerScriptTag($integration, $src);
+        if (empty($res['ok'])) {
+            $why = ((int) ($res['status'] ?? 0) === 403 || (int) ($res['status'] ?? 0) === 401)
+                ? __('Reconnect your store first — it needs a new permission to place the widget. Disconnect and reconnect, then enable again.')
+                : (string) ($res['error'] ?? __('Shopify refused the request.'));
+            return back()->withErrors(['widget' => $why]);
+        }
+
+        $meta['widget_enabled']       = true;
+        $meta['widget_id']            = $widget->id;
+        $meta['widget_script_tag_id'] = (string) $res['id'];
+        $integration->update(['metadata' => $meta]);
+
+        return back()->with('success', __('Chat widget “:name” is now live on your Shopify store.', ['name' => $widget->name]));
     }
 
     /**
@@ -68,7 +175,7 @@ class ShopifyController extends Controller
         }
 
         if (!$this->shopify->isEnabled() || $this->shopify->clientId() === '') {
-            return back()->with('error', 'Shopify integration is not configured. Ask your admin to enable it.');
+            return back()->with('error', __('Add your Shopify app first — enter your API key and secret in the "Use your own Shopify app" panel, then connect your store.'));
         }
 
         $state = Str::random(40);
@@ -175,6 +282,12 @@ class ShopifyController extends Controller
      */
     public function sync(int $id): JsonResponse
     {
+        // Deploy proof — this MUST appear the instant "Sync now" is clicked. If
+        // you click Sync and this line is absent from the log, the updated
+        // controller is NOT running (PHP OPcache is serving the old file — reload
+        // php-fpm, or the file wasn't actually replaced on the server).
+        Log::info('[SHOPIFY] sync called', ['id' => $id, 'build' => 'sync-webhook-reregister-v1']);
+
         $integration = $this->ownedIntegration($id);
         if (!$integration) return response()->json(['ok' => false, 'message' => 'Not found.'], 404);
 
@@ -195,6 +308,26 @@ class ShopifyController extends Controller
             'status'           => 'active',
             'last_verified_at' => now(),
         ]);
+
+        // Re-register webhooks on every Sync. THIS is the fix for "automation
+        // never fires on real orders": if the store's webhook subscriptions were
+        // never created (connected before registration worked), or point at a
+        // stale secret URL after a reconnect, no order webhook ever reaches us —
+        // and no [Shopify-webhook] log appears because webhook() is never called.
+        // registerWebhooks re-adds the CURRENT-URL subscription for every topic
+        // (Shopify ignores an already-registered topic+address), so a Sync now
+        // repairs a broken subscription without a full disconnect/reconnect.
+        try {
+            $hooks = $this->shopify->registerWebhooks($integration);
+            Log::info('[SHOPIFY] webhooks ensured on sync', [
+                'integration' => $integration->id,
+                'store'       => $integration->store_url,
+                'registered'  => array_keys($hooks),
+                'count'       => count($hooks),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('[SHOPIFY] webhook re-register on sync failed', ['error' => $e->getMessage()]);
+        }
 
         // Pull products / orders / customers into our tables. Best-effort —
         // a partial failure still returns the shop refresh result.
@@ -256,7 +389,15 @@ class ShopifyController extends Controller
             $allowedTypes = array_merge(ShopifyService::WEBHOOK_TOPICS, ['cod/confirm', 'cod/prepaid', 'stock/back', 'order/delivered', 'cart/step2', 'cart/step3']);
             foreach ($data['events'] as $type => $row) {
                 if (!in_array($type, $allowedTypes, true)) continue;
-                $varMap = array_values(array_filter((array) ($row['var_map'] ?? []), fn ($v) => $v !== null && $v !== ''));
+                // Preserve POSITION — one entry per template placeholder, in
+                // order. array_filter() used to drop blank pickers and reindex,
+                // which shifted every later field up by one: the value chosen
+                // for {{4}} then landed on {{3}} (or vice-versa), so e.g. the
+                // Amount placeholder rendered the Order ID. Keep blanks as ''
+                // so slot i always maps to placeholder i; store null only when
+                // nothing at all was picked.
+                $rawMap = array_map(fn ($v) => (string) ($v ?? ''), array_values((array) ($row['var_map'] ?? [])));
+                $varMap = array_filter($rawMap, fn ($v) => $v !== '') ? $rawMap : null;
                 ShopifyIntegrationEvent::updateOrCreate(
                     ['integration_id' => $integration->id, 'event_type' => $type],
                     [
@@ -272,6 +413,97 @@ class ShopifyController extends Controller
         });
 
         return response()->json(['ok' => true]);
+    }
+
+    /**
+     * POST /shopify/{id}/test-order — fire a chosen automation with a DUMMY
+     * order so the merchant can confirm the WhatsApp template really lands on
+     * their own phone. It runs the EXACT same path a live Shopify webhook uses
+     * (dispatchEventMessage → resolveRecipient E.164 → CommerceEventNotifier),
+     * so a pass here proves the real automation works end-to-end. Two things
+     * are forced for the test only: the send goes to the tester's number
+     * (send_to = customer) and fires immediately (no delay).
+     */
+    public function testOrder(int $id, Request $request): JsonResponse
+    {
+        $integration = $this->ownedIntegration($id);
+        if (!$integration) return response()->json(['ok' => false, 'error' => 'Not found.'], 404);
+
+        $input = $request->validate([
+            'phone'      => 'required|string|max:32',
+            'event_type' => 'nullable|string|max:40',
+        ]);
+
+        $topic = $input['event_type'] ?: 'orders/create';
+
+        // The automation must be enabled + have a template, exactly like a live
+        // webhook — otherwise there is nothing to send. Point the merchant at
+        // the switch instead of silently doing nothing.
+        $event = ShopifyIntegrationEvent::where('integration_id', $integration->id)
+            ->where('event_type', $topic)->first();
+        if (!$event || !$event->is_active || !$event->template_id) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'Turn this automation on and pick a template first, then send a test.',
+            ], 422);
+        }
+
+        // A Shopify-shaped dummy order carrying the tester's number as the
+        // customer phone. resolveRecipient() will normalise it to E.164 (adding
+        // the dialing code) — the very step that makes real orders deliver.
+        $storeUrl = (string) ($integration->store_url ?? '');
+        $data = [
+            'id'                 => 'TEST-' . now()->timestamp,
+            'name'               => '#TEST' . random_int(1000, 9999),
+            'order_number'       => random_int(1000, 9999),
+            'currency'           => $integration->shop_currency ?: 'INR',
+            'total_price'        => '199.00',
+            'financial_status'   => 'paid',
+            'fulfillment_status' => null,
+            'email'              => 'test@example.com',
+            'customer'           => [
+                'first_name' => 'Test',
+                'last_name'  => 'Customer',
+                'phone'      => $input['phone'],
+                'email'      => 'test@example.com',
+            ],
+            'phone'              => $input['phone'],
+            'order_status_url'   => ($storeUrl ? rtrim($storeUrl, '/') : '') . '/account/orders',
+        ];
+
+        $recipient = $this->resolveRecipient($data, $this->storeCountryIso($integration));
+
+        $log = ShopifyIntegrationLog::create([
+            'integration_id' => $integration->id,
+            'event_type'     => 'test/' . $topic,
+            'status'         => 'processed',
+            'recipient'      => $recipient,
+            'payload'        => $data,
+            'created_at'     => now(),
+        ]);
+
+        // Same send method the real webhook uses — only send_to (to the tester)
+        // and delay (immediate) are overridden on a throwaway copy of the event.
+        $testEvent = $event->replicate();
+        $testEvent->send_to = 'customer';
+        $testEvent->delay_seconds = 0;
+
+        try {
+            $this->dispatchEventMessage($integration, $testEvent, $data, $log);
+        } catch (\Throwable $e) {
+            Log::warning('[Shopify-test-order] dispatch crashed: ' . $e->getMessage());
+            $log->update(['status' => 'failed', 'error' => $e->getMessage()]);
+        }
+
+        $log->refresh();
+        $ok = in_array($log->status, ['sent', 'scheduled'], true);
+
+        return response()->json([
+            'ok'        => $ok,
+            'status'    => $log->status,
+            'recipient' => $recipient,
+            'error'     => $log->error,
+        ]);
     }
 
     /**
@@ -398,6 +630,7 @@ class ShopifyController extends Controller
             if ($digits === '' || in_array($digits, $optedOut, true)) { continue; }
             $ctx = [
                 'name' => 'there', 'coupon_code' => (string) ($data['coupon_code'] ?? ''),
+                'coupon' => (string) ($data['coupon_code'] ?? ''),
                 'store_name' => (string) ($integration->store_name ?: $integration->store_url),
                 '_positional' => ['there', $integration->store_name ?: $integration->store_url, $data['coupon_code'] ?? ''],
             ];
@@ -435,6 +668,7 @@ class ShopifyController extends Controller
             'price'        => $priceFmt,
             'product_url'  => $product?->product_url ?? '',
             'coupon_code'  => (string) ($coupon ?? ''),
+            'coupon'       => (string) ($coupon ?? ''),   // alias — templates use either {{coupon_code}} or {{coupon}}
             'store_name'   => (string) ($integration->store_name ?: $integration->store_url),
             'currency'     => $currency,
             '_positional'  => [$name, $product?->name ?? '', $coupon ?: $priceFmt],
@@ -451,16 +685,44 @@ class ShopifyController extends Controller
      */
     public function webhook(string $secret, Request $request): Response
     {
+        $topicHdr = (string) $request->header('X-Shopify-Topic', '');
+        $shopHdr  = (string) $request->header('X-Shopify-Shop-Domain', '');
+
         $integration = ShopifyIntegration::where('webhook_secret', $secret)->first();
-        if (!$integration) return response('not found', 404);
+        if (!$integration) {
+            // A real order fired a webhook but we have no store for this secret
+            // — usually the store was reconnected (new secret) and Shopify still
+            // holds an OLD webhook subscription, or the URL is stale. Invisible
+            // until now; log it so "orders don't trigger" is diagnosable.
+            Log::warning('[Shopify-webhook] no integration for secret', [
+                'topic' => $topicHdr, 'shop' => $shopHdr, 'secret_tail' => substr($secret, -6),
+            ]);
+            return response('not found', 404);
+        }
 
         $payload = $request->getContent();
         $hmac    = (string) $request->header('X-Shopify-Hmac-SHA256', '');
-        if (!$this->shopify->verifyWebhookSignature($payload, $hmac)) {
+        // Bind this store's workspace so a store connected through its OWN
+        // Shopify app is verified with that app's secret (no session here).
+        $svc = $this->shopify->forWorkspace($integration->workspace_id);
+        if (!$svc->verifyWebhookSignature($payload, $hmac)) {
+            // HMAC mismatch = Shopify's signing secret ≠ the app secret we verify
+            // with. `secret_configured:false` means NO Shopify client secret is
+            // set at all (Admin → Settings → the Shopify app) — then EVERY real
+            // order fails here and Shopify eventually deletes the webhook. Shopify
+            // retries a few times then gives up, so the merchant sees "nothing".
+            Log::warning('[Shopify-webhook] HMAC verification FAILED — rejecting', [
+                'workspace'        => $integration->workspace_id,
+                'topic'            => $topicHdr,
+                'shop'             => $shopHdr,
+                'hmac_present'     => $hmac !== '',
+                'secret_configured'=> $svc->hasWebhookSecret(),
+                'body_len'         => strlen($payload),
+            ]);
             return response('bad hmac', 401);
         }
 
-        $topic = (string) $request->header('X-Shopify-Topic', '');
+        $topic = $topicHdr;
         $data  = json_decode($payload, true) ?: [];
 
         $event = ShopifyIntegrationEvent::where('integration_id', $integration->id)
@@ -469,11 +731,26 @@ class ShopifyController extends Controller
 
         $shouldSend = $event && $event->is_active && $event->template_id;
 
+        // Full receipt trail: proves the webhook ARRIVED + verified, and shows
+        // exactly why it will or won't send. "no event" / "inactive" / "no
+        // template" here means the automation is not set up for this topic —
+        // not that delivery is broken.
+        Log::info('[Shopify-webhook] received', [
+            'workspace'    => $integration->workspace_id,
+            'integration'  => $integration->id,
+            'topic'        => $topic,
+            'shop'         => $shopHdr,
+            'event_found'  => (bool) $event,
+            'is_active'    => (bool) ($event->is_active ?? false),
+            'template_id'  => $event->template_id ?? null,
+            'will_send'    => $shouldSend,
+        ]);
+
         $log = ShopifyIntegrationLog::create([
             'integration_id' => $integration->id,
             'event_type'     => $topic,
             'status'         => $shouldSend ? 'processed' : 'skipped',
-            'recipient'      => $this->resolveRecipient($data),
+            'recipient'      => $this->resolveRecipient($data, $this->storeCountryIso($integration)),
             'payload'        => $data,
             'created_at'     => now(),
         ]);
@@ -539,7 +816,7 @@ class ShopifyController extends Controller
                 $prepaid = ShopifyIntegrationEvent::where('integration_id', $integration->id)
                     ->where('event_type', 'cod/prepaid')->where('is_active', true)->first();
                 if ($prepaid && $prepaid->template_id) {
-                    $this->sendPseudoEvent($integration, $prepaid, $this->resolveRecipient($data), $this->orderContext($integration, $data), 'cod/prepaid');
+                    $this->sendPseudoEvent($integration, $prepaid, $this->resolveRecipient($data, $this->storeCountryIso($integration)), $this->orderContext($integration, $data), 'cod/prepaid');
                 }
             } catch (\Throwable $e) {
                 \Log::warning('[Shopify-webhook] COD confirm/prepaid failed (swallowed): ' . $e->getMessage());
@@ -632,6 +909,16 @@ class ShopifyController extends Controller
         $payload = $request->getContent();
         $hmac    = (string) $request->header('X-Shopify-Hmac-SHA256', '');
 
+        // Bind the store's workspace (from the shop-domain header) so a store on
+        // its OWN Shopify app is verified with that app's secret. The domain
+        // header is trusted only to pick a candidate secret — the HMAC below is
+        // still what authenticates the request. Unknown shop → global secret.
+        $shopHeader = (string) $request->header('X-Shopify-Shop-Domain', '');
+        if ($shopHeader !== '') {
+            $wsId = ShopifyIntegration::where('store_url', $shopHeader)->value('workspace_id');
+            if ($wsId) $this->shopify->forWorkspace((int) $wsId);
+        }
+
         // Fail-closed: missing/invalid signature → 401 BEFORE any parsing.
         if (!$this->shopify->verifyWebhookSignature($payload, $hmac)) {
             return response('bad hmac', 401);
@@ -699,13 +986,129 @@ class ShopifyController extends Controller
         return ShopifyIntegration::where('workspace_id', $wsId)->find($id);
     }
 
-    private function resolveRecipient(array $data): ?string
+    /**
+     * The ordered placeholders in a template body — positional ({{1}}) and
+     * named ({{City}}, {{Order ID}}) alike — as [{raw, key, numeric}]. Uses
+     * the same token regex the campaign builder uses, so every variable a
+     * merchant can map is discovered (not just numeric ones).
+     *
+     * @return array<int, array{raw:string,key:string,numeric:bool}>
+     */
+    private function templateTokens(?string $body): array
     {
-        return $data['customer']['phone']
+        $body = (string) $body;
+        if ($body === '') return [];
+        if (!preg_match_all(\App\Services\TemplateOverrideResolver::TOKEN_RE, $body, $m)) return [];
+        $out = [];
+        foreach ($m[1] as $raw) {
+            $raw = trim((string) $raw);
+            if ($raw === '') continue;
+            $out[] = [
+                'raw'     => $raw,
+                'key'     => \App\Services\TemplateOverrideResolver::normalizeKey($raw),
+                'numeric' => ctype_digit($raw),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Apply a per-event var_map (ordered order-field keys, one per template
+     * placeholder) onto the message context. Positional {{n}} params are fed
+     * through $ctx['_positional']; NAMED tokens ({{City}}) are additionally
+     * written under their own key so CommerceEventNotifier::renderBody (which
+     * matches by name, case-insensitively) fills them too. No var_map → ctx
+     * is returned unchanged (the default positional order still applies).
+     */
+    private function applyVarMap(array $ctx, WaTemplate $tpl, ShopifyIntegrationEvent $event): array
+    {
+        if (!is_array($event->var_map) || !$event->var_map) return $ctx;
+
+        // The var_map is aligned to the template's placeholders IN ORDER (one
+        // entry per picker). Resolve each token to its own field, and place a
+        // NUMERIC token's value at its numeric slot ({{4}} → _positional[3]),
+        // NOT at its appearance index — so a named token, an out-of-order
+        // {{2}}/{{1}}, or a duplicate placeholder can't shift the amount onto
+        // the order-id slot. Named tokens ({{City}}) are written under their key
+        // for CommerceEventNotifier::renderBody's by-name match.
+        $map        = array_values($event->var_map);
+        $tokens     = array_values($this->templateTokens($tpl->template_body ?? ''));
+        $positional = [];
+        foreach ($tokens as $i => $tok) {
+            $field = $map[$i] ?? '';
+            $value = $field !== '' ? (string) ($ctx[$field] ?? '') : '';
+            if (!empty($tok['numeric'])) {
+                $positional[(int) $tok['raw'] - 1] = $value;
+            } elseif (($tok['key'] ?? '') !== '') {
+                $ctx[$tok['key']] = $value;
+            }
+        }
+        if ($positional) {
+            // Fill gaps so the consumer sees a contiguous 0..max array.
+            $max = max(array_keys($positional));
+            for ($j = 0; $j <= $max; $j++) {
+                if (!array_key_exists($j, $positional)) $positional[$j] = '';
+            }
+            ksort($positional);
+            $ctx['_positional'] = array_values($positional);
+        }
+        return $ctx;
+    }
+
+    private function resolveRecipient(array $data, ?string $fallbackIso = null): ?string
+    {
+        // Shopify stores whatever the customer typed — often a LOCAL number with
+        // no country code ("9876543210"). Sending that to WhatsApp targets a
+        // non-existent international address, so the message "fires" but silently
+        // never delivers (the #1 reason a Shopify automation "doesn't work").
+        // Normalise to E.164 using the order's country (ISO-2) — same shared
+        // helper WooCommerce uses — prepending the dialing code when needed.
+        $rawPhone = $data['customer']['phone']
             ?? $data['phone']
-            ?? $data['shipping_address']['phone']
-            ?? $data['billing_address']['phone']
+            ?? ($data['shipping_address']['phone'] ?? null)
+            ?? ($data['billing_address']['phone'] ?? null)
             ?? null;
+
+        // Order country first; then the store's own country (an Indian store's
+        // customers are Indian), then the platform default. Without this a local
+        // number on an order that omitted country_code stayed un-prefixed and
+        // never reached a new customer.
+        $iso = ($data['shipping_address']['country_code'] ?? null)
+            ?? ($data['billing_address']['country_code'] ?? null)
+            ?? ($data['customer']['default_address']['country_code'] ?? null)
+            ?? $fallbackIso;
+
+        $normalized = \App\Support\Woo\WooPhone::e164($rawPhone, $iso);
+
+        \Log::info('[SHOPIFY-AUTO] recipient resolved', [
+            'raw'         => $rawPhone,
+            'country_iso' => $iso,
+            'fallback'    => $fallbackIso,
+            'normalized'  => $normalized,
+            'changed'     => $normalized !== preg_replace('/\D+/', '', (string) $rawPhone),
+        ]);
+
+        return $normalized;
+    }
+
+    /**
+     * Best ISO-3166 alpha-2 for a store's customers when an order omits the
+     * country: the store's own country (Shopify gives us its NAME, e.g.
+     * "India"), else the platform default_country_iso (falls back to 'in').
+     */
+    private function storeCountryIso(ShopifyIntegration $integration): ?string
+    {
+        $name = trim((string) ($integration->shop_country ?? ''));
+        if ($name !== '') {
+            foreach ((array) config('countries', []) as $c) {
+                $label = preg_replace('/\s*\(\+.*$/', '', (string) ($c['label'] ?? ''));
+                if (strcasecmp(trim((string) $label), $name) === 0) {
+                    return strtoupper((string) ($c['iso'] ?? ''));
+                }
+            }
+        }
+        $def = strtoupper(trim((string) \App\Models\SystemSetting::get('default_country_iso', 'in')));
+        return $def !== '' ? $def : null;
     }
 
     /**
@@ -731,17 +1134,16 @@ class ShopifyController extends Controller
         $ctx       = $this->orderContext($integration, $data);
 
         // Per-event variable mapping wins over the positional default:
-        // var_map is an ordered list of order fields → {{1}}/{{2}}/… params.
-        if (is_array($event->var_map) && $event->var_map) {
-            $ctx['_positional'] = array_map(fn ($field) => (string) ($ctx[$field] ?? ''), $event->var_map);
-        }
+        // var_map is an ordered list of order fields → each template
+        // placeholder (positional {{1}} and named {{City}} alike).
+        $ctx = $this->applyVarMap($ctx, $tpl, $event);
 
         $sendTo     = $event->send_to ?: 'customer';
         $notifier  = app(\App\Services\Commerce\CommerceEventNotifier::class);
 
         $targets = [];
         if (in_array($sendTo, ['customer', 'both'], true)) {
-            $customer = $this->resolveRecipient($data);
+            $customer = $this->resolveRecipient($data, $this->storeCountryIso($integration));
             if ($customer) $targets['customer'] = $customer;
         }
         if (in_array($sendTo, ['admin', 'both'], true) && $event->admin_number) {
@@ -750,6 +1152,22 @@ class ShopifyController extends Controller
 
         if (empty($targets)) {
             $log->update(['status' => 'failed', 'error' => 'No recipient — order has no customer phone' . ($sendTo === 'admin' ? '' : ' and no admin number set') . '.']);
+            return;
+        }
+
+        // DELAYED send: honour the event's delay_seconds by dispatching each send
+        // as a delayed job (needs Advanced Scaling / a queue worker — see Scaling).
+        // With the default sync connection the delay is ignored and it sends now,
+        // which is exactly the previous immediate behaviour, so this is additive.
+        $delay = (int) ($event->delay_seconds ?? 0);
+        if ($delay > 0 && \App\Support\Scaling::enabled()) {
+            foreach ($targets as $number) {
+                \App\Jobs\SendCommerceEventJob::dispatch($integration->workspace_id, $integration->user_id, (string) $number, (int) $tpl->id, $ctx)
+                    ->onConnection(\App\Support\Scaling::queueConnection())
+                    ->onQueue('bulk')
+                    ->delay(now()->addSeconds($delay));
+            }
+            $log->update(['status' => 'scheduled', 'recipient' => implode(', ', array_values($targets)), 'error' => null]);
             return;
         }
 
@@ -792,9 +1210,7 @@ class ShopifyController extends Controller
         if ($phone === '') return;
         $tpl = WaTemplate::where('workspace_id', $integration->workspace_id)->find($event->template_id);
         if (!$tpl) return;
-        if (is_array($event->var_map) && $event->var_map) {
-            $ctx['_positional'] = array_map(fn ($f) => (string) ($ctx[$f] ?? ''), $event->var_map);
-        }
+        $ctx = $this->applyVarMap($ctx, $tpl, $event);
         $r = app(\App\Services\Commerce\CommerceEventNotifier::class)
             ->notify($integration->workspace_id, $integration->user_id, $phone, $tpl, $ctx);
         ShopifyIntegrationLog::create([
@@ -851,73 +1267,84 @@ class ShopifyController extends Controller
 
     private function dashboardData(ShopifyIntegration $integration): array
     {
-        // DB-driven — everything is served from our own mirrored tables
-        // (populated by ShopifyImporter on connect / sync / webhook), so the
-        // page is fast and works offline of the live API. Shopify API shapes
-        // are reproduced so the existing tab markup keeps working unchanged.
+        // LIVE — store figures come straight from the Shopify Admin API, not
+        // from our mirrored tables. The mirror only ever held a snapshot from
+        // the last successful sync, so a store whose token had been revoked
+        // still rendered a healthy-looking dashboard built on stale numbers.
+        // Reading live means a broken connection shows as broken.
+        //
+        // Only store data moves; webhook logs, event mappings, templates,
+        // segments and coupons stay on our side because they ARE ours.
         $wsId = $integration->workspace_id;
 
-        $productModels = \App\Models\WaProduct::where('workspace_id', $wsId)
-            ->orderByDesc('id')->limit(120)->get();
+        $liveProducts  = $this->shopify->getProducts($integration, 120);
+        $liveOrders    = $this->shopify->getOrders($integration, 250);
+        $liveCustomers = $this->shopify->getCustomers($integration, 50);
+        $counts        = $this->shopify->getStoreCounts($integration);
 
-        $mapProduct = function ($p) {
-            $price   = $p->price_minor / 100;
-            $compare = $p->compare_price_minor ? $p->compare_price_minor / 100 : null;
+        // First failure across those calls, translated into a cause + fix the
+        // merchant can act on. Null when Shopify answered everything.
+        $apiError      = $this->shopify->lastError();
+        $shopifyError  = $apiError ? ShopifyService::diagnose($apiError) : null;
+
+        // A store that cannot be read has no trustworthy figures. Zero them so
+        // the page never presents last-known numbers as if they were current.
+        if ($shopifyError) {
+            $counts = ['products' => 0, 'orders' => 0, 'customers' => 0];
+            $integration->update(['status' => 'error']);
+        }
+
+        $storeHost = $integration->store_url;
+
+        $productModels = collect($liveProducts);
+
+        // Flatten a live Shopify product into the flat shape the tab markup
+        // reads. Shopify nests price on the first variant and the image under
+        // images[]/image, so both are lifted here rather than in Blade.
+        $mapProduct = function (array $p) use ($storeHost) {
+            $variant = $p['variants'][0] ?? [];
+            $price   = (float) ($variant['price'] ?? 0);
+            $compare = isset($variant['compare_at_price']) && $variant['compare_at_price'] !== null
+                ? (float) $variant['compare_at_price']
+                : null;
             $off     = ($compare && $compare > $price) ? (int) round((1 - $price / $compare) * 100) : 0;
+            $img     = $p['images'][0]['src'] ?? ($p['image']['src'] ?? null);
+
             return [
-                'id'            => $p->id,
-                'title'         => $p->name,
-                'handle'        => $p->slug,
-                'vendor'        => $p->brand,
-                'product_type'  => $p->category,
-                'status'        => $p->status,
-                'images'        => $p->image_url ? [['src' => $p->image_url]] : [],
-                'image_url'     => $p->image_url,
-                'product_url'   => $p->product_url,
+                'id'            => $p['id'] ?? null,
+                'title'         => $p['title'] ?? '',
+                'handle'        => $p['handle'] ?? '',
+                'vendor'        => $p['vendor'] ?? '',
+                'product_type'  => $p['product_type'] ?? '',
+                'status'        => $p['status'] ?? '',
+                'images'        => $p['images'] ?? [],
+                'image_url'     => $img,
+                'product_url'   => ($p['handle'] ?? '') !== '' ? 'https://' . $storeHost . '/products/' . $p['handle'] : '',
                 'price'         => $price,
                 'compare_price' => $compare,
                 'discount_pct'  => $off,
-                'in_stock'      => (bool) $p->in_stock,
-                'variants'      => [['price' => number_format($price, 2, '.', ''), 'compare_at_price' => $compare ? number_format($compare, 2, '.', '') : null]],
+                'in_stock'      => ($p['status'] ?? '') === 'active',
+                'variants'      => $p['variants'] ?? [],
+                'created_at'    => $p['created_at'] ?? null,
             ];
         };
 
-        $products    = $productModels->map($mapProduct)->values()->all();
-        $offers      = $productModels->filter(fn ($p) => $p->compare_price_minor > $p->price_minor)->map($mapProduct)->values()->take(8)->all();
-        $newArrivals = $productModels->take(8)->map($mapProduct)->values()->all();
-        $popular     = $productModels->sortByDesc('price_minor')->map($mapProduct)->values()->take(8)->all();
+        $mapped      = $productModels->map($mapProduct)->values();
+        $products    = $mapped->all();
+        $offers      = $mapped->filter(fn ($p) => $p['discount_pct'] > 0)->values()->take(8)->all();
+        $newArrivals = $mapped->sortByDesc('created_at')->values()->take(8)->all();
+        $popular     = $mapped->sortByDesc('price')->values()->take(8)->all();
 
-        $orderModels = \App\Models\WaOrder::where('workspace_id', $wsId)
-            ->orderByDesc('id')->limit(20)->get();
-        $orders = $orderModels->map(fn ($o) => [
-            'name'               => $o->meta_json['name'] ?? ('#' . $o->id),
-            'order_number'       => $o->meta_json['order_number'] ?? $o->id,
-            'customer'           => ['first_name' => $o->customer_name, 'last_name' => ''],
-            'email'              => $o->customer_email,
-            'phone'              => $o->customer_phone,
-            'total_price'        => number_format($o->total_minor / 100, 2, '.', ''),
-            'currency'           => $o->currency_code,
-            'financial_status'   => $o->meta_json['financial_status'] ?? $o->status,
-            'fulfillment_status' => $o->meta_json['fulfillment_status'] ?? null,
-            'created_at'         => $o->created_at,
-        ])->all();
+        // Live orders already arrive in the shape the tabs read. The full pull
+        // (up to 250) feeds the analytics trend below; the tables show the
+        // newest 20, which is what they showed before.
+        $allOrders = collect($liveOrders)
+            ->sortByDesc(fn ($o) => strtotime((string) ($o['created_at'] ?? '')))
+            ->values();
+        $orders = $allOrders->take(20)->all();
 
-        $customerModels = \App\Models\Contact::where('workspace_id', $wsId)
-            ->orderByDesc('id')->limit(50)->get();
-        $customers = $customerModels->map(fn ($c) => [
-            'first_name'   => $c->first_name ?: $c->name,
-            'last_name'    => $c->last_name,
-            'email'        => $c->email,
-            'phone'        => $c->mobile,
-            'orders_count' => (int) (is_array($c->custom_attributes) ? ($c->custom_attributes['orders_count'] ?? 0) : 0),
-            'total_spent'  => (float) (is_array($c->custom_attributes) ? ($c->custom_attributes['total_spent'] ?? 0) : 0),
-        ])->all();
-
-        $counts = [
-            'products'  => \App\Models\WaProduct::where('workspace_id', $wsId)->count(),
-            'orders'    => \App\Models\WaOrder::where('workspace_id', $wsId)->count(),
-            'customers' => $customerModels->count(),
-        ];
+        // Live customers already match the customers table's field names.
+        $customers = collect($liveCustomers)->values()->all();
 
         $logs = ShopifyIntegrationLog::where('integration_id', $integration->id);
         $logTotal     = (clone $logs)->count();
@@ -949,30 +1376,33 @@ class ShopifyController extends Controller
             ->orderBy('template_name')
             ->get(['id', 'template_name', 'category', 'language', 'template_body', 'channel', 'provider_config_id', 'meta_template_id', 'twilio_content_sid']);
 
-        // For the per-event variable-mapping UI: how many positional
-        // {{1}}/{{2}}/… params each template's body declares. 0 = the
-        // template uses only named tokens (no mapping needed).
-        $templateParamCounts = $templates->mapWithKeys(function ($t) {
-            $max = 0;
-            if (preg_match_all('/\{\{\s*(\d+)\s*\}\}/', (string) $t->template_body, $m)) {
-                foreach ($m[1] as $n) $max = max($max, (int) $n);
-            }
-            return [$t->id => $max];
-        })->toArray();
+        // For the per-event variable-mapping UI. The ordered list of EVERY
+        // placeholder each template body declares — positional ({{1}}) AND
+        // named ({{City}}, {{Order ID}}) — so the merchant can link an order
+        // field (customer name, price/amount, order number …) to each one.
+        // Named tokens were previously invisible here (the count only looked
+        // for {{digits}}), so those templates showed no mapping option at all.
+        $templateTokens = $templates->mapWithKeys(
+            fn ($t) => [$t->id => $this->templateTokens($t->template_body)]
+        )->toArray();
+        // Kept for anything still reading a bare count (= number of tokens).
+        $templateParamCounts = collect($templateTokens)
+            ->map(fn ($toks) => count($toks))->toArray();
 
-        // ---- Analytics (all DB-driven) ----
-        $revenueTotal = (int) \App\Models\WaOrder::where('workspace_id', $wsId)->sum('total_minor');
+        // ---- Analytics ----
+        // Revenue and the trend come from the live order pull; message and
+        // offer counts stay ours, because we are the ones who sent them.
+        $revenueTotal = (int) round($allOrders->sum(fn ($o) => (float) ($o['total_price'] ?? 0)) * 100);
         $ordersTotal  = $counts['orders'];
         $messagesSent = ShopifyIntegrationLog::where('integration_id', $integration->id)->where('status', 'sent')->count();
         $offersSent   = ShopifyIntegrationLog::where('integration_id', $integration->id)->where('event_type', 'offer/broadcast')->count();
 
-        // 14-day revenue trend from wa_orders.
+        // 14-day revenue trend from the live orders.
         $since = now()->subDays(13)->startOfDay();
-        $byDay = \App\Models\WaOrder::where('workspace_id', $wsId)
-            ->where('created_at', '>=', $since)
-            ->get(['total_minor', 'created_at'])
-            ->groupBy(fn ($o) => $o->created_at->format('Y-m-d'))
-            ->map(fn ($g) => $g->sum('total_minor') / 100);
+        $byDay = $allOrders
+            ->filter(fn ($o) => ($ts = strtotime((string) ($o['created_at'] ?? ''))) && $ts >= $since->getTimestamp())
+            ->groupBy(fn ($o) => date('Y-m-d', strtotime((string) $o['created_at'])))
+            ->map(fn ($g) => collect($g)->sum(fn ($o) => (float) ($o['total_price'] ?? 0)));
         $trend = [];
         for ($d = 0; $d < 14; $d++) {
             $key = now()->subDays(13 - $d)->format('Y-m-d');
@@ -1003,14 +1433,19 @@ class ShopifyController extends Controller
             'recovery_sends'=> $recoverySends,
         ];
 
-        // Offer-composer pickers: contact groups (segments) + active coupons.
+        // Offer-composer pickers: contact groups (segments) + this workspace's
+        // OWN store coupons. Must be WaCoupon (workspace-scoped), NOT the admin
+        // billing Coupon model — that has no workspace_id and would leak the
+        // platform's subscription promo codes into every merchant's UI.
         $contactGroups = \App\Models\ContactGroup::where('workspace_id', $wsId)->get(['id', 'user_group', 'color']);
-        $coupons = \App\Models\Coupon::where('is_active', true)->orderBy('code')->limit(100)->get(['id', 'code', 'type', 'amount']);
+        $coupons = \App\Models\WaCoupon::where('workspace_id', $wsId)->where('active', true)
+            ->orderBy('code')->limit(100)->get(['id', 'code', 'type', 'amount']);
 
         $revenue30d = collect($orders)->sum(fn ($o) => (float) ($o['total_price'] ?? 0));
         $currency   = $integration->shop_currency ?: ($orders[0]['currency'] ?? 'USD');
 
         return [
+            'shopifyError'  => $shopifyError,
             'analytics'     => $analytics,
             'contactGroups' => $contactGroups,
             'coupons'       => $coupons,
@@ -1029,8 +1464,14 @@ class ShopifyController extends Controller
             'popular'       => $popular,
             'templates'           => $templates,
             'templateParamCounts' => $templateParamCounts,
+            'templateTokens'      => $templateTokens,
             'revenue30d'    => $revenue30d,
             'currency'      => $currency,
+            // Chat-widget-on-storefront toggle state + the workspace's widgets.
+            'chatWidgets'      => \App\Models\ChatbotWidget::where('workspace_id', $integration->workspace_id)
+                                    ->where('status', 'active')->orderBy('name')->get(['id', 'name', 'embed_token']),
+            'widgetEnabled'    => (bool) ($integration->metadata['widget_enabled'] ?? false),
+            'widgetId'         => (int) ($integration->metadata['widget_id'] ?? 0),
         ];
     }
 

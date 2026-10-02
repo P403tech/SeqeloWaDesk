@@ -15,9 +15,16 @@ use Throwable;
  * webhook, anywhere — the WaProduct model observer (see WaProduct::booted)
  * calls pushOne() and the delta lands on Meta immediately.
  *
- * Meta's items_batch `CREATE` verb is an upsert keyed on retailer_id, so
- * the same call that first creates a product also updates it — no separate
- * UPDATE path needed.
+ * Meta's items_batch UPSERT verb is `UPDATE`, keyed on retailer_id: it creates
+ * the item when the id is new and updates it when it already exists, so one
+ * call covers both and no separate CREATE path is needed.
+ *
+ * This comment previously claimed CREATE was the upsert. It is not -- CREATE
+ * only inserts. Because the provider sent CREATE, a product synced fine the
+ * first time and then every later edit was silently discarded by Meta, which
+ * made catalog sync look one-way (Commerce Manager -> app worked, app ->
+ * Commerce Manager did nothing) and left rows sitting on "pending". Do not
+ * change this back to CREATE.
  *
  * Two safety rails:
  *   • Every push is wrapped so a Meta hiccup can NEVER break the product

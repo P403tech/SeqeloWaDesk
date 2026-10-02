@@ -140,6 +140,145 @@ class FacebookIngestService
                 'kind'       => 'comment',
             ]),
         ]);
+
+        // Comment auto-reply — the piece FB was missing (comments used to be
+        // inbox-only). Match facebook_comment_rules → public reply + DM + flow.
+        // Only reached for LIVE webhook comments (backfill uses a separate path),
+        // and only after the dedup check above, so it can't double-fire.
+        self::fireFbCommentAutoReplies($page, $commentId, $postId, $fromId, $body);
+        // Flow-first path: any FB flow whose trigger is "comment → DM" (built in
+        // the flow editor) fires here when its keyword matches the comment.
+        self::launchCommentTriggeredFlows($page, $commentId, $fromId, $body);
+    }
+
+    /**
+     * Launch every Facebook flow whose trigger is "comment → DM" (comment_to_dm)
+     * when its keyword matches this comment. Blank keyword = fire on any comment.
+     * The flow is bound to the page via trigger_device_id (null/0 = any page). It
+     * receives the comment_id so an fb_reply_comment node can post a public reply.
+     */
+    private static function launchCommentTriggeredFlows(FacebookPage $page, string $commentId, string $fromId, string $text): void
+    {
+        try {
+            // Match comment flows bound to THIS page, "any page" (null/0), or a
+            // page row deleted by a reconnect (orphaned) — never a different LIVE
+            // page. Mirrors resolveFbKeywordFlow (the (workspace,page_id) unique
+            // index rules out live sibling rows).
+            $livePageIds = \App\Models\FacebookPage::where('workspace_id', (int) $page->workspace_id)
+                ->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+            $flows = \App\Models\Flow::query()
+                ->where('workspace_id', (int) $page->workspace_id)
+                ->where('flow_type', 'facebook')
+                ->where('trigger_kind', 'comment_to_dm')
+                ->where('is_active', true)
+                ->where('is_published', true)
+                ->where(function ($q) use ($page, $livePageIds) {
+                    $q->where('trigger_device_id', $page->id)
+                        ->orWhereNull('trigger_device_id')
+                        ->orWhere('trigger_device_id', 0);
+                    if (! empty($livePageIds)) {
+                        $q->orWhereNotIn('trigger_device_id', $livePageIds);
+                    } else {
+                        $q->orWhereNotNull('trigger_device_id');
+                    }
+                })
+                ->get();
+            if ($flows->isEmpty()) return;
+
+            $lc = mb_strtolower(trim($text));
+            foreach ($flows as $flow) {
+                $kw = trim((string) ($flow->trigger_keywords ?? ''));
+                if ($kw !== '') {
+                    $terms = array_filter(array_map('trim', explode(',', mb_strtolower($kw))));
+                    $hit = false;
+                    foreach ($terms as $t) { if ($t !== '' && str_contains($lc, $t)) { $hit = true; break; } }
+                    if (! $hit) continue;
+                }
+                \App\Services\Facebook\FbFlowBridge::handoff(
+                    $page, $fromId, $text, $flow->decoded_flow_data, $flow->id,
+                    ['comment_id' => $commentId], $commentId,
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[FB-COMMENT-FLOW] launch failed: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Facebook comment auto-reply — the counterpart of the Instagram
+     * comment→DM engine. On a new Page comment, match facebook_comment_rules
+     * (workspace + page, active, post-scoped or any) and, on the FIRST match,
+     * post a PUBLIC reply, send a private reply / DM to the commenter, and/or
+     * launch a Facebook flow. First-match-wins so one comment never earns two
+     * public replies / two DMs. Every send is isolated so one failure never
+     * blocks the others or the ingest.
+     */
+    private static function fireFbCommentAutoReplies(FacebookPage $page, string $commentId, string $postId, string $fromId, string $text): void
+    {
+        try {
+            if ($commentId === '') return;
+            $ws = \App\Models\Workspace::find((int) $page->workspace_id);
+            if (! $ws || ! \App\Services\PlanLimitGuard::hasFeature($ws, 'access_facebook')) return;
+
+            $rules = \App\Models\FacebookCommentRule::query()
+                ->where('workspace_id', (int) $page->workspace_id)
+                ->where('fb_page_id', (int) $page->id)
+                ->where('is_active', true)
+                ->where(fn ($q) => $q->whereNull('post_id')->orWhere('post_id', '')->orWhere('post_id', $postId))
+                ->orderBy('id')
+                ->get();
+            if ($rules->isEmpty()) return;
+
+            $client = new FacebookPageClient($page);
+            foreach ($rules as $rule) {
+                if (! $rule->matches($text)) continue;
+
+                if (! empty($rule->public_reply)) {
+                    try { $client->replyComment($commentId, (string) $rule->public_reply); }
+                    catch (\Throwable $e) { Log::warning('[FB-COMMENT-RULE] public reply failed: '.$e->getMessage()); }
+                }
+                if (! empty($rule->dm_text)) {
+                    try { $client->privateReply($commentId, (string) $rule->dm_text); }
+                    catch (\Throwable $e) { Log::warning('[FB-COMMENT-RULE] private reply failed: '.$e->getMessage()); }
+                }
+                if (! empty($rule->dm_flow_id)) {
+                    self::launchCommentFlow($page, $fromId, (int) $rule->dm_flow_id, $commentId, $text);
+                }
+                try { $rule->increment('matched_count'); } catch (\Throwable $e) {}
+
+                break; // first-match-wins
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[FB-COMMENT-RULE] fire failed: '.$e->getMessage());
+        }
+    }
+
+    /** Launch a Facebook comment→DM flow via the Node FB engine (best-effort). */
+    private static function launchCommentFlow(FacebookPage $page, string $fromId, int $flowId, string $commentId, string $text): void
+    {
+        try {
+            $flow = \App\Models\Flow::query()
+                ->whereKey($flowId)
+                ->where('workspace_id', (int) $page->workspace_id)
+                ->where('flow_type', 'facebook')
+                ->where('is_active', true)
+                ->where('is_published', true)
+                ->first();
+            if (! $flow) return;
+
+            \App\Services\Facebook\FbFlowBridge::handoff(
+                $page,
+                $fromId,
+                $text,
+                $flow->decoded_flow_data,
+                $flow->id,
+                ['comment_id' => $commentId],
+                $commentId,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('[FB-COMMENT-RULE] flow launch failed: '.$e->getMessage());
+        }
     }
 
     /** Has this exact Meta id (mid / comment_id) already been ingested here? */
@@ -171,8 +310,24 @@ class FacebookIngestService
     {
         $wsId = (int) $page->workspace_id;
 
+        // Serialize concurrent webhook deliveries for the SAME thread. Meta
+        // redelivers events at-least-once; two landing together both passed the
+        // dedup + firstOrCreate below and created DUPLICATE conversations /
+        // messages (the "duplicated messages" bug). A short per-thread lock
+        // collapses that race — the second delivery then sees alreadyStored()
+        // and skips. Released the moment the row is written (before the slower
+        // automation below) or on the dedup early-return; a held lock also
+        // auto-expires via its TTL, so an exception can never wedge a thread.
+        $lock = \Illuminate\Support\Facades\Cache::lock('fb-ingest:'.$wsId.':'.md5((string) $p['raw_jid']), 15);
+        $held = false;
+        try { $held = (bool) $lock->block(5); } catch (\Throwable $e) { $held = false; }
+        $releaseLock = function () use (&$held, $lock) {
+            if ($held) { try { $lock->release(); } catch (\Throwable $e) {} $held = false; }
+        };
+
         // Dedup: this exact Meta id already stored?
         if (self::alreadyStored($wsId, (string) $p['dedup'])) {
+            $releaseLock();
             return;
         }
 
@@ -195,19 +350,46 @@ class FacebookIngestService
             $conv->forceFill(['routing_meta' => array_merge($rm, ['thread_kind' => (string) ($p['kind'] ?? 'dm')])])->save();
         }
 
-        // Resolve a friendly DM sender name + avatar once, on thread creation.
-        if ($conv->wasRecentlyCreated && $p['kind'] === 'dm' && $p['sender_id'] !== '') {
+        // Resolve a friendly DM sender name + avatar.
+        //
+        // This used to be gated on $conv->wasRecentlyCreated, so the lookup got
+        // exactly ONE attempt ever. A single refusal (expired page token, the
+        // app not yet at Advanced Access for pages_messaging, a transient 5xx)
+        // left the thread reading "Facebook user" permanently, because every
+        // later message from that person skipped the block entirely. Retry
+        // whenever the title is still the placeholder, so a thread heals on the
+        // next inbound message once the underlying cause is fixed.
+        $needsName = $conv->wasRecentlyCreated
+            || trim((string) $conv->title) === ''
+            || (string) $conv->title === (string) __('Facebook user');
+
+        if ($needsName && $p['kind'] === 'dm' && $p['sender_id'] !== '') {
             try {
-                $prof = Cache::remember('fb_sender:'.$page->id.':'.$p['sender_id'], 21600,
-                    fn () => (new FacebookPageClient($page))->getSenderProfile($p['sender_id']));
+                $cacheKey = 'fb_sender:'.$page->id.':'.$p['sender_id'];
+                $prof = Cache::get($cacheKey);
+                if (! is_array($prof) || $prof === []) {
+                    // Deliberately NOT Cache::remember: caching an empty result
+                    // for 6h is what would make a transient refusal stick for
+                    // the rest of the day. Only a real profile gets cached.
+                    $prof = (new FacebookPageClient($page))->getSenderProfile($p['sender_id']);
+                    if ($prof !== []) Cache::put($cacheKey, $prof, 21600);
+                }
                 $name = trim((string) ($prof['name'] ?? '')) ?: trim(((string) ($prof['first_name'] ?? '')).' '.((string) ($prof['last_name'] ?? '')));
                 if ($name !== '') {
                     $conv->forceFill([
                         'title'      => $name,
                         'routing_meta' => array_merge((array) $conv->routing_meta, ['fb_avatar' => (string) ($prof['profile_pic'] ?? '')]),
                     ])->save();
+                } else {
+                    Log::info('[FB-PROFILE] no name resolved - thread keeps the placeholder', [
+                        'page' => $page->id, 'conversation' => $conv->id, 'psid' => $p['sender_id'],
+                    ]);
                 }
-            } catch (\Throwable $e) { /* best effort */ }
+            } catch (\Throwable $e) {
+                Log::warning('[FB-PROFILE] resolve threw: '.$e->getMessage(), [
+                    'page' => $page->id, 'conversation' => $conv->id,
+                ]);
+            }
         }
 
         // DM sender → Contact (no phone; keyed by PSID). Comment authors are not
@@ -218,9 +400,30 @@ class FacebookIngestService
             if ($contact && ! $conv->contact_id) {
                 $conv->forceFill(['contact_id' => $contact->id])->save();
             }
+            // Heal a contact minted while the thread was still "Facebook user":
+            // forSocialSender() only sets the name on CREATE, so an existing row
+            // would otherwise keep the placeholder forever.
+            if ($contact) {
+                $realName = trim((string) $conv->title);
+                $stale    = trim((string) $contact->name);
+                if ($realName !== '' && $realName !== (string) __('Facebook user')
+                    && ($stale === '' || $stale === (string) __('Facebook user'))) {
+                    $contact->forceFill(['name' => $realName])->save();
+                }
+            }
         }
 
-        $ts = $p['ts'] ? \Illuminate\Support\Carbon::createFromTimestampMs($p['ts']) : now();
+        // Pass app tz — createFromTimestampMs() returns the instant in UTC
+        // regardless of APP_TIMEZONE, while now() (and Eloquent's created_at)
+        // use the app timezone. Both land in the same naive DATETIME column, so
+        // on a non-UTC server every Meta-stamped inbound row was stored hours
+        // BEHIND the platform-sent rows next to it — which sorted all of
+        // Messenger's messages above all of the team's replies in the thread
+        // (COALESCE(sent_at, created_at)) and showed the wrong bubble time.
+        // Same fix already applied to WABA in WaWebhookController/WaInboundController.
+        $ts = $p['ts']
+            ? \Illuminate\Support\Carbon::createFromTimestampMs($p['ts'], config('app.timezone'))
+            : now();
 
         $inbox = InboxMessage::create([
             'conversation_id' => $conv->id,
@@ -243,6 +446,10 @@ class FacebookIngestService
             'unread_count'    => (int) $conv->unread_count + 1,
             'inbox_status'    => $conv->inbox_status === 'resolved' ? 'open' : $conv->inbox_status,
         ])->save();
+
+        // Row is persisted — the dedup + create critical section is done, so
+        // release the per-thread lock before the (slower) automation below.
+        $releaseLock();
 
         // Backfill of historical messages: store only — never fire real-time
         // events or the automation engine (no auto-reply to an old message).
@@ -362,15 +569,95 @@ class FacebookIngestService
             return null;
         }
 
-        $flows = \App\Models\Flow::query()
+        $base = \App\Models\Flow::query()
             ->where('workspace_id', $page->workspace_id)
-            ->where('flow_type', 'facebook')
+            ->where('flow_type', 'facebook');
+
+        // `trigger_device_id` carries a facebook_pages ROW id (null/0 = "any
+        // page"). The (workspace_id, page_id) UNIQUE index means a Meta page has
+        // exactly ONE live row per workspace — there is never a sibling row to
+        // match. But a disconnect+reconnect DELETES the old row and inserts a new
+        // one with a fresh auto-increment id, so a flow bound to the old id is
+        // ORPHANED on a dead row and the strict `trigger_device_id === $page->id`
+        // test drops it forever. Fix: match flows bound to THIS page, OR to "any
+        // page" (null/0), OR to a row that NO LONGER EXISTS (orphaned by a
+        // reconnect). A flow bound to a DIFFERENT LIVE page is never cross-matched.
+        $livePageIds = \App\Models\FacebookPage::where('workspace_id', $page->workspace_id)
+            ->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $isOrphan = fn ($deviceId) => $deviceId !== null && (int) $deviceId !== 0
+            && ! in_array((int) $deviceId, $livePageIds, true);
+
+        // DIAGNOSTIC — pinpoint WHY a facebook keyword flow does / doesn't match.
+        // "Flow never triggers" almost always means the flow failed one of the
+        // gates below (not published, not active, bound to a different LIVE page,
+        // or no keyword saved). `orphaned` = bound to a page row deleted by a
+        // reconnect (now rescued). One line instead of guesswork.
+        try {
+            $all = (clone $base)->get(['id', 'is_published', 'is_active', 'trigger_device_id', 'trigger_keywords']);
+            Log::info('[FB-FLOW-RESOLVE] lookup', [
+                'page_id'        => $page->id,
+                'meta_page_id'   => (string) $page->page_id,
+                'live_page_ids'  => $livePageIds,
+                'workspace_id'   => $page->workspace_id,
+                'text'           => mb_substr($text, 0, 40),
+                'facebook_flows' => $all->count(),
+                'candidates'     => $all->map(fn ($f) => [
+                    'id'           => $f->id,
+                    'published'    => (bool) $f->is_published,
+                    'active'       => (bool) $f->is_active,
+                    'device_id'    => $f->trigger_device_id,
+                    'device_match' => (int) $f->trigger_device_id === (int) $page->id,
+                    'orphaned'     => $isOrphan($f->trigger_device_id),
+                    'keywords'     => (string) $f->trigger_keywords,
+                ])->all(),
+            ]);
+        } catch (\Throwable $e) { /* diagnostics never block ingest */ }
+
+        $flows = (clone $base)
             ->where('is_published', true)
             ->where('is_active', true)
-            ->where('trigger_device_id', $page->id)
+            ->where(function ($q) use ($page, $livePageIds) {
+                $q->where('trigger_device_id', $page->id)   // bound to THIS page
+                    ->orWhereNull('trigger_device_id')      // any page
+                    ->orWhere('trigger_device_id', 0);
+                // Orphaned: bound to a row that no longer exists (deleted on a
+                // page reconnect). With no live rows at all, treat every bound
+                // flow as orphaned so a workspace mid-reconnect still fires.
+                if (! empty($livePageIds)) {
+                    $q->orWhereNotIn('trigger_device_id', $livePageIds);
+                } else {
+                    $q->orWhereNotNull('trigger_device_id');
+                }
+            })
             ->orderByDesc('updated_at')
             ->get();
 
         return app(\App\Services\Inbox\CatchAllMatcher::class)->pickFlowForInbound($flows, $text);
+        foreach ($flows as $flow) {
+            $raw = trim((string) $flow->trigger_keywords);
+            if ($raw === '') {
+                continue;
+            }
+            foreach (preg_split('/\s*,\s*/', mb_strtolower($raw)) as $kw) {
+                $kw = trim($kw);
+                if ($kw === '') {
+                    continue;
+                }
+                if (in_array($kw, ['any', '*', '.*', '.+'], true)) {
+                    Log::info('[FB-FLOW-RESOLVE] matched (catch-all)', ['flow_id' => $flow->id]);
+                    return $flow; // catch-all
+                }
+                if (str_contains($text, $kw)) {
+                    Log::info('[FB-FLOW-RESOLVE] matched', ['flow_id' => $flow->id, 'keyword' => $kw]);
+                    return $flow;
+                }
+            }
+        }
+
+        Log::info('[FB-FLOW-RESOLVE] NO match', [
+            'page_id'          => $page->id,
+            'passed_filters'   => $flows->count(),   // published+active+device-bound flows that just lacked a keyword hit
+        ]);
+        return null;
     }
 }

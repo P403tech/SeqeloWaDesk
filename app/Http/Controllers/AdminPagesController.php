@@ -140,6 +140,17 @@ class AdminPagesController extends Controller
         // Customer REST API (/api/v1) requests-per-minute for this plan.
         // 0 = inherit global default (security.api_rate_limit_per_minute).
         'api_rate_limit_per_minute',
+        // Side-channel monthly send caps — billed to their own channel, never the
+        // WhatsApp wallet. Both already render on the package form (they are in
+        // the blade's "Messaging caps" group) but sms_monthly_limit was missing
+        // HERE, and this list is what builds the validation rules — so the value
+        // was validated away and never persisted. Same double-declaration trap
+        // that hid the channel feature toggles.
+        'sms_monthly_limit',
+        'email_monthly_limit',
+        // Threads (Meta) publishing caps.
+        'threads_accounts',
+        'threads_scheduled_posts',
     ];
 
     /**
@@ -204,11 +215,25 @@ class AdminPagesController extends Controller
         // so their toggles never rendered on the package form and an admin had no way
         // to enable them per plan. Same double-gate bug that hid the Instagram flags.
         'access_sms',               // SMS (Twilio / MSG91)
+        'access_email',             // Email channel (linked mailbox via the mail bridge)
         'access_lead_finder',       // Lead Finder (map lead scraper)
         'access_facebook', 'facebook_inbox', 'facebook_posts',
         'facebook_comments', 'facebook_ai_agent',
         'access_tiktok', 'tiktok_inbox', 'tiktok_posts', 'tiktok_comments',
         'access_telegram', 'telegram_broadcasts',
+        // LINE / WeChat / Viber — same double-gate bug as above: declared on the
+        // Package model (fillable + boolean cast) and enforced at runtime
+        // (LineConnectController / WeChatConnectController / ViberConnectController
+        // check access_line/wechat/viber), but MISSING here — so their toggles
+        // never rendered on the package form and an admin had no way to grant the
+        // channel per plan, which blocked every user from using it.
+        'access_line', 'line_broadcasts',
+        'access_wechat', 'wechat_broadcasts',
+        'access_viber', 'viber_broadcasts',
+        // Threads (Meta) — publishing channel (core). access_threads = master
+        // switch, threads_posts = composer/scheduler, threads_replies = reply
+        // auto-responder, threads_insights = analytics dashboard.
+        'access_threads', 'threads_posts', 'threads_replies', 'threads_insights',
     ];
 
     /**
@@ -1425,20 +1450,28 @@ class AdminPagesController extends Controller
         // on the settings index so an admin can configure both from the
         // same place. The provider toggle is the master switch that
         // controls which methods workspaces can connect to at /connect.
-        $allowed = \App\Models\SystemSetting::get('allowed_send_methods', ['waba', 'baileys', 'twilio']);
-        $allowed = is_array($allowed) ? $allowed : ['waba', 'baileys', 'twilio'];
+        // Unofficial (baileys) is NOT a default engine — it ships as a removable
+        // addon. Fresh installs default to WABA + Twilio only.
+        $allowed = \App\Models\SystemSetting::get('allowed_send_methods', ['waba', 'twilio']);
+        $allowed = is_array($allowed) ? $allowed : ['waba', 'twilio'];
 
         $settings = [
             'referral_signup_credits'    => (int)   \App\Models\SystemSetting::get('referral_signup_credits', 100),
             'credits_per_message'        => (int)   \App\Models\SystemSetting::get('credits_per_message', 1),
             'credits_per_currency_minor' => (float) \App\Models\SystemSetting::get('credits_per_currency_minor', 0.1),
-            'default_send_method'        => (string) \App\Models\SystemSetting::get('default_send_method', 'baileys'),
+            'default_send_method'        => (string) \App\Models\SystemSetting::get('default_send_method', 'waba'),
             'allowed_send_methods'       => $allowed,
             // Per-provider admin defaults — workspaces reuse these unless
             // they override in their own wa_provider_configs row.
             'waba_app_id'                => (string) \App\Models\SystemSetting::get('waba_app_id', ''),
             'waba_app_secret_set'        => \App\Models\SystemSetting::where('key', 'waba_app_secret')->exists(),
             'waba_config_id'             => (string) \App\Models\SystemSetting::get('waba_config_id', ''),
+            // Embedded Signup version. Meta deprecates v2 on 15 Oct 2026; v4 moves
+            // products/permissions/coexistence into the Login configuration itself.
+            'waba_es_version'            => (string) \App\Models\SystemSetting::get('waba_es_version', 'v2'),
+            // v4 only: coexistence is a CONFIGURATION property, so the 'use my
+            // existing Business App number' button needs its own Config ID.
+            'waba_coex_config_id'        => (string) \App\Models\SystemSetting::get('waba_coex_config_id', ''),
             'waba_coexistence'           => (bool) \App\Models\SystemSetting::get('waba_coexistence', false),
             'waba_webhook_verify_token'  => (string) \App\Models\SystemSetting::get('waba_webhook_verify_token', ''),
             'baileys_server_url'         => (string) \App\Models\SystemSetting::get('baileys_server_url', env('SERVER_URL', '')),
@@ -1518,6 +1551,43 @@ class AdminPagesController extends Controller
         return view('admin.settings.index', compact('settings', 'kpi'));
     }
 
+    /**
+     * GET /admin/settings/features — the Feature Toggles page. Lists every
+     * user-facing feature/card (from FeatureRegistry) with its current on/off
+     * state so an admin can hide/show any of them platform-wide.
+     */
+    public function settingsFeatures(): \Illuminate\View\View
+    {
+        $groups = \App\Support\FeatureRegistry::groups();
+        $states = \App\Support\FeatureRegistry::states();
+
+        return view('admin.settings.features', compact('groups', 'states'));
+    }
+
+    /**
+     * POST /admin/settings/features — save the toggles. The form submits the
+     * KEYS of the features left ON (checkbox name="show[]" value="<key>"); any
+     * feature not in that list is turned OFF. Iterating the whole registry (not
+     * just the submitted keys) is what lets an unchecked box actually disable a
+     * feature. Default when a flag was never written is ON, so this is the only
+     * place a feature is ever switched off.
+     */
+    public function settingsFeaturesUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $on = array_map('strval', (array) $request->input('show', []));
+
+        foreach (\App\Support\FeatureRegistry::all() as $it) {
+            \App\Models\SystemSetting::set(
+                \App\Support\FeatureRegistry::flagOf($it),
+                in_array((string) $it['key'], $on, true),
+                'bool',
+                'Feature visibility toggle (admin) — show "' . $it['key'] . '" in the user dashboard.'
+            );
+        }
+
+        return back()->with('success', __('Feature visibility updated.'));
+    }
+
     public function settingsProvidersUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
     {
         // Track every providers/pacing save so a "toggle didn't save" report is
@@ -1547,6 +1617,8 @@ class AdminPagesController extends Controller
             'waba_app_id'                => 'nullable|string|max:64',
             'waba_app_secret'            => 'nullable|string|max:128',
             'waba_config_id'             => 'nullable|string|max:64',
+            'waba_es_version'            => 'nullable|in:v2,v4',
+            'waba_coex_config_id'        => 'nullable|string|max:64',
             'waba_coexistence'           => 'nullable|boolean',
             'waba_webhook_verify_token'  => 'nullable|string|max:96',
             'baileys_server_url'         => 'nullable|url|max:191',
@@ -1561,15 +1633,24 @@ class AdminPagesController extends Controller
             // Telegram channel — Bot API (no OAuth). api_id/hash are optional and
             // only power the in-app bot maker (MTProto → @BotFather).
             'telegram_enabled'           => 'sometimes|boolean',
+            'line_enabled'               => 'sometimes|boolean',
+            'wechat_enabled'             => 'sometimes|boolean',
+            'viber_enabled'              => 'sometimes|boolean',
             'telegram_api_id'            => 'nullable|string|max:32',
             'telegram_api_hash'          => 'nullable|string|max:64',
             // TikTok channel (separate "TikTok for Developers" app — client_key/secret).
             'tiktok_enabled'             => 'sometimes|boolean',
             'tiktok_client_key'          => 'nullable|string|max:255',
             'tiktok_client_secret'       => 'nullable|string|max:255',
+            'tiktok_redirect_uri'        => 'nullable|url|max:512',
+            'tiktok_scopes'              => 'nullable|string|max:512',
             // SMS channel — Twilio / MSG91. Just an on/off; numbers are connected
             // per-workspace at /devices (reusing the Twilio credentials).
             'sms_enabled'                => 'sometimes|boolean',
+            // Email channel — on/off only; the mail engine is the linked
+            // MailTrixy install (connected at Admin → Add-ons) and mailboxes
+            // link per-workspace at /devices.
+            'email_enabled'              => 'sometimes|boolean',
             // TikTok Business Messaging (partner-gated DM inbox — separate app).
             'tiktok_inbox_enabled'       => 'sometimes|boolean',
             'tiktok_business_app_id'     => 'nullable|string|max:255',
@@ -1633,7 +1714,12 @@ class AdminPagesController extends Controller
         // (so re-saving the page doesn't blank out a stored secret).
         \App\Models\SystemSetting::set('waba_app_id',               $data['waba_app_id']               ?? '', 'string', 'Meta App ID for Embedded Signup.');
         \App\Models\SystemSetting::set('waba_config_id',            $data['waba_config_id']            ?? '', 'string', 'Meta Login Configuration ID.');
+        \App\Models\SystemSetting::set('waba_es_version',           $data['waba_es_version']           ?? 'v2', 'string', 'Embedded Signup version (v2 legacy, v4 config-driven).');
+        \App\Models\SystemSetting::set('waba_coex_config_id',       $data['waba_coex_config_id']       ?? '', 'string', 'v4 Coexistence Login Configuration ID.');
         \App\Models\SystemSetting::set('waba_coexistence',          $request->boolean('waba_coexistence'), 'bool', 'Launch Embedded Signup in WhatsApp Coexistence mode (onboard existing Business App numbers).');
+        // Let workspaces bring their OWN Meta app (manual App ID + Secret) for
+        // Facebook + Instagram connect, instead of the platform admin's app.
+        \App\Models\SystemSetting::set('meta_allow_manual_app',     $request->boolean('meta_allow_manual_app'), 'bool', 'Allow workspaces to connect Facebook/Instagram with their own Meta app (manual App ID + Secret).');
         // Call-flow web search (Tavily/SerpAPI/Brave). Key only updated when
         // the form carried a value — re-saving won't blank a stored key.
         \App\Models\SystemSetting::set('web_search_provider', (string) ($data['web_search_provider'] ?? 'tavily'), 'string', 'Provider for the Call Flow "Search web" node.');
@@ -1662,6 +1748,9 @@ class AdminPagesController extends Controller
         // so it's only overwritten when the form actually carried a value (the
         // field renders blank so a plain re-save doesn't wipe it).
         \App\Models\SystemSetting::set('telegram_enabled', $request->boolean('telegram_enabled'), 'bool', 'Enable the Telegram channel (Bot API — paste a @BotFather token).');
+        \App\Models\SystemSetting::set('line_enabled', $request->boolean('line_enabled'), 'bool', 'Enable the LINE channel (Messaging API — paste a channel access token + secret).');
+        \App\Models\SystemSetting::set('wechat_enabled', $request->boolean('wechat_enabled'), 'bool', 'Enable the WeChat channel (Official Account — paste AppID + AppSecret + Token).');
+        \App\Models\SystemSetting::set('viber_enabled', $request->boolean('viber_enabled'), 'bool', 'Enable the Viber channel (Public Account — paste the bot auth token).');
         \App\Models\SystemSetting::set('telegram_api_id', trim((string) $request->input('telegram_api_id', '')), 'string', 'Telegram api_id from my.telegram.org (optional — only for the in-app bot maker).');
         if ($request->filled('telegram_api_hash')) {
             \App\Models\SystemSetting::set('telegram_api_hash', trim((string) $request->input('telegram_api_hash')), 'string', 'Telegram api_hash from my.telegram.org (optional — only for the in-app bot maker).');
@@ -1669,6 +1758,9 @@ class AdminPagesController extends Controller
         // SMS — Twilio / MSG91 channel. On/off only; per-workspace numbers are
         // connected at /devices and reuse the workspace's Twilio credentials.
         \App\Models\SystemSetting::set('sms_enabled', $request->boolean('sms_enabled'), 'bool', 'Enable the SMS channel (Twilio / MSG91). Numbers connect at /devices.');
+        // Email — the engine is the linked mail bridge (Add-ons); mailboxes
+        // link at /devices. On/off only.
+        \App\Models\SystemSetting::set('email_enabled', $request->boolean('email_enabled'), 'bool', 'Enable the Email channel (via the connected mail bridge). Mailboxes link at /devices.');
 
         // TikTok — separate developer app. Only overwrite the secret when a new
         // value is submitted (the field renders blank so a save doesn't wipe it).
@@ -1679,6 +1771,21 @@ class AdminPagesController extends Controller
         if ($request->filled('tiktok_client_secret')) {
             \App\Models\SystemSetting::set('tiktok_client_secret', trim((string) $request->input('tiktok_client_secret')), 'string', 'TikTok for Developers app client_secret.');
         }
+        // Fixed OAuth redirect URI — must equal a Login Kit "Redirect URI" in the
+        // TikTok portal EXACTLY. A blank value falls back to the dynamic route URL.
+        // Do NOT rtrim the trailing slash. OAuth redirect URIs are matched as an
+        // EXACT string, so `/tiktok/callback` and `/tiktok/callback/` are two
+        // different URIs to TikTok. Stripping it made a portal registration that
+        // ends in `/` impossible to configure here — the admin would type the
+        // slash, we'd silently remove it, and every consent would be refused.
+        // Whatever is registered in the portal is what must be stored, verbatim.
+        \App\Models\SystemSetting::set('tiktok_redirect_uri', trim((string) $request->input('tiktok_redirect_uri', '')), 'string', 'TikTok OAuth redirect URI (must match the portal Login Kit registration exactly, including any trailing slash).');
+        // Requested OAuth scopes (comma-separated). Blank = the Login-Kit-safe set
+        // (user.info.basic,user.info.profile,user.info.stats), which works while the
+        // app is in review. Add video.list / video.upload only AFTER the Display API
+        // and Content Posting API products are approved, or TikTok rejects the
+        // authorize with a "client_key" error.
+        \App\Models\SystemSetting::set('tiktok_scopes', trim((string) $request->input('tiktok_scopes', '')), 'string', 'TikTok OAuth scopes requested at login (comma-separated). Blank = Login-Kit-safe default.');
         // TikTok Business Messaging (DM inbox) — partner-gated, separate app.
         \App\Models\SystemSetting::set('tiktok_inbox_enabled', $request->boolean('tiktok_inbox_enabled'), 'bool', 'Enable the TikTok DM inbox (Business Messaging — needs Messaging Partner approval; blocked in US/EEA/CH/UK).');
         if ($request->filled('tiktok_business_app_id')) {
@@ -1778,7 +1885,13 @@ class AdminPagesController extends Controller
         \App\Services\NodeCacheBuster::refreshNodeSettings();
         \App\Services\NodeCacheBuster::bustAll();
 
-        return redirect()->route('admin.settings.wadesk-message')->with('status', 'Provider settings saved.');
+        // Return to the channel detail page the save came from (hidden
+        // _return_section), else the hub landing.
+        $return = (string) $request->input('_return_section', '');
+        $valid  = ['whatsapp', 'facebook', 'telegram', 'line', 'wechat', 'viber', 'tiktok', 'sms', 'email'];
+        return redirect()
+            ->route('admin.settings.channel-setting', in_array($return, $valid, true) ? ['section' => $return] : [])
+            ->with('status', 'Provider settings saved.');
     }
 
     /**
@@ -2003,15 +2116,24 @@ class AdminPagesController extends Controller
     public function settingsAffiliateUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
     {
         $data = $request->validate([
-            // Signup reward is entered as MONEY (e.g. 50.00) in the money-wallet
-            // model; stored internally as minor units (× 100) since 1 credit ==
-            // 1 money-minor.
-            'referral_signup_credits'    => 'required|numeric|min:0|max:100000',
+            // "Refer & Earn" — both rewards are entered as MONEY (e.g. 50.00) and
+            // stored as minor units (× 100), since 1 credit == 1 money-minor. Paid
+            // on the referee's FIRST paid top-up (not signup).
+            'referral_enabled'           => 'sometimes|boolean',
+            'referral_referrer_reward'   => 'required|numeric|min:0|max:100000',  // referrer earns
+            'referral_referee_reward'    => 'nullable|numeric|min:0|max:100000',  // friend's welcome bonus
+            'referral_window_days'       => 'nullable|integer|min:1|max:365',
             'credits_per_message'        => 'required|integer|min:1|max:1000',
             'credits_per_currency_minor' => 'nullable|numeric|min:0|max:100000',
         ]);
-        $signupMinor = (int) round(((float) $data['referral_signup_credits']) * 100);
-        \App\Models\SystemSetting::set('referral_signup_credits',    $signupMinor,    'int',  'Money awarded to the referrer (minor units) when their referee signs up.');
+        $referrerMinor = (int) round(((float) $data['referral_referrer_reward']) * 100);
+        $refereeMinor  = (int) round(((float) ($data['referral_referee_reward'] ?? 0)) * 100);
+        \App\Models\SystemSetting::set('referral_enabled',               $request->boolean('referral_enabled'), 'bool', 'Enable the Refer & Earn programme.');
+        \App\Models\SystemSetting::set('referral_referrer_reward_minor', $referrerMinor, 'int', 'Money (minor) the referrer earns when their friend makes a first paid top-up.');
+        \App\Models\SystemSetting::set('referral_referee_reward_minor',  $refereeMinor,  'int', 'Welcome bonus (minor) the invited friend earns on their first paid top-up.');
+        \App\Models\SystemSetting::set('referral_window_days',           (int) ($data['referral_window_days'] ?? 30), 'int', 'Days a referral stays pending before it expires.');
+        // Keep the legacy key in sync so anything still reading it stays correct.
+        \App\Models\SystemSetting::set('referral_signup_credits',        $referrerMinor, 'int', 'DEPRECATED alias of referral_referrer_reward_minor (kept in sync).');
         \App\Models\SystemSetting::set('credits_per_message',        $data['credits_per_message'],        'int',  'Credits charged per outbound message.');
         // Top-up conversion rate — only overwrite when a value is provided so a
         // blank submit never zeroes the rate.
@@ -2025,6 +2147,10 @@ class AdminPagesController extends Controller
     {
         $settings = [
             'referral_signup_credits'    => (int)   \App\Models\SystemSetting::get('referral_signup_credits', 100),
+            'referral_enabled'           => (bool)  \App\Models\SystemSetting::get('referral_enabled', true),
+            'referral_referrer_reward_minor' => \App\Services\ReferralService::referrerRewardMinor(),
+            'referral_referee_reward_minor'  => \App\Services\ReferralService::refereeRewardMinor(),
+            'referral_window_days'       => (int)   \App\Models\SystemSetting::get('referral_window_days', 30),
             'credits_per_message'        => (int)   \App\Models\SystemSetting::get('credits_per_message', 1),
             'credits_per_currency_minor' => (float) \App\Models\SystemSetting::get('credits_per_currency_minor', 0.1),
         ];
@@ -2066,8 +2192,18 @@ class AdminPagesController extends Controller
             }
         }
 
-        foreach ((array) $request->input('delete', []) as $delId) {
-            \App\Models\MessageRate::where('id', (int) $delId)->delete();
+        // Rows the admin ticked "Remove". Resolve them to their (country|category)
+        // keys FIRST so the upsert loop below cannot immediately RE-CREATE them from
+        // the still-submitted grid arrays — that was the "Remove + Save didn't delete
+        // the rate" bug: the delete ran, then updateOrCreate put the same row right
+        // back. We record the keys, delete, and skip those keys in the upsert.
+        $deleteIds  = array_map('intval', (array) $request->input('delete', []));
+        $deleteKeys = [];
+        if ($deleteIds) {
+            foreach (\App\Models\MessageRate::whereIn('id', $deleteIds)->get(['country_code', 'category']) as $dr) {
+                $deleteKeys[strtoupper((string) $dr->country_code) . '|' . strtolower((string) $dr->category)] = true;
+            }
+            \App\Models\MessageRate::whereIn('id', $deleteIds)->delete();
         }
 
         // Upsert the grid (parallel arrays country_code[]/category[]/credits[]/
@@ -2078,8 +2214,35 @@ class AdminPagesController extends Controller
         $cr   = (array) $request->input('credits', []);
         $cost = (array) $request->input('meta_cost', []);
         $curr = (array) $request->input('currency', []);
+        // Server-rendered fallback country per row (hidden orig_country[] input).
+        // Used when the JS country widget desyncs and submits an EMPTY country_code
+        // for a row that really has one — see the recovery in the loop below.
+        $orig = (array) $request->input('orig_country', []);
+
+        // Collision guard. The Country field is a JS widget; if it hasn't applied
+        // yet when the admin clicks Save, a country-specific row submits with an
+        // EMPTY country and collides with the "Any country" default of the same
+        // category. The grid submits the real "Any country" defaults FIRST (rows
+        // are ordered country_code='' first), so we process each (country|category)
+        // ONCE and keep the first — a later collapsed duplicate (often a ₹0
+        // country) can no longer overwrite the price the admin actually typed.
+        // This is why Authentication/Marketing reset to ₹0 while Utility (no
+        // colliding ₹0 country row) stayed correct.
+        $seen = [];
         foreach ($cc as $i => $country) {
             $country  = strtoupper(trim((string) $country));
+            // Recover a desynced country. The JS country widget sometimes submits
+            // an EMPTY country_code[] for a row that actually has a country (the
+            // logs showed only ONE row per country kept its value); that empty row
+            // then collided with the "Any country" defaults and the edit was
+            // dropped. The hidden orig_country[] is rendered server-side (no JS),
+            // so fall back to it when the dropdown came through empty.
+            if ($country === '') {
+                $og = strtoupper(trim((string) ($orig[$i] ?? '')));
+                if ($og !== '' && preg_match('/^[A-Z]{2}$/', $og)) {
+                    $country = $og;
+                }
+            }
             $category = strtolower(trim((string) ($cat[$i] ?? '')));
             $credits  = $cr[$i] ?? null;
             $metaCost = $cost[$i] ?? null;
@@ -2088,6 +2251,17 @@ class AdminPagesController extends Controller
             if (($credits === null || $credits === '') && ($metaCost === null || $metaCost === '')) continue;
             if ($category !== '' && !in_array($category, \App\Models\MessageRate::CATEGORIES, true)) continue;
             if ($country !== '' && !preg_match('/^[A-Z]{2}$/', $country)) continue;
+
+            // First-wins de-dup (see collision guard above): a repeated
+            // (country, category) key later in the same submit is ignored.
+            $dupKey = $country . '|' . $category;
+            if (isset($seen[$dupKey])) continue;
+            $seen[$dupKey] = true;
+
+            // Skip a row the admin just Removed — its grid inputs are still
+            // submitted, and without this the updateOrCreate below would instantly
+            // re-create the rate the Remove checkbox deleted.
+            if (isset($deleteKeys[$dupKey])) continue;
 
             $attrs = ['is_active' => true];
             if ($credits !== null && $credits !== '') $attrs['credits'] = max(0, (int) round(((float) $credits) * 100));
@@ -2353,6 +2527,9 @@ class AdminPagesController extends Controller
             // signup. Empty = fall back to the first active free plan.
             // When the chosen plan is FREE, the workspace gets a trial
             // window of `registration_trial_days` days.
+            // When OFF, signup assigns NO plan — the owner must pick + pay for
+            // one on the plan step (stops a paid default from being granted free).
+            'registration_assign_plan'     => (bool)   \App\Models\SystemSetting::get('registration_assign_plan', true),
             'registration_default_plan_id' => (string) \App\Models\SystemSetting::get('registration_default_plan_id', ''),
             'registration_trial_days'      => (int)    \App\Models\SystemSetting::get('registration_trial_days', 14),
             // How plans apply across an owner's workspaces:
@@ -2404,6 +2581,7 @@ class AdminPagesController extends Controller
             'public_registration' => 'sometimes|boolean',
             'auto_verify_email'   => 'sometimes|boolean',
             // Default plan for new signups (plan_id slug) + free-trial length.
+            'registration_assign_plan'     => 'sometimes|boolean',
             'registration_default_plan_id' => 'nullable|string|max:64|exists:packages,plan_id',
             'registration_trial_days'      => 'nullable|integer|min:0|max:365',
             'billing_plan_scope'           => 'nullable|in:workspace,account',
@@ -2434,6 +2612,11 @@ class AdminPagesController extends Controller
         // rebuilds while MySQL keeps a dead path. Overwrite the shipped PNG
         // on this instance only; the next deploy restores the repo file.
         $destDir = public_path('brand');
+        // Boolean toggle must persist FALSE when unchecked — an unchecked box
+        // sends nothing, so the loop above never sees it. Set it explicitly.
+        \App\Models\SystemSetting::set('registration_assign_plan', $request->boolean('registration_assign_plan'), 'bool', 'General settings: registration_assign_plan');
+
+        // Favicon upload — single shared file.
         if ($request->hasFile('favicon')) {
             $request->file('favicon')->move($destDir, 'seqelo-mark-upload-favicon.png');
             @copy($destDir . '/seqelo-mark-upload-favicon.png', $destDir . '/seqelo-mark.png');
@@ -2470,21 +2653,38 @@ class AdminPagesController extends Controller
         }
         return redirect()->route('admin.settings.general')->with('status', 'General settings saved.');
     }
-    public function settingWaDeskMessage(): View
+    public function settingWaDeskMessage(?string $section = null): View
     {
+        // Channel Settings hub. `$section` (null = card landing) picks which
+        // channel's detail page renders. Whitelist it so a bad slug just falls
+        // back to the landing rather than showing a broken empty page.
+        // Channel pages only. Registration OTP, Meta templates, sender pacing
+        // and campaign auto-end are WhatsApp-related controls and live ON the
+        // whatsapp page, not as their own cards.
+        $validSections = ['whatsapp', 'facebook', 'telegram', 'line', 'wechat', 'viber', 'tiktok', 'sms', 'email'];
+        $section = in_array($section, $validSections, true) ? $section : null;
+
         // Provider toggles + per-provider creds live here. Admin picks
         // single or multiple methods workspaces are allowed to connect
         // with — workspaces then see only the enabled tabs in the
         // /devices add-device modal.
-        $allowed = \App\Models\SystemSetting::get('allowed_send_methods', ['waba', 'baileys', 'twilio']);
-        $allowed = is_array($allowed) ? $allowed : ['waba', 'baileys', 'twilio'];
+        // Unofficial (baileys) is NOT a default engine — it ships as a removable
+        // addon. Fresh installs default to WABA + Twilio only.
+        $allowed = \App\Models\SystemSetting::get('allowed_send_methods', ['waba', 'twilio']);
+        $allowed = is_array($allowed) ? $allowed : ['waba', 'twilio'];
 
         $settings = [
-            'default_send_method'        => (string) \App\Models\SystemSetting::get('default_send_method', 'baileys'),
+            'default_send_method'        => (string) \App\Models\SystemSetting::get('default_send_method', 'waba'),
             'allowed_send_methods'       => $allowed,
             'waba_app_id'                => (string) \App\Models\SystemSetting::get('waba_app_id', ''),
             'waba_app_secret_set'        => \App\Models\SystemSetting::where('key', 'waba_app_secret')->exists(),
             'waba_config_id'             => (string) \App\Models\SystemSetting::get('waba_config_id', ''),
+            // Embedded Signup version. Meta deprecates v2 on 15 Oct 2026; v4 moves
+            // products/permissions/coexistence into the Login configuration itself.
+            'waba_es_version'            => (string) \App\Models\SystemSetting::get('waba_es_version', 'v2'),
+            // v4 only: coexistence is a CONFIGURATION property, so the 'use my
+            // existing Business App number' button needs its own Config ID.
+            'waba_coex_config_id'        => (string) \App\Models\SystemSetting::get('waba_coex_config_id', ''),
             'waba_coexistence'           => (bool) \App\Models\SystemSetting::get('waba_coexistence', false),
             'waba_webhook_verify_token'  => (string) \App\Models\SystemSetting::get('waba_webhook_verify_token', ''),
             'baileys_server_url'         => (string) \App\Models\SystemSetting::get('baileys_server_url', env('SERVER_URL', '')),
@@ -2535,14 +2735,19 @@ class AdminPagesController extends Controller
         $adminWsId = (int) (auth()->user()?->current_workspace_id ?? 0);
 
         $otpSenders = collect();
-        \App\Models\Device::query()->where('status', 'connected')
-            ->when($adminWsId > 0, fn ($q) => $q->where('workspace_id', $adminWsId), fn ($q) => $q->whereRaw('1=0'))
-            ->orderByDesc('id')->limit(200)->get()
-            ->each(function ($d) use ($otpSenders) {
-                $phone = trim((string) ($d->country_code ? '+' . ltrim((string) $d->country_code, '+') . ' ' : '')
-                    . preg_replace('/\D+/', '', (string) $d->phone_number)) ?: ('Device #' . $d->id);
-                $otpSenders->push(['value' => 'device:' . $d->id, 'label' => $phone . ' (Unofficial)']);
-            });
+        // Unofficial (Baileys) device rows are OTP senders only when the removable
+        // Unofficial API add-on is installed. When it isn't, the engine is hidden
+        // platform-wide, so don't offer any device as an OTP sender. Single master gate.
+        if (\App\Services\WorkspaceEngine::unofficialEnabled()) {
+            \App\Models\Device::query()->where('status', 'connected')
+                ->when($adminWsId > 0, fn ($q) => $q->where('workspace_id', $adminWsId), fn ($q) => $q->whereRaw('1=0'))
+                ->orderByDesc('id')->limit(200)->get()
+                ->each(function ($d) use ($otpSenders) {
+                    $phone = trim((string) ($d->country_code ? '+' . ltrim((string) $d->country_code, '+') . ' ' : '')
+                        . preg_replace('/\D+/', '', (string) $d->phone_number)) ?: ('Device #' . $d->id);
+                    $otpSenders->push(['value' => 'device:' . $d->id, 'label' => $phone . ' (Unofficial)']);
+                });
+        }
         \App\Models\WaProviderConfig::query()->whereIn('provider', ['waba', 'twilio'])
             ->where('status', 'connected')
             ->when($adminWsId > 0, fn ($q) => $q->where('workspace_id', $adminWsId), fn ($q) => $q->whereRaw('1=0'))
@@ -2606,7 +2811,61 @@ class AdminPagesController extends Controller
         }
         $otpTemplates = $otpTemplates->values();
 
-        return view('admin.settings.wadesk-message', compact('settings', 'otpSenders', 'otpTemplates'));
+        return view('admin.settings.channel-setting', compact('settings', 'otpSenders', 'otpTemplates', 'section'));
+    }
+
+    /**
+     * Save ONLY the global Node bridge (Server URL + shared X-Node-Token) from
+     * the Channels hub landing panel — never the per-channel provider form, so
+     * saving the bridge can't disturb any channel's creds. Mirrors both into
+     * .env and refreshes the bridge so the change takes effect immediately.
+     */
+    public function settingsNodeBridgeUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $data = $request->validate([
+            'baileys_server_url' => 'nullable|url|max:191',
+            'node_webhook_token' => 'nullable|string|max:191',
+        ]);
+        \App\Models\SystemSetting::set('baileys_server_url', $data['baileys_server_url'] ?? '', 'string', 'Default URL of the Node bridge.');
+        \App\Support\EnvWriter::set('SERVER_URL', (string) ($data['baileys_server_url'] ?? ''));
+        // Token only when the admin typed one (blank keeps the stored value).
+        if (filled($data['node_webhook_token'] ?? null)) {
+            \App\Models\SystemSetting::set('node_webhook_token', trim((string) $data['node_webhook_token']), 'string', 'Shared secret authenticating Node <-> Laravel bridge calls (X-Node-Token).');
+            \App\Support\EnvWriter::set('NODE_WEBHOOK_TOKEN', trim((string) $data['node_webhook_token']));
+        }
+        // Best-effort push so the new URL/token take effect without the 1h timer.
+        \App\Services\NodeCacheBuster::refreshNodeSettings();
+        return redirect()->route('admin.settings.channel-setting')->with('status', 'Node bridge saved.');
+    }
+
+    /**
+     * Ping the Node bridge with the URL + token typed in the hub panel (falling
+     * back to the stored token when the field is left blank) to verify the
+     * bridge is reachable AND the shared token is accepted. Pure JSON — the
+     * panel's "Test connection" button calls it before the admin saves.
+     */
+    public function testNodeBridge(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+    {
+        $url   = trim((string) $request->input('baileys_server_url', ''));
+        $token = trim((string) $request->input('node_webhook_token', ''));
+        if ($token === '') { $token = node_token(); } // blank = test with the stored one
+        if ($url === '' || ! preg_match('#^https?://#i', $url)) {
+            return response()->json(['ok' => false, 'message' => 'Enter a valid Server URL (http:// or https://) first.'], 422);
+        }
+        try {
+            $resp = \Illuminate\Support\Facades\Http::withHeaders(['X-Node-Token' => $token])
+                ->timeout(5)->acceptJson()
+                ->get(rtrim($url, '/') . '/api/refresh-settings');
+            if (in_array($resp->status(), [401, 403], true)) {
+                return response()->json(['ok' => false, 'message' => 'Reached the bridge but the token was rejected (' . $resp->status() . '). Check the X-Node-Token.'], 200);
+            }
+            if ($resp->ok()) {
+                return response()->json(['ok' => true, 'message' => 'Connected — bridge reachable and token accepted.']);
+            }
+            return response()->json(['ok' => false, 'message' => 'Bridge responded with HTTP ' . $resp->status() . '.'], 200);
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'message' => 'Could not reach the bridge — check the URL and that the Node service is running.'], 200);
+        }
     }
 
     /**
@@ -2887,6 +3146,7 @@ class AdminPagesController extends Controller
     {
         return view('admin.settings.shopify', [
             'enabled'      => (bool) \App\Models\SystemSetting::get('shopify_enabled', false),
+            'manualAllowed'=> (bool) \App\Models\SystemSetting::get('shopify_allow_manual_app', false),
             'clientId'     => (string) \App\Models\SystemSetting::get('shopify_client_id', ''),
             // Never echo the secret back into the form HTML — only expose whether one is set.
             'hasSecret'    => \App\Models\SystemSetting::get('shopify_client_secret', '') !== '',
@@ -2901,7 +3161,8 @@ class AdminPagesController extends Controller
     public function settingShopifyUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
     {
         $request->validate([
-            'shopify_enabled'       => 'nullable|in:0,1',
+            'shopify_enabled'          => 'nullable|in:0,1',
+            'shopify_allow_manual_app' => 'nullable|in:0,1',
             'shopify_client_id'     => 'nullable|string|max:191',
             'shopify_client_secret' => 'nullable|string|max:191',
             'shopify_scopes'        => 'nullable|string|max:500',
@@ -2909,6 +3170,7 @@ class AdminPagesController extends Controller
         ]);
 
         \App\Models\SystemSetting::set('shopify_enabled',       $request->boolean('shopify_enabled'), 'bool', 'Toggle Shopify OAuth integration');
+        \App\Models\SystemSetting::set('shopify_allow_manual_app', $request->boolean('shopify_allow_manual_app'), 'bool', 'Let workspaces connect Shopify with their OWN app (self-serve manual keys)');
         \App\Models\SystemSetting::set('shopify_client_id',     (string) $request->input('shopify_client_id', ''), 'string', 'Shopify app client ID');
         // Leave the secret untouched when the field is submitted blank (it's masked in the form).
         if ($request->filled('shopify_client_secret')) {
@@ -3117,6 +3379,7 @@ class AdminPagesController extends Controller
 
         return view('admin.settings.google-calendar', [
             'enabled'        => (bool) \App\Models\SystemSetting::get('google_calendar_enabled', false),
+            'manualAllowed'  => (bool) \App\Models\SystemSetting::get('google_allow_manual_app', false),
             'clientId'       => (string) \App\Models\SystemSetting::get('google_calendar_client_id', ''),
             // Never echo the secret back into the form HTML — only expose whether one is set.
             'hasSecret'      => \App\Models\SystemSetting::get('google_calendar_client_secret', '') !== '',
@@ -3131,6 +3394,7 @@ class AdminPagesController extends Controller
     {
         $request->validate([
             'google_calendar_enabled'       => 'nullable|in:0,1',
+            'google_allow_manual_app'       => 'nullable|in:0,1',
             'google_calendar_client_id'     => 'nullable|string|max:255',
             'google_calendar_client_secret' => 'nullable|string|max:255',
             'google_calendar_scopes'        => 'nullable|string|max:1000',
@@ -3138,6 +3402,7 @@ class AdminPagesController extends Controller
         ]);
 
         \App\Models\SystemSetting::set('google_calendar_enabled',   $request->boolean('google_calendar_enabled'), 'bool', 'Toggle Google integration (Calendar/Meet/Sheets/Docs/Forms)');
+        \App\Models\SystemSetting::set('google_allow_manual_app',   $request->boolean('google_allow_manual_app'), 'bool', 'Let workspaces connect Google with their OWN OAuth app (self-serve manual keys)');
         \App\Models\SystemSetting::set('google_calendar_client_id', (string) $request->input('google_calendar_client_id', ''), 'string', 'Google OAuth client ID');
         // Leave the secret untouched when the field is submitted blank (it's masked in the form). Stored encrypted via ENCRYPTED_KEYS.
         if ($request->filled('google_calendar_client_secret')) {

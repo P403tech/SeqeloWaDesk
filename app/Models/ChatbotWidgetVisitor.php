@@ -25,6 +25,37 @@ class ChatbotWidgetVisitor extends Model
         'last_seen_at'  => 'datetime',
     ];
 
+    /**
+     * A stable, digits-only key identifying this visitor to the auto-reply and
+     * flow engines.
+     *
+     * Those engines key everything — per-rule cooldowns, contact resolution,
+     * flow enrolment — on a phone number, and immediately run
+     * `preg_replace('/\D+/', '', $phone)`. A widget visitor may have no phone at
+     * all (`collect_phone` is optional) and `visitor_uuid` does not survive that
+     * strip, so without this every phone-less visitor collapses to the SAME
+     * empty key: one visitor's cooldown would silence the rule for everyone.
+     *
+     * When a phone WAS collected we use it, so the widget visitor and the same
+     * person on WhatsApp resolve to one contact. Otherwise we synthesise from
+     * the row id behind a `0000` prefix — no real number normalises to leading
+     * zeros, so a synthetic key can never collide with a genuine phone.
+     */
+    public function autoReplyKey(): string
+    {
+        $digits = preg_replace('/\D+/', '', (string) ($this->phone ?? ''));
+        if ($digits !== '' && strlen($digits) >= 6) {
+            return $digits;
+        }
+        return '0000' . $this->id;
+    }
+
+    /** True when autoReplyKey() is synthetic rather than a real phone number. */
+    public function hasSyntheticKey(): bool
+    {
+        return str_starts_with($this->autoReplyKey(), '0000');
+    }
+
     public static function freshUuid(): string
     {
         return (string) Str::uuid();

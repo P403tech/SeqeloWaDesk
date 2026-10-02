@@ -116,6 +116,37 @@ class AppointmentReminderScheduler
         }
     }
 
+    /**
+     * Cancel any pending reminder(s) for this appointment on the Node bridge.
+     * Without this a cancelled appointment still fired its reminder, because the
+     * reminder is a live Node schedule row keyed by a synthetic scheduleId.
+     * Covers BOTH id schemes: the single reminder (-1000000 - id) and the
+     * widened multi-offset booking ids (-2_000_000_000 - id*100 - offsetIndex).
+     * Cancelling an id Node doesn't hold is a harmless no-op, so we clear a
+     * small offset range. Best-effort — a failure never blocks the cancel.
+     */
+    public function unschedule(Appointment $appt): void
+    {
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        if ($base === '') return;
+
+        $ids = [-1000000 - $appt->id];
+        for ($i = 0; $i < 8; $i++) {
+            $ids[] = -2000000000 - ($appt->id * 100) - $i;
+        }
+        $base = rtrim($base, '/');
+        foreach ($ids as $sid) {
+            try {
+                Http::withHeaders(['X-Node-Token' => node_token()])
+                    ->timeout(6)
+                    ->acceptJson()
+                    ->delete($base . '/api/cancel-scheduled-message/' . $sid);
+            } catch (\Throwable $e) {
+                Log::info('[APPT-REMINDER] unschedule ' . $sid . ' failed for appt ' . $appt->id . ': ' . $e->getMessage());
+            }
+        }
+    }
+
     private function resolveDevice(Workspace $workspace, Appointment $appt): ?Device
     {
         // If the booking ties back to a conversation, use the same

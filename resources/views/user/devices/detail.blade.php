@@ -146,6 +146,44 @@
             @endif
         </section>
 
+        {{-- Per-number automation — default AI agent + business/segment tag. The
+             agent auto-replies to every new chat on this number; the business tag is
+             applied to each inbound chat AND its contact so contacts are grouped by
+             which number/business they belong to. --}}
+        @php
+            $__aiAgents = \App\Models\AiAgent::where('workspace_id', auth()->user()?->current_workspace_id)
+                ->orderBy('name')->get(['id', 'name']);
+        @endphp
+        <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card p-5">
+            <h2 class="text-[14px] font-semibold text-ink-900 mb-1">{{ __('Number automation') }}</h2>
+            <p class="text-[11.5px] text-ink-500 mb-3">
+                {{ __('Auto-answer every new conversation on this number and group its contacts by business — no manual work chat by chat. The AI agent won\'t take over a chat a teammate is already handling.') }}
+            </p>
+            <form action="{{ url('/devices/device/' . $device->id . '/default-agent') }}" method="POST"
+                class="flex items-end gap-3 flex-wrap">
+                @csrf
+                @if ($__aiAgents->isNotEmpty())
+                    <label class="flex flex-col gap-1">
+                        <span class="text-[11px] font-medium text-ink-600">{{ __('Auto-reply AI agent') }}</span>
+                        <select name="agent_id"
+                            class="px-3 py-2 rounded-xl border border-paper-200 text-[13px] bg-paper-0 focus:border-wa-deep focus:outline-none">
+                            <option value="">{{ __('None (manual)') }}</option>
+                            @foreach ($__aiAgents as $ag)
+                                <option value="{{ $ag->id }}" @selected((int) $device->default_ai_agent_id === (int) $ag->id)>{{ $ag->name }}</option>
+                            @endforeach
+                        </select>
+                    </label>
+                @endif
+                <label class="flex flex-col gap-1">
+                    <span class="text-[11px] font-medium text-ink-600">{{ __('Business tag') }}</span>
+                    <input type="text" name="business_tag" maxlength="60" value="{{ $device->default_tag }}"
+                        placeholder="{{ __('e.g. Cloud Kitchen') }}"
+                        class="px-3 py-2 rounded-xl border border-paper-200 text-[13px] bg-paper-0 focus:border-wa-deep focus:outline-none" />
+                </label>
+                <button class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Save') }}</button>
+            </form>
+        </section>
+
         {{-- Per-number proxy / dedicated IP (Unofficial-API) --}}
         @php
             $canProxy = (bool) (auth()->user()?->currentWorkspace?->effectiveLimit('access_proxy_isolation', false));
@@ -530,7 +568,7 @@
             </div>
             {{-- Per-source totals strip — chat / campaign / scheduled counts
  show at a glance what's flowing through this device. --}}
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 px-5 pt-4">
+            <div class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 px-5 pt-4">
                 <div class="rounded-lg bg-paper-50 border border-paper-200 p-3">
                     <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">{{ __('Chat sends') }}
                     </div>
@@ -552,6 +590,13 @@
                         {{ number_format($kindCounts['scheduled'] ?? 0) }}</div>
                     <div class="text-[10.5px] text-ink-500 mt-0.5">{{ __('via /scheduled') }}</div>
                 </div>
+                <a href="{{ url('/templates') }}" class="rounded-lg bg-paper-50 border border-paper-200 p-3 hover:border-wa-deep transition block">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                        {{ __('Message templates') }}</div>
+                    <div class="font-serif text-[22px] leading-tight mt-1">
+                        {{ number_format($templateCount ?? 0) }}</div>
+                    <div class="text-[10.5px] text-ink-500 mt-0.5">{{ __('in this workspace') }}</div>
+                </a>
             </div>
 
             @if ($recentRows->count())

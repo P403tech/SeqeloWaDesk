@@ -10,26 +10,28 @@ export default function init() {
     const APP_BASE = window.location.pathname.replace(/\/flows\/builder.*$/, '');
 
     const NTYPES = {
-      trigger:   { label:'Trigger',         group:'Start',   bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M5 3l8 5-8 5z',                                                                                      desc:'Where the flow starts',  singleton:true, modes:['chat','call','instagram','facebook','tiktok','telegram'] },
-      message:   { label:'Send message',    group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M3 5.5A2.5 2.5 0 0 1 5.5 3h5A2.5 2.5 0 0 1 13 5.5v3A2.5 2.5 0 0 1 10.5 11H8l-3.5 2v-2A2.5 2.5 0 0 1 3 8.5v-3Z',  desc:'Plain text message', modes:['chat','instagram','facebook','tiktok','telegram'] },
+      trigger:   { label:'Trigger',         group:'Start',   bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M5 3l8 5-8 5z',                                                                                      desc:'Where the flow starts',  singleton:true, modes:['chat','call','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
+      message:   { label:'Send message',    group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M3 5.5A2.5 2.5 0 0 1 5.5 3h5A2.5 2.5 0 0 1 13 5.5v3A2.5 2.5 0 0 1 10.5 11H8l-3.5 2v-2A2.5 2.5 0 0 1 3 8.5v-3Z',  desc:'Plain text message', modes:['chat','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       template:  { label:'Send template',   group:'Send',    bg:'#D9E5F2', fg:'#13478A', icon:'M2.5 2.5h11v11h-11zM2.5 6h11M6 13.5V6',                                                              desc:'Approved template' },
-      media:     { label:'Send media',      group:'Send',    bg:'#FFF4E0', fg:'#7B5A14', icon:'M2 3h12v10H2zM6 7m-1 0a1 1 0 1 0 2 0 1 1 0 1 0-2 0M3 11l3-3 4 4 3-3 0 4',                            desc:'Image, video, doc, audio', modes:['chat','instagram','facebook','tiktok','telegram'] },
+      media:     { label:'Send media',      group:'Send',    bg:'#FFF4E0', fg:'#7B5A14', icon:'M2 3h12v10H2zM6 7m-1 0a1 1 0 1 0 2 0 1 1 0 1 0-2 0M3 11l3-3 4 4 3-3 0 4',                            desc:'Image, video, doc, audio', modes:['chat','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       notify_number: { label:'Copy to number', group:'Send', bg:'#E8F0FE', fg:'#1A73E8', icon:'M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13c0-2.2 2.2-3.5 5-3.5M11 9.5v4M9 11.5h4',            desc:'Send a copy to a fixed number', modes:['chat'] },
       wa_to_instagram: { label:'Hand off to Instagram', group:'Engage', bg:'#FCE7F3', fg:'#9D174D', icon:'M4 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM11.5 4h.01', desc:'Send the user an Instagram DM link', modes:['chat'] },
       sequence:  { label:'Send sequence',   group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M2 4h12M2 8h12M2 12h8M13 11l2 2-2 2',                                                            desc:'Stack text + media in one node' },
-      buttons:   { label:'Quick replies',   group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M2.5 2.5h11v5h-7l-3 3v-8Z M2.5 11h11 M2.5 13.5h11',                                                desc:'Tap-to-pick reply buttons', modes:['chat','instagram','facebook','tiktok','telegram'] },
+      buttons:   { label:'Quick replies',   group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M2.5 2.5h11v5h-7l-3 3v-8Z M2.5 11h11 M2.5 13.5h11',                                                desc:'Tap-to-pick reply buttons', modes:['chat','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       list:      { label:'List message',    group:'Send',    bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M2.5 2.5h11v11h-11zM5 6h6M5 8h6M5 10h4',                                                            desc:'Interactive list picker' },
-      ask:       { label:'Ask question',    group:'Listen',  bg:'#FBE9E7', fg:'#A1431F', icon:'M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM6 6.5a2 2 0 0 1 4 0c0 1.5-2 1.5-2 3M8 12.5h.01',                desc:'Save user reply to a var', modes:['chat','instagram','facebook','tiktok','telegram'] },
-      condition: { label:'Condition',       group:'Logic',   bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M8 2v3M5 8l3-3 3 3M8 5v9',                                                                          desc:'If / else branch', modes:['chat','call','instagram','facebook','tiktok','telegram'] },
-      delay:     { label:'Wait',            group:'Logic',   bg:'#FFF4E0', fg:'#7B5A14', icon:'M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM8 5v3l2 2',                                                    desc:'Pause for X minutes', modes:['chat','call','instagram','facebook','tiktok','telegram'] },
-      webhook:   { label:'Webhook',         group:'Logic',   bg:'#E8F5E9', fg:themeColor('wa-deep'), icon:'M3 8h3l1.5-4 2 8 1.5-4h2',                                                                          desc:'Call external HTTPS endpoint', modes:['chat','call','instagram','facebook','tiktok','telegram'] },
+      ask:       { label:'Ask question',    group:'Listen',  bg:'#FBE9E7', fg:'#A1431F', icon:'M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM6 6.5a2 2 0 0 1 4 0c0 1.5-2 1.5-2 3M8 12.5h.01',                desc:'Save user reply to a var', modes:['chat','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
+      condition: { label:'Condition',       group:'Logic',   bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M8 2v3M5 8l3-3 3 3M8 5v9',                                                                          desc:'If / else branch', modes:['chat','call','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
+      delay:     { label:'Wait',            group:'Logic',   bg:'#FFF4E0', fg:'#7B5A14', icon:'M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM8 5v3l2 2',                                                    desc:'Pause for X minutes', modes:['chat','call','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
+      webhook:   { label:'Webhook',         group:'Logic',   bg:'#E8F5E9', fg:themeColor('wa-deep'), icon:'M3 8h3l1.5-4 2 8 1.5-4h2',                                                                          desc:'Call external HTTPS endpoint', modes:['chat','call','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       code:      { label:'Run code (JS)',    group:'Logic',   bg:'#1E2A33', fg:'#7CF3C4', icon:'M6 4L2.5 8 6 12M10 4l3.5 4L10 12',                                                                  desc:'Sandboxed JavaScript transform', modes:['chat','call'] /* NOT instagram: the JS sandbox is node:vm and the IG runner is PHP */ },
       mysql:     { label:'MySQL Query',     group:'Logic',   bg:'#E6F4EA', fg:'#137333', icon:'M3 4c0-1 2.2-1.8 5-1.8s5 .8 5 1.8v8c0 1-2.2 1.8-5 1.8s-5-.8-5-1.8zM3 4c0 1 2.2 1.8 5 1.8s5-.8 5-1.8M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8', desc:'Run a read-only SQL query' },
-      ai:        { label:'AI assistant',    group:'AI',      bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5l1.5-1.5M11 5l1.5-1.5', desc:'Reply with ChatGPT or Gemini', modes:['chat','instagram','facebook','tiktok','telegram'] },
+      ai:        { label:'AI assistant',    group:'AI',      bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5l1.5-1.5M11 5l1.5-1.5', desc:'Reply with ChatGPT or Gemini', modes:['chat','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       tag:       { label:'Tag contact',     group:'Contact', bg:'#D9E5F2', fg:'#13478A', icon:'M3 3h6l5 5-6 6-5-5zM6 6m-1 0a1 1 0 1 0 2 0 1 1 0 1 0-2 0',                                          desc:'Add or remove a tag' },
       assign:    { label:'Assign agent',    group:'Contact', bg:themeColor('wa-mint'), fg:themeColor('wa-deep'), icon:'M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM2 14c0-3 2.5-5 4-5s4 2 4 5M11.5 3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4M10.5 10c1.9.2 3.5 1.7 3.5 4', desc:'Hand off to a human' },
+      task:      { label:'Create task',     group:'Contact', bg:'#FFF4E0', fg:'#7B5A14', icon:'M3 8.5l3 3 7-7M2 3h12v10H2z',                                                                        desc:'Follow-up for an agent' },
+      contact_update: { label:'Update contact', group:'Contact', bg:'#D9E5F2', fg:'#13478A', icon:'M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13.5c0-2.2 2.2-3.5 5-3.5s5 1.3 5 3.5M11 5.5l1.5 1.5', desc:'Save answers to the contact' },
       subflow:   { label:'Run sub-flow',    group:'Logic',   bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M3.5 8a1.8 1.8 0 1 0 0-0.01M12.5 3.5a1.8 1.8 0 1 0 0-0.01M12.5 12.5a1.8 1.8 0 1 0 0-0.01M5 7l6-3M5 9l6 3', desc:'Call another flow' },
-      end:       { label:'End',             group:'Start',   bg:'#FBE9E7', fg:'#A1431F', icon:'M3 3h10v10H3z',                                                                                    desc:'Stop the flow here', modes:['chat','call','instagram','facebook','tiktok','telegram'] },
+      end:       { label:'End',             group:'Start',   bg:'#FBE9E7', fg:'#A1431F', icon:'M3 3h10v10H3z',                                                                                    desc:'Stop the flow here', modes:['chat','call','instagram','facebook','tiktok','telegram','line','wechat','viber','email','webchat'] },
       cta:        { label:'Call to action',  group:'Engage',  bg:'#FFE4D6', fg:'#A1431F', icon:'M3 8h7M7 5l3 3-3 3M11 3h2v10h-2',                                                                  desc:'Send a CTA button' },
       location:   { label:'Location',        group:'Engage',  bg:'#FFF4E0', fg:'#7B5A14', icon:'M8 1.5C5.5 1.5 3.5 3.4 3.5 5.7c0 3 4.5 8.8 4.5 8.8s4.5-5.8 4.5-8.8C12.5 3.4 10.5 1.5 8 1.5zM8 7a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z', desc:'Send a map pin' },
       poll:       { label:'Poll',            group:'Engage',  bg:'#F3E9FF', fg:themeColor('accent-plum'), icon:'M3 13V7M7 13V3M11 13v-5',                                                                          desc:'Send a poll' },
@@ -141,6 +143,30 @@ export default function init() {
       catch (e) { return []; }
     })();
 
+    // LINE / WeChat / Viber channels — connected rows embedded in
+    // data-line-channels / data-wechat-channels / data-viber-channels (same
+    // {key:'<ch>:<rowId>', id, label} shape). Each flow binds to ONE channel;
+    // the runtime resolver matches flow_type + trigger_device_id = that row id.
+    const LINE_ENABLED   = document.getElementById('root')?.dataset?.line === '1';
+    const LINE_CHANS     = (() => { try { return JSON.parse(document.getElementById('root')?.dataset?.lineChannels || '[]') || []; } catch (e) { return []; } })();
+    const WECHAT_ENABLED = document.getElementById('root')?.dataset?.wechat === '1';
+    const WECHAT_CHANS   = (() => { try { return JSON.parse(document.getElementById('root')?.dataset?.wechatChannels || '[]') || []; } catch (e) { return []; } })();
+    const VIBER_ENABLED  = document.getElementById('root')?.dataset?.viber === '1';
+    const VIBER_CHANS    = (() => { try { return JSON.parse(document.getElementById('root')?.dataset?.viberChannels || '[]') || []; } catch (e) { return []; } })();
+
+    // Email channel — linked mailboxes embedded in data-email-accounts (same
+    // {key:'email:<mirrorRowId>', id, label} shape). The blade only sets
+    // data-email='1' when the platform toggle is on AND this workspace has a
+    // connected mailbox, so the same "no dead channels" rule applies: an email
+    // flow that has no mailbox to run on is never offered.
+    const EMAIL_ENABLED  = document.getElementById('root')?.dataset?.email === '1';
+    const EMAIL_ACCTS    = (() => { try { return JSON.parse(document.getElementById('root')?.dataset?.emailAccounts || '[]') || []; } catch (e) { return []; } })();
+
+    // Chat-widget channel — embedded in data-webchat by the flows blade, set
+    // only when this workspace has at least one ACTIVE widget. Same "no dead
+    // channels" rule as email/LINE: never offer a channel with nothing to run on.
+    const WEBCHAT_ENABLED = document.getElementById('root')?.dataset?.webchat === '1';
+
     const INITIAL_FLOW_TYPE = (() => {
       const t = document.getElementById('root')?.dataset?.flowType;
       if (t === 'call') return 'call';
@@ -150,6 +176,11 @@ export default function init() {
       if (t === 'facebook') return FB_ENABLED ? 'facebook' : 'chat';
       if (t === 'tiktok') return TT_ENABLED ? 'tiktok' : 'chat';
       if (t === 'telegram') return TG_ENABLED ? 'telegram' : 'chat';
+      if (t === 'line') return LINE_ENABLED ? 'line' : 'chat';
+      if (t === 'wechat') return WECHAT_ENABLED ? 'wechat' : 'chat';
+      if (t === 'viber') return VIBER_ENABLED ? 'viber' : 'chat';
+      if (t === 'email') return EMAIL_ENABLED ? 'email' : 'chat';
+      if (t === 'webchat') return WEBCHAT_ENABLED ? 'webchat' : 'chat';
       return 'chat';
     })();
     const MSG_CHANNELS = [
@@ -158,6 +189,11 @@ export default function init() {
       ...(FB_ENABLED ? ['facebook'] : []),
       ...(TT_ENABLED ? ['tiktok'] : []),
       ...(TG_ENABLED ? ['telegram'] : []),
+      ...(LINE_ENABLED ? ['line'] : []),
+      ...(WECHAT_ENABLED ? ['wechat'] : []),
+      ...(VIBER_ENABLED ? ['viber'] : []),
+      ...(EMAIL_ENABLED ? ['email'] : []),
+      ...(WEBCHAT_ENABLED ? ['webchat'] : []),
     ];
     const flowTypeOf = (list) => {
       if (INITIAL_FLOW_TYPE === 'call') return 'call';
@@ -217,9 +253,15 @@ export default function init() {
     // Workspace contact tags — drives the Tag contact node's tag picker.
     let TAGS_CACHE = [];
 
+    // Workspace contact GROUPS — drives the Tag contact node's group picker.
+    let GROUPS_CACHE = [];
+
     // Workspace AI agents — drives the Chatbot node's picker.
     let AGENTS_CACHE = [];
     let STAGES_CACHE = []; // Sales Pipeline stages for the deal_stage_changed trigger
+    // Sales pipelines — scopes the deal_created / deal_won / deal_lost triggers
+    // to one board. Loaded from /deals/pipelines alongside the stage list.
+    let PIPELINES_CACHE = [];
 
     // Workspace commerce stores per provider — drives the commerce
     // nodes' store dropdown. Populated lazily per provider so we
@@ -278,7 +320,7 @@ export default function init() {
         ] };
         case 'ask':       return { prompt:"What's your name?", var:'answer', validate:'text', options: [] };
         case 'condition': return { conditions: [{ variable:'', operator:'equals', value:'' }], operators: [] };
-        case 'delay':     return { amount:5, unit:'min' };
+        case 'delay':     return { amount:5, unit:'min', eventType:'duration', timeoutAmount:0, timeoutUnit:'hour' };
         case 'webhook':   return { method:'POST', url:'', body:'', contentType:'application/json', headers:[], save:'response' };
         case 'code':      return { code:'// Available variables:\n// - previousResponse : output of the previous node\n// - allResponses     : every saved {{variable}} so far\n// - functionArgs     : args passed in\n\nreturn {\n  ok: true,\n  message: "Hello from the code node"\n};', save:'result' };
         case 'mysql':     return { host:'localhost', port:'3306', database:'', username:'', password:'', sql:'SELECT * FROM products WHERE field = {{field}}', save:'rows' };
@@ -333,8 +375,12 @@ export default function init() {
           linkText:'Tap to pay:',          // paylink mode: text shown before the link
           wait:false,                      // block-until-paid: pause the flow until payment lands
         };
-        case 'tag':       return { action:'add', tag:'', tagId:'' };
+        case 'tag':       return { action:'add', tag:'', tagId:'', group:'', groupId:'' };
         case 'assign':    return { team:'', userId:'', message:'' };
+        // dueInAmount/dueInUnit are flattened to one `dueInSeconds` scalar by
+        // FlowNormalizer, so the runtime never parses a unit vocabulary.
+        case 'task':      return { title:'Follow up with {{name}}', notes:'', assigneeId:'', priority:'medium', dueInAmount:1, dueInUnit:'days', relatedType:'contact' };
+        case 'contact_update': return { fields:[{ key:'', value:'' }] };
         case 'subflow':   return { flow:'' };
         case 'end':       return {};
         case 'cta':       return { actions: [ { type:'url', label:'Visit website', value:'https://example.com' } ] };
@@ -419,10 +465,18 @@ export default function init() {
           'comment_to_dm':      'on comment → DM',
           'tag_added':          'on tag added',
           'group_join':         'on group join',
+          'campaign_engagement':'on campaign engagement',
           'contact_created':    'on new contact',
           'opt_in':             'on opt-in',
           'order_placed':       'on order',
           'deal_stage_changed': 'on deal stage',
+          'deal_created':       'on deal created',
+          'deal_won':           'on deal won',
+          'deal_lost':          'on deal lost',
+          'deal_assigned':      'on deal assigned',
+          'conversation_assigned': 'on chat assigned',
+          'task_due':           'on task due',
+          'no_activity':        'on no activity',
           'away':               'while away',
           'out_of_hours':       'after hours',
           'manual_enroll':      'on enroll',
@@ -452,7 +506,9 @@ export default function init() {
                     .concat([{ id:'else', label:'else / no match', kind:'no' }]);
         }
         case 'condition': return [{ id:'yes', label:'IF · true', kind:'yes' }, { id:'no', label:'ELSE · false', kind:'no' }];
-        case 'delay':     return [{ id:'out', label:'after wait', kind:'flow' }];
+        case 'delay':     return (d.eventType === 'reply')
+                            ? [{ id:'resume', label:'customer replied', kind:'yes' }, { id:'timeout', label:'no reply (timeout)', kind:'no' }]
+                            : [{ id:'out', label:'after wait', kind:'flow' }];
         case 'webhook':   return [{ id:'out', label:'response', kind:'flow' }];
         case 'code':      return [{ id:'out', label:'done', kind:'flow' }];
         case 'cf_say':      return [{ id:'out', label:'spoken', kind:'flow' }];
@@ -485,6 +541,8 @@ export default function init() {
         case 'ai':        return [{ id:'out', label:'reply ready', kind:'flow' }];
         case 'tag':       return [{ id:'out', label:'next', kind:'flow' }];
         case 'assign':    return [{ id:'out', label:'next', kind:'flow' }];
+        case 'task':      return [{ id:'out', label:'next', kind:'flow' }];
+        case 'contact_update': return [{ id:'out', label:'next', kind:'flow' }];
         case 'subflow':   return [{ id:'out', label:'after run', kind:'flow' }];
         case 'end':       return [];
         case 'cta':
@@ -662,6 +720,8 @@ export default function init() {
                       ? html`<span className="ml-1.5 normal-case tracking-normal text-[10px] font-sans px-1.5 py-0.5 rounded bg-[#1877F2] text-white">Facebook</span>`
                     : mode === 'call'
                       ? html`<span className="ml-1.5 normal-case tracking-normal text-[10px] font-sans px-1.5 py-0.5 rounded bg-paper-100 text-ink-700">Call</span>`
+                    : mode === 'email'
+                      ? html`<span className="ml-1.5 normal-case tracking-normal text-[10px] font-sans px-1.5 py-0.5 rounded bg-[#E8F0FE] text-[#1A73E8]">Email</span>`
                       : html`<span className="ml-1.5 normal-case tracking-normal text-[10px] font-sans px-1.5 py-0.5 rounded bg-wa-mint text-wa-deep">WhatsApp</span>`}
               </div>
               <span className="text-[9.5px] font-mono text-ink-500">${Object.values(groups).reduce((a,b)=>a+b.length,0)}</span>
@@ -809,7 +869,9 @@ export default function init() {
           </div>`;
         }
         case 'delay':
-          return html`<div className="px-3 pt-2 pb-1.5 text-[11.5px] text-ink-700"><span className="text-ink-500">Wait </span><span className="font-mono text-ink-900 text-[13px]">${d.amount ?? 5} ${d.unit || 'min'}</span></div>`;
+          return html`<div className="px-3 pt-2 pb-1.5 text-[11.5px] text-ink-700">${d.eventType === 'reply'
+            ? html`<span className="text-ink-500">Wait for </span><span className="font-mono text-ink-900 text-[13px]">customer reply</span>`
+            : html`<span className="text-ink-500">Wait </span><span className="font-mono text-ink-900 text-[13px]">${d.amount ?? 5} ${d.unit || 'min'}</span>`}</div>`;
         case 'webhook':
           return html`<div className="px-3 pt-2 pb-1.5 flex items-center gap-2 text-[11.5px]">
             <span className="font-mono text-[10px] uppercase px-1.5 py-0.5 rounded bg-paper-50 text-ink-700 border border-paper-200">${d.method || 'POST'}</span>
@@ -824,6 +886,19 @@ export default function init() {
           return html`<div className="px-3 pt-2.5 pb-2"><div className="bubble">🤖 ${d.model || 'gpt-4o-mini'}</div>
             <div className="text-[10.5px] text-ink-500 mt-1.5 line-clamp-2">${d.prompt || 'You are a friendly support assistant…'}</div></div>`;
         case 'tag': {
+          // Group action → show the group pill instead of the tag pill.
+          if (d.action === 'add_group' || d.action === 'remove_group') {
+            const gCached = (Array.isArray(GROUPS_CACHE) ? GROUPS_CACHE : []).find(g => String(g.id) === String(d.groupId));
+            const gLabel  = gCached ? gCached.name : (d.group || '—');
+            const gSwatch = themeColor('wa-deep');
+            return html`<div className="px-3 pt-2 pb-1.5 flex items-center gap-2 text-[11.5px]">
+              <span className="text-ink-500">${d.action === 'remove_group' ? 'remove from' : 'add to'} group</span>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-wa-mint border" style=${{ borderColor: gSwatch + '66', color: gSwatch }}>
+                <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style=${{ background: gSwatch }}></span>${gLabel}
+              </span>
+              ${!gCached && d.group ? html`<span className="text-[10px] text-ink-500 italic">new</span>` : null}
+            </div>`;
+          }
           // Prefer the linked tag's CURRENT name from the workspace
           // cache (so renames reflect on the canvas) and fall back to
           // the snapshot string when the tag was typed as new.
@@ -836,6 +911,25 @@ export default function init() {
               <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style=${{ background: swatch }}></span>${label}
             </span>
             ${!cached && d.tag ? html`<span className="text-[10px] text-ink-500 italic">new</span>` : null}
+          </div>`;
+        }
+        case 'task': {
+          const due = Number(d.dueInAmount || 0) > 0
+            ? `in ${d.dueInAmount} ${d.dueInUnit || 'days'}` : 'no due date';
+          return html`<div className="px-3 pt-2 pb-1.5 text-[11.5px]">
+            <div className="truncate text-ink-900">${d.title || '— untitled task —'}</div>
+            <div className="text-[10.5px] text-ink-500 mt-0.5">${d.priority || 'medium'} · ${due}</div>
+          </div>`;
+        }
+        case 'contact_update': {
+          const keys = (d.fields || []).map(f => f && f.key).filter(Boolean);
+          return html`<div className="px-3 pt-2 pb-1.5 text-[11.5px]">
+            ${keys.length
+              ? html`<div className="flex flex-wrap gap-1">
+                  ${keys.slice(0, 4).map(k => html`<span key=${k} className="text-[10px] px-1.5 py-0.5 rounded bg-paper-100 font-mono text-ink-700">${k}</span>`)}
+                  ${keys.length > 4 ? html`<span className="text-[10px] text-ink-500">+${keys.length - 4}</span>` : null}
+                </div>`
+              : html`<span className="text-ink-500 italic">— no fields set —</span>`}
           </div>`;
         }
         case 'assign': {
@@ -1432,7 +1526,7 @@ export default function init() {
           if (!window.__FLOW_PICKER_CACHE__) {
             // Seed the IG accounts from the page immediately so the dropdown is
             // never empty while the fetch is in flight (or if it's cached-empty).
-            window.__FLOW_PICKER_CACHE__ = { tags:[], groups:[], devices:[], instagram: IG_ACCOUNTS, facebook: FB_PAGES, tiktok: TT_ACCOUNTS, telegram: TG_BOTS, keywordRules:[] };
+            window.__FLOW_PICKER_CACHE__ = { tags:[], groups:[], campaigns:[], devices:[], instagram: IG_ACCOUNTS, facebook: FB_PAGES, tiktok: TT_ACCOUNTS, telegram: TG_BOTS, line: LINE_CHANS, wechat: WECHAT_CHANS, viber: VIBER_CHANS, email: EMAIL_ACCTS, keywordRules:[] };
             // cache:'no-store' — the picker is a GET, and a stale browser-cached
             // copy (e.g. fetched before an Instagram account was connected) left
             // the trigger's account dropdown empty even though the server now
@@ -1446,7 +1540,11 @@ export default function init() {
                 const fb = (Array.isArray(j.facebook) && j.facebook.length) ? j.facebook : FB_PAGES;
                 const tt = (Array.isArray(j.tiktok) && j.tiktok.length) ? j.tiktok : TT_ACCOUNTS;
                 const tg = (Array.isArray(j.telegram) && j.telegram.length) ? j.telegram : TG_BOTS;
-                window.__FLOW_PICKER_CACHE__ = { tags: j.tags || [], groups: j.groups || [], devices: j.devices || [], instagram: ig, facebook: fb, tiktok: tt, telegram: tg, keywordRules: j.keywordRules || [] };
+                const ln = (Array.isArray(j.line) && j.line.length) ? j.line : LINE_CHANS;
+                const wc = (Array.isArray(j.wechat) && j.wechat.length) ? j.wechat : WECHAT_CHANS;
+                const vb = (Array.isArray(j.viber) && j.viber.length) ? j.viber : VIBER_CHANS;
+                const em = (Array.isArray(j.email) && j.email.length) ? j.email : EMAIL_ACCTS;
+                window.__FLOW_PICKER_CACHE__ = { tags: j.tags || [], groups: j.groups || [], campaigns: j.campaigns || [], devices: j.devices || [], instagram: ig, facebook: fb, tiktok: tt, telegram: tg, line: ln, wechat: wc, viber: vb, email: em, keywordRules: j.keywordRules || [] };
                 onRefresh?.();
               } })
               .catch(() => {});
@@ -1458,6 +1556,10 @@ export default function init() {
           const fbPages = window.__FLOW_PICKER_CACHE__.facebook || [];
           const ttAccts = window.__FLOW_PICKER_CACHE__.tiktok || [];
           const tgBots  = window.__FLOW_PICKER_CACHE__.telegram || [];
+          const lnChans = window.__FLOW_PICKER_CACHE__.line || [];
+          const wcChans = window.__FLOW_PICKER_CACHE__.wechat || [];
+          const vbChans = window.__FLOW_PICKER_CACHE__.viber || [];
+          const emAccts = window.__FLOW_PICKER_CACHE__.email || [];
           const kwRules = window.__FLOW_PICKER_CACHE__.keywordRules || [];
 
           // Harden both pickers: only rows with a real id become options, the
@@ -1471,6 +1573,22 @@ export default function init() {
           const groupOpts = [{ v:'', l: groups.length ? '— pick group —' : 'Loading groups…' }]
             .concat(groups.filter(g => g && g.id != null && String(g.id) !== '')
               .map(g => ({ v: String(g.id), l: String(g.name ?? g.label ?? ('Group #' + g.id)) })));
+          // Campaign-engagement trigger — WABA campaigns + the engagement statuses.
+          const campaigns   = window.__FLOW_PICKER_CACHE__.campaigns || [];
+          const campaignOpts = [{ v:'', l: campaigns.length ? '— pick campaign —' : 'Loading campaigns…' }]
+            .concat(campaigns.filter(c => c && c.id != null && String(c.id) !== '')
+              .map(c => ({ v: String(c.id), l: String(c.name ?? ('Campaign #' + c.id)) + (c.status ? ' · ' + c.status : '') })));
+          const campaignStatusOpts = [
+            { v:'read',              l:'Read the message' },
+            { v:'delivered_no_read', l:'Delivered but NOT read' },
+            { v:'read_no_reply',     l:'Read but did NOT reply' },
+            { v:'replied',           l:'Replied' },
+            { v:'clicked_button',    l:'Tapped a button' },
+            { v:'clicked_link',      l:'Clicked a link' },
+            { v:'sent_no_reply',     l:'Sent but no reply' },
+            { v:'not_delivered',     l:'Not delivered' },
+            { v:'failed',            l:'Failed to send' },
+          ];
           // Which channel this flow runs on. Lives on the TRIGGER node (not the
           // create-flow button) so it can be switched at any time; flowTypeOf()
           // reads it back out to drive the palette and the persisted flow_type.
@@ -1479,6 +1597,10 @@ export default function init() {
           const isFb    = channel === 'facebook';
           const isTt    = channel === 'tiktok';
           const isTg    = channel === 'telegram';
+          const isLine   = channel === 'line';
+          const isWechat = channel === 'wechat';
+          const isViber  = channel === 'viber';
+          const isEmail  = channel === 'email';
 
           // Sender options. The VALUE is the composite "engine:id" key — a bare
           // integer is ambiguous because `devices` (Unofficial) and
@@ -1498,6 +1620,18 @@ export default function init() {
             : isTg
             ? [{ v:'', l: tgBots.length ? '— pick Telegram bot —' : 'No connected Telegram bot' }]
                 .concat(tgBots.map(a => ({ v: String(a.key), l: a.label })))
+            : isLine
+            ? [{ v:'', l: lnChans.length ? '— pick LINE channel —' : 'No connected LINE channel' }]
+                .concat(lnChans.map(a => ({ v: String(a.key), l: a.label })))
+            : isWechat
+            ? [{ v:'', l: wcChans.length ? '— pick WeChat account —' : 'No connected WeChat account' }]
+                .concat(wcChans.map(a => ({ v: String(a.key), l: a.label })))
+            : isViber
+            ? [{ v:'', l: vbChans.length ? '— pick Viber account —' : 'No connected Viber account' }]
+                .concat(vbChans.map(a => ({ v: String(a.key), l: a.label })))
+            : isEmail
+            ? [{ v:'', l: emAccts.length ? '— pick mailbox —' : 'No linked mailbox' }]
+                .concat(emAccts.map(a => ({ v: String(a.key), l: a.label })))
             : [{ v:'', l: devices.length ? '— pick number —' : 'No connected number' }]
                 .concat(devices.map(d2 => ({
                   v: String(d2.key ?? d2.id),
@@ -1509,13 +1643,34 @@ export default function init() {
           // disconnected) would otherwise be unable to save ANY flow, which
           // would strand every existing flow the moment it was reopened.
           // No options → warn, explain, still let them save the draft.
-          const senderList    = isIg ? igAccts : isFb ? fbPages : isTt ? ttAccts : isTg ? tgBots : devices;
+          const senderList    = isIg ? igAccts : isFb ? fbPages : isTt ? ttAccts : isTg ? tgBots : isLine ? lnChans : isWechat ? wcChans : isViber ? vbChans : isEmail ? emAccts : devices;
           const senderChosen  = !!String(d.deviceId ?? '').trim();
-          const senderMissing = !senderChosen && senderList.length > 0;
-          const senderNone    = !senderChosen && senderList.length === 0;
+          // Campaign-engagement flows run per campaign recipient — the campaign's
+          // own device is used, so no number is required to save.
+          const noSenderNeeded = d.kind === 'campaign_engagement';
+          const senderMissing = !noSenderNeeded && !senderChosen && senderList.length > 0;
+          const senderNone    = !noSenderNeeded && !senderChosen && senderList.length === 0;
 
           const stageOpts = [{ v:'', l: STAGES_CACHE.length ? '— pick stage —' : 'Loading stages…' }]
             .concat(STAGES_CACHE.map(s => ({ v: String(s.id), l: s.name })));
+
+          // Pipelines for the deal_created / deal_won / deal_lost scope picker.
+          const pipelineOpts = PIPELINES_CACHE.map(p => ({ v: String(p.id), l: p.name }));
+
+          // Agents for deal_assigned / conversation_assigned. There is no
+          // workspace-members endpoint here, but TEAMS_CACHE already carries
+          // each team's members — flatten and de-dupe (one person can sit on
+          // several teams, and a duplicated name in the picker looks broken).
+          const memberOpts = (() => {
+            const seen = new Set(), out = [];
+            TEAMS_CACHE.forEach(t => (t.members || []).forEach(m => {
+              const id = String(m.id);
+              if (seen.has(id)) return;
+              seen.add(id);
+              out.push({ v: id, l: m.name });
+            }));
+            return out;
+          })();
 
           body = html`
             ${/* Hidden entirely when there is nothing to choose between —
@@ -1548,18 +1703,42 @@ export default function init() {
                 ${MSG_CHANNELS.includes('telegram')
                     ? html`<option value="telegram">Telegram</option>`
                     : null}
+                ${MSG_CHANNELS.includes('line')
+                    ? html`<option value="line">LINE</option>`
+                    : null}
+                ${MSG_CHANNELS.includes('wechat')
+                    ? html`<option value="wechat">WeChat</option>`
+                    : null}
+                ${MSG_CHANNELS.includes('viber')
+                    ? html`<option value="viber">Viber</option>`
+                    : null}
+                ${MSG_CHANNELS.includes('email')
+                    ? html`<option value="email">Email</option>`
+                    : null}
+                ${MSG_CHANNELS.includes('webchat')
+                    ? html`<option value="webchat">Chat widget</option>`
+                    : null}
               </select>`,
               'Switching channel re-filters the node palette and clears the sender below — a WhatsApp number is not a valid Instagram account or Facebook Page.'
             )}
             ${Field('How does this flow start?', Sel('kind', [
               ...(isIg ? [{ v:'comment_to_dm', l:'Instagram: someone comments on a post → DM' }] : []),
+              ...(isFb ? [{ v:'comment_to_dm', l:'Facebook: someone comments on a post → DM' }] : []),
               { v:'keyword',            l:'Keyword match (customer messages us)' },
               { v:'tag_added',          l:'Audience: when a tag is added' },
               { v:'group_join',         l:'Audience: when contact joins a group' },
+              ...((!isIg && !isFb && !isTt) ? [{ v:'campaign_engagement', l:'Campaign: when a recipient reads / replies / does not read …' }] : []),
               { v:'contact_created',    l:'Audience: when a new contact is added' },
               { v:'opt_in',             l:'Audience: when a contact re-subscribes' },
               { v:'order_placed',       l:'Commerce: when an order is placed' },
               { v:'deal_stage_changed', l:'Sales: when a deal enters a stage' },
+              { v:'deal_created',       l:'Sales: when a deal is created' },
+              { v:'deal_won',           l:'Sales: when a deal is won' },
+              { v:'deal_lost',          l:'Sales: when a deal is lost' },
+              { v:'deal_assigned',      l:'Sales: when a deal is assigned to an agent' },
+              { v:'conversation_assigned', l:'Sales: when a chat is assigned to an agent' },
+              { v:'task_due',           l:'Sales: when a follow-up date is reached' },
+              { v:'no_activity',        l:'Sales: when a deal has no activity for X hours' },
               { v:'away',               l:'Availability: while Away mode is on' },
               { v:'out_of_hours',       l:'Availability: outside business hours' },
               { v:'manual_enroll',      l:'Manual: operator enrolls contacts' },
@@ -1575,8 +1754,37 @@ export default function init() {
               : null}
             ${d.kind === 'tag_added' ? Field('Tag that triggers enrollment', Sel('tagId', tagOpts), 'Every contact who gets this tag is auto-enrolled into this flow. Tag is added from /team-inbox or routing rules.') : null}
             ${d.kind === 'group_join' ? Field('Group that triggers enrollment', Sel('groupId', groupOpts), 'Every contact added to this group is auto-enrolled.') : null}
+            ${d.kind === 'campaign_engagement' ? Field('Campaign', Sel('campaignId', campaignOpts), 'Which campaign the recipients came from.') : null}
+            ${d.kind === 'campaign_engagement' ? Field('When the recipient…', Sel('status', campaignStatusOpts), 'The engagement status that enrols the recipient into this flow.') : null}
+            ${d.kind === 'campaign_engagement' ? Field('Delay before running', Txt('delayMinutes', 'e.g. 120'), 'Minutes to wait after the status is reached (0 = immediately). Sends must stay inside the 24h window.') : null}
+            ${d.kind === 'campaign_engagement' ? Field('Apply to existing recipients', html`<label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked=${!!d.backfill} onChange=${e => onChange('backfill', e.target.checked)} className="w-4 h-4 accent-wa-deep" /> Enrol people who already match this status now</label>`, 'Turn on when the campaign already ran — enrols current recipients who already match, once.') : null}
+            ${d.kind === 'campaign_engagement' ? html`
+              <div className="px-3 py-2.5 mb-4 rounded-lg bg-wa-mint/40 border border-wa-green/30 text-[11.5px] leading-relaxed text-ink-700">
+                <b>How this runs:</b> after the campaign goes out, each recipient who reaches the status above is enrolled into this flow${d.delayMinutes ? ' (after the delay)' : ''}. For "no read / no reply" statuses it waits, then re-checks — if they engaged meanwhile, they're skipped. Each person is enrolled once, opted-out people never. It uses the campaign's own number.
+              </div>
+            ` : null}
             ${d.kind === 'deal_stage_changed' ? Field('Stage that triggers the flow', Sel('stageId', stageOpts), 'When a deal is moved INTO this pipeline stage, its linked contact is enrolled. Manage stages on the /deals board.') : null}
-            ${d.kind === 'comment_to_dm' ? (() => {
+            ${['deal_created','deal_won','deal_lost'].includes(d.kind)
+              ? Field('Pipeline', Sel('pipelineId', [{ v:'0', l:'Any pipeline' }].concat(pipelineOpts)),
+                  'Leave on "Any pipeline" unless this flow should only run for one board. The deal must have a linked contact — there is nobody to message otherwise.')
+              : null}
+            ${['deal_assigned','conversation_assigned'].includes(d.kind)
+              ? Field('Agent', Sel('userId', [{ v:'0', l:'Any agent' }].concat(memberOpts)),
+                  'Fires when the deal or chat is handed to this agent. "Any agent" covers every handover.')
+              : null}
+            ${d.kind === 'task_due'
+              ? Field('Follow-up reached', html`<div className="px-3 py-2 rounded-lg bg-paper-50 border border-paper-200 text-[11.5px] leading-snug text-ink-600">
+                  Runs once per task, the first time its due date passes. Works for tasks on a deal and standalone tasks — as long as the task is linked to a contact.
+                </div>`)
+              : null}
+            ${d.kind === 'no_activity'
+              ? Field('Hours of silence', Num('hours', 48),
+                  'Counts from the last time the deal was touched OR any activity was logged against it. Fires once per deal per window, and re-arms when the deal is worked again. Only open deals are considered.')
+              : null}
+            ${d.kind === 'comment_to_dm' ? (isFb
+              ? Field('Keyword(s) in the comment', Txt('keywords', 'price, info, support'),
+                  'Comma-separated. When a comment on your Page contains any of these, this flow starts (and can reply to the comment). Leave blank to run on every comment.')
+              : (() => {
               // Bind this flow to specific "Comment → DM" keyword rules. When
               // someone comments a matching keyword on a post, the rule sends
               // its DM AND this flow starts in that DM thread. No rules ticked =
@@ -1604,7 +1812,7 @@ export default function init() {
                   </div>
                 `}
               `, 'Tick the rules that should launch this flow. Leave all unticked to run on any Comment → DM rule.');
-            })() : null}
+            })()) : null}
             ${d.kind === 'order_placed' ? html`
               <div className="px-3 py-2 rounded-lg bg-paper-50 border border-paper-200 text-[11.5px] leading-snug">
                 Fires for every new order. The order's customer is matched to a saved contact and enrolled.
@@ -1630,22 +1838,42 @@ export default function init() {
                 You'll enroll contacts manually from the <a href="/flows" className="text-wa-deep underline">/flows list</a> via the <b>Enroll</b> button next to this flow.
               </div>
             ` : null}
-            ${Field(
+            ${noSenderNeeded ? html`
+              <div className="px-3 py-2 rounded-lg bg-paper-50 border border-paper-200 text-[11.5px] leading-snug">
+                This flow runs for the campaign's recipients — it uses the campaign's own number, so there's nothing to pick here.
+              </div>
+            ` : Field(
               isIg
                 ? (d.kind === 'keyword' ? 'Listen on Instagram account' : 'Send from Instagram account')
                 : isFb
                 ? (d.kind === 'keyword' ? 'Listen on Facebook Page' : 'Send from Facebook Page')
+                : isLine
+                ? (d.kind === 'keyword' ? 'Listen on LINE channel' : 'Send from LINE channel')
+                : isWechat
+                ? (d.kind === 'keyword' ? 'Listen on WeChat account' : 'Send from WeChat account')
+                : isViber
+                ? (d.kind === 'keyword' ? 'Listen on Viber account' : 'Send from Viber account')
+                : isEmail
+                ? (d.kind === 'keyword' ? 'Listen on mailbox' : 'Send from mailbox')
                 : (d.kind === 'keyword' ? 'Listen on number' : 'Send from number'),
               Sel('deviceId', senderOpts),
               isIg
                 ? 'Required — which connected Instagram account this flow runs on. Connect one on <a href="/instagram" class="text-wa-deep underline">/instagram</a>.'
                 : isFb
                 ? 'Required — which connected Facebook Page this flow runs on. Connect one on <a href="/devices" class="text-wa-deep underline">/devices</a>.'
+                : isLine
+                ? 'Required — which connected LINE channel this flow runs on. Connect one on <a href="/line" class="text-wa-deep underline">/line</a>.'
+                : isWechat
+                ? 'Required — which connected WeChat account this flow runs on. Connect one on <a href="/wechat" class="text-wa-deep underline">/wechat</a>.'
+                : isViber
+                ? 'Required — which connected Viber account this flow runs on. Connect one on <a href="/viber" class="text-wa-deep underline">/viber</a>.'
+                : isEmail
+                ? 'Required — which linked mailbox this flow runs on. Replies are sent from that address. Link one on <a href="/devices" class="text-wa-deep underline">/devices</a>.'
                 : 'Required — which connected number this flow runs on, across all your engines (Unofficial / WABA / Twilio). Connect one on <a href="/devices" class="text-wa-deep underline">/devices</a>.'
             )}
             ${senderMissing ? html`
               <div className="px-3 py-2 -mt-2 mb-4 rounded-lg bg-red-50 border border-red-200 text-[11.5px] leading-snug text-red-700">
-                Pick ${isIg ? 'an Instagram account' : isFb ? 'a Facebook Page' : 'a number'} before saving — without one the flow has no channel to run on.
+                Pick ${isIg ? 'an Instagram account' : isFb ? 'a Facebook Page' : isEmail ? 'a mailbox' : 'a number'} before saving — without one the flow has no channel to run on.
               </div>
             ` : null}
             ${senderNone ? html`
@@ -1654,6 +1882,8 @@ export default function init() {
                   ? html`No Instagram account is connected to this workspace yet. You can still build and save this flow — connect one on <a href="/instagram" className="underline font-semibold">/instagram</a> and pick it here before publishing.`
                   : isFb
                   ? html`No Facebook Page is connected to this workspace yet. You can still build and save this flow — connect one on <a href="/devices" className="underline font-semibold">/devices</a> and pick it here before publishing.`
+                  : isEmail
+                  ? html`No mailbox is linked to this workspace yet. You can still build and save this flow — link one on <a href="/devices" className="underline font-semibold">/devices</a> and pick it here before publishing.`
                   : html`No connected number in this workspace yet — a disconnected phone can't send, so it isn't listed. You can still build and save this flow — reconnect on <a href="/devices" className="underline font-semibold">/devices</a> and pick it here before publishing.`}
               </div>
             ` : null}
@@ -1970,6 +2200,7 @@ export default function init() {
             ${Field('Question', Ta('prompt', '', 3))}
             ${Field('Validate as', Sel('validate', [{v:'text',l:'Free text'},{v:'email',l:'Email'},{v:'phone',l:'Phone'},{v:'number',l:'Number'}]))}
             ${Field('Save answer to variable', Txt('var', 'answer'), "The customer's reply is stored here — reuse it later as <span class='font-mono'>{{answer}}</span> (or whatever you name it) in a Send message. IMPORTANT: give each Ask question a UNIQUE name — e.g. <span class='font-mono'>name</span>, <span class='font-mono'>email</span> — otherwise a later question overwrites the earlier answer.")}
+            ${Field('Accept a file/photo upload', html`<label className="flex items-center gap-2 text-[12.5px]"><input type="checkbox" checked=${!!d.acceptMedia} onChange=${e => onChange('acceptMedia', e.target.checked)} className="w-4 h-4 accent-wa-deep" /> Save an uploaded image / PDF / audio as this variable (a link)</label>`, 'When on and the customer replies with a file instead of text, the variable holds a link to the stored file — reuse it in Sheets, a Webhook, or a template media header. Works on WhatsApp (official & unofficial) and Twilio.')}
             ${Field('Expected answers', html`
               ${(d.options || []).map((o, i) => html`
                 <div key=${'ans-'+i} className="flex items-center gap-2 mb-1.5">
@@ -2048,8 +2279,17 @@ export default function init() {
         }
         case 'delay':
           body = html`
-            ${Field('Amount', Num('amount', '5'))}
-            ${Field('Unit', Sel('unit', [{v:'sec',l:'seconds'},{v:'min',l:'minutes'},{v:'hour',l:'hours'},{v:'day',l:'days'}]))}
+            ${Field('Wait mode', Sel('eventType', [
+              { v:'duration', l:'Wait for a fixed time' },
+              { v:'reply',    l:'Wait until the customer replies' },
+            ]), 'Pause for a set time, or hold the flow until the customer sends any message.')}
+            ${(d.eventType === 'reply') ? html`
+              ${Field('Reply timeout amount', Num('timeoutAmount', '0'), 'If they don\'t reply within this time, the flow takes the "no reply (timeout)" branch. Leave 0 to wait forever.')}
+              ${Field('Timeout unit', Sel('timeoutUnit', [{v:'sec',l:'seconds'},{v:'min',l:'minutes'},{v:'hour',l:'hours'},{v:'day',l:'days'}]))}
+            ` : html`
+              ${Field('Amount', Num('amount', '5'))}
+              ${Field('Unit', Sel('unit', [{v:'sec',l:'seconds'},{v:'min',l:'minutes'},{v:'hour',l:'hours'},{v:'day',l:'days'}]))}
+            `}
           `;
           break;
         case 'webhook': {
@@ -2414,7 +2654,7 @@ export default function init() {
         case 'fb_to_whatsapp': {
           // Cross-channel handoff, mirror of ig_to_whatsapp.
           const mode = (d.mode === 'direct') ? 'direct' : 'deeplink';
-          const waFlows = FLOWS_CACHE.filter(f => (f.flow_type || 'chat') !== 'instagram' && (f.flow_type || 'chat') !== 'facebook' && (f.flow_type || 'chat') !== 'tiktok' && (f.flow_type || 'chat') !== 'telegram' && (f.flow_type || 'chat') !== 'call');
+          const waFlows = FLOWS_CACHE.filter(f => (f.flow_type || 'chat') !== 'instagram' && (f.flow_type || 'chat') !== 'facebook' && (f.flow_type || 'chat') !== 'tiktok' && (f.flow_type || 'chat') !== 'telegram' && (f.flow_type || 'chat') !== 'email' && (f.flow_type || 'chat') !== 'call');
           const waFlowOpts = [{ v:'', l: waFlows.length ? '— pick WhatsApp flow —' : 'No WhatsApp flows yet' }]
             .concat(waFlows.map(f => ({ v:String(f.id), l:(f.flow_name || ('Flow #'+f.id)) + (f.is_published ? ' · live' : ' · draft') })));
           if (d.waFlowId && !waFlows.some(f => String(f.id) === String(d.waFlowId))) {
@@ -2525,7 +2765,7 @@ export default function init() {
               <input type="checkbox" checked=${!!d.conversational} onChange=${e => onChange('conversational', e.target.checked)} className="w-4 h-4 accent-wa-deep" />
               <span><strong>Conversation mode</strong> — the AI keeps replying to every message (drives the whole chat) instead of answering once</span>
             </label>
-            ${d.conversational ? Field('Exit keyword (optional)', Txt('exit_keyword', 'menu'), 'When the customer types exactly this, the AI hands back and the flow continues to the next node. Leave blank to let the AI run the whole conversation.') : ''}
+            ${d.conversational ? Field('Exit keywords (optional)', Txt('exit_keyword', 'exit, bye, quit, stop, thanks'), 'Comma-separated. When the customer types exactly one of these, the AI hands back and the flow continues to the next node. Leave blank to let the AI run the whole conversation.') : ''}
           `;
           break;
         }
@@ -2537,6 +2777,39 @@ export default function init() {
           //      (saves the name only; the runtime will create it on
           //      first use). The picker auto-resolves the name → id
           //      so the Node side has both fields.
+          //
+          // This node ALSO manages contact GROUP membership: the action
+          // dropdown adds add_group/remove_group, and picking one swaps the
+          // tag picker below for a group picker (real workspace groups).
+          const ACTIONS = [
+            { v:'add',          l:'Add tag to contact' },
+            { v:'remove',       l:'Remove tag from contact' },
+            { v:'add_group',    l:'Add to group' },
+            { v:'remove_group', l:'Remove from group' },
+          ];
+          if (d.action === 'add_group' || d.action === 'remove_group') {
+            const groupsHere = Array.isArray(GROUPS_CACHE) ? GROUPS_CACHE : [];
+            const gOpts = [{ v:'', l: groupsHere.length ? '— pick a group —' : 'No groups yet — type a new name below' }];
+            groupsHere.forEach(g => gOpts.push({ v: String(g.id), l: g.name }));
+            if (d.groupId && !groupsHere.some(g => String(g.id) === String(d.groupId))) {
+              gOpts.push({ v: String(d.groupId), l: '(deleted group #' + d.groupId + ')' });
+            }
+            const onPickGroup = (id) => {
+              const g = groupsHere.find(x => String(x.id) === String(id));
+              onChange('groupId', id);
+              onChange('group',   g ? g.name : '');
+            };
+            body = html`
+              ${Field('Action', Sel('action', ACTIONS))}
+              ${Field('Group', html`
+                <select value=${d.groupId || ''} onChange=${e => onPickGroup(e.target.value)} className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep mb-2">
+                  ${gOpts.map(o => html`<option key=${o.v} value=${o.v}>${o.l}</option>`)}
+                </select>
+                <input type="text" value=${d.group || ''} onInput=${e => { onChange('group', e.target.value); onChange('groupId', ''); }} placeholder="…or type a new group" data-attr-input="true" className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep" />
+              `, 'Pick an existing group or type a new name. The contact is added to (or removed from) it when this node fires.')}
+            `;
+            break;
+          }
           const tagsHere = Array.isArray(TAGS_CACHE) ? TAGS_CACHE : [];
           const tagOpts = [{ v: '', l: tagsHere.length ? '— pick existing tag —' : 'No tags yet — type a new name below' }];
           tagsHere.forEach(t => tagOpts.push({ v: String(t.id), l: t.name }));
@@ -2551,13 +2824,80 @@ export default function init() {
             onChange('tag',   t ? t.name : '');
           };
           body = html`
-            ${Field('Action', Sel('action', [{v:'add',l:'Add tag to contact'},{v:'remove',l:'Remove tag from contact'}]))}
+            ${Field('Action', Sel('action', ACTIONS))}
             ${Field('Tag', html`
               <select value=${d.tagId || ''} onChange=${e => onPickExisting(e.target.value)} className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep mb-2">
                 ${tagOpts.map(o => html`<option key=${o.v} value=${o.v}>${o.l}</option>`)}
               </select>
               <input type="text" value=${d.tag || ''} onInput=${e => { onChange('tag', e.target.value); onChange('tagId', ''); }} placeholder="…or type a new tag" data-attr-input="true" className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep" />
             `, 'Pick from existing tags or type a new name. The contact gets tagged (or untagged) when this node fires.')}
+          `;
+          break;
+        }
+        case 'task': {
+          // Assignee list comes from TEAMS_CACHE (the only members source the
+          // builder loads), flattened + de-duped: one person can sit on several
+          // teams and a repeated name reads like a bug.
+          const assigneeOpts = (() => {
+            const seen = new Set(), out = [{ v: '', l: 'Unassigned' }];
+            TEAMS_CACHE.forEach(t => (t.members || []).forEach(m => {
+              const id = String(m.id);
+              if (seen.has(id)) return;
+              seen.add(id);
+              out.push({ v: id, l: m.name });
+            }));
+            return out;
+          })();
+          body = html`
+            ${Field('Task title', Txt('title', 'Follow up with {{name}}'), 'Supports {{variables}} captured earlier in the flow.')}
+            ${Field('Notes', Ta('notes', '', 3), 'Optional context for whoever picks this up.')}
+            ${Field('Assign to', Sel('assigneeId', assigneeOpts), TEAMS_CACHE.length ? null : 'No teams yet — create one in /team-inbox to get an assignee list.')}
+            ${Field('Priority', Sel('priority', [{v:'low',l:'Low'},{v:'medium',l:'Medium'},{v:'high',l:'High'}]))}
+            ${Field('Due in', html`<div className="flex items-center gap-2">
+              <div className="flex-1">${Num('dueInAmount', '1')}</div>
+              <div className="flex-1">${Sel('dueInUnit', [{v:'minutes',l:'minutes'},{v:'hours',l:'hours'},{v:'days',l:'days'}])}</div>
+            </div>`, 'Set 0 for no due date. When the date passes, the assignee is reminded — and any flow using the "follow-up date reached" trigger runs.')}
+            ${Field('Link to', Sel('relatedType', [
+              { v:'',        l:'Nothing (standalone task)' },
+              { v:'contact', l:'This contact' },
+              { v:'deal',    l:'This contact\'s open deal' },
+              { v:'company', l:'This contact\'s company' },
+            ]), 'If the link cannot be resolved the task is still created, just unlinked — the work still needs doing.')}
+          `;
+          break;
+        }
+        case 'contact_update': {
+          // Repeater of {key, value}. Keys are free text on purpose: the
+          // builder cannot know a workspace's custom fields without another
+          // endpoint, and the server already skips anything that is neither a
+          // standard column nor a defined custom field (logging what it
+          // skipped) rather than failing the node.
+          const rows = Array.isArray(d.fields) && d.fields.length ? d.fields : [{ key:'', value:'' }];
+          const setRow = (i, k, v) => {
+            const next = rows.map((r, j) => j === i ? { ...r, [k]: v } : r);
+            onChange('fields', next);
+          };
+          const addRow = () => onChange('fields', rows.concat([{ key:'', value:'' }]));
+          const delRow = (i) => onChange('fields', rows.filter((_, j) => j !== i).length ? rows.filter((_, j) => j !== i) : [{ key:'', value:'' }]);
+          body = html`
+            ${Field('Fields to update', html`
+              <div className="space-y-2">
+                ${rows.map((r, i) => html`
+                  <div key=${i} className="flex items-center gap-2">
+                    <input type="text" value=${r.key || ''} onInput=${e => setRow(i, 'key', e.target.value)}
+                      placeholder="field (e.g. email)" data-attr-input="true"
+                      className="flex-1 min-w-0 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                    <input type="text" value=${r.value || ''} onInput=${e => setRow(i, 'value', e.target.value)}
+                      placeholder="value or {{var}}" data-attr-input="true"
+                      className="flex-1 min-w-0 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep" />
+                    <button type="button" onClick=${() => delRow(i)} aria-label="Remove field"
+                      className="shrink-0 w-8 h-8 rounded-lg grid place-items-center text-ink-500 hover:text-red-600 hover:bg-red-50">&times;</button>
+                  </div>
+                `)}
+                <button type="button" onClick=${addRow}
+                  className="text-[12px] font-semibold text-wa-deep hover:underline">+ Add field</button>
+              </div>
+            `, 'Standard fields: first_name, last_name, name, email, language, address, title. Any other key must match a custom field defined for this workspace — anything else is skipped and logged, so one bad row never fails the node. Values support {{variables}}; leave a value blank to clear the field.')}
           `;
           break;
         }
@@ -2668,10 +3008,10 @@ export default function init() {
                   <input type="text" value=${a.value || ''} onInput=${e => patchAction(i, { value: e.target.value })} placeholder=${placeholderFor(a.type || 'url')} data-attr-input="true" className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
                   <div className="text-[10.5px] text-ink-500 leading-snug">
                     ${(a.type === 'phone' || a.type === 'call_now')
-                      ? 'Include the country code (e.g. +1…). The customer taps to dial.'
+                      ? 'Include the country code (e.g. +1…). The customer taps to dial. Note: on WhatsApp Official (Cloud API), a Call in a flow shows as a tappable number, NOT a native button — WhatsApp only allows Call buttons inside approved Templates. Only URL buttons render as native buttons in a flow.'
                       : a.type === 'copy'
-                      ? 'The customer long-presses the code to copy. Good for coupons, OTPs, referral codes.'
-                      : 'The customer taps the button to open this URL in their browser.'}
+                      ? 'The customer long-presses the code to copy. Good for coupons, OTPs, referral codes. Note: on WhatsApp Official (Cloud API) this shows as tappable text in a flow, not a native button (Copy buttons are Template-only).'
+                      : 'The customer taps the button to open this URL. On WhatsApp Official this renders as a native tap button; on the Unofficial API it appears as a tappable link.'}
                   </div>
                 </div>
               </div>
@@ -3123,6 +3463,20 @@ export default function init() {
             <div className="mb-3 text-[10.5px] font-mono text-ink-500 flex items-center gap-2"><span>id</span><span className="text-ink-700">${node.id}</span></div>
             ${preview}
             ${body}
+            ${node.type !== 'trigger' ? html`
+              <div className="mt-5 pt-4 border-t border-paper-200">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" checked=${!!d.kw_jump_enabled} onChange=${e => onChange('kw_jump_enabled', e.target.checked)} className="w-4 h-4 accent-wa-deep mt-0.5" />
+                  <span><strong>Trigger this node by keyword</strong> — jump straight here when the customer types a matching word, anytime in the flow.</span>
+                </label>
+                ${d.kw_jump_enabled ? html`
+                  <div className="mt-3 space-y-3">
+                    ${Field('Trigger words / keywords', Txt('kw_jump_keywords', 'menu, help, start over'), 'Comma-separated. Typing any of these jumps directly to this node.')}
+                    ${Field('Match type', Sel('kw_jump_match', [{ v:'contains', l:'Contains keyword (e.g. "show me the menu")' }, { v:'exact', l:'Exact match' }]))}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
           </div>
         </aside>
       `;
@@ -3269,7 +3623,7 @@ export default function init() {
                 <label className="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">Choose model</label>
                 ${models.length === 0 ? html`
                   <div className="rounded-lg border border-paper-200 bg-paper-50 px-3 py-3 text-[12px] text-ink-700">
-                    No AI providers enabled. Admin needs to add a key in <a href="/admin/api-keys" className="text-wa-deep underline">AI Keys</a> before this can run.
+                    No AI model available yet. Add your AI key in <a href="/settings?tab=aikeys" className="text-wa-deep underline">Settings → AI keys</a>, then reopen this.
                   </div>
                 ` : html`
                   <div className="grid gap-2 ${models.length >= 3 ? 'grid-cols-3' : models.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}">
@@ -3516,7 +3870,7 @@ export default function init() {
         setError(null);
         if (!name.trim()) { setError('Name is required.'); return; }
         const modelEntry = AI_MODELS_CACHE.find(m => m.value === modelV);
-        if (!modelEntry) { setError('Pick a model. If the list is empty, ask admin to enable one in /admin/api-keys.'); return; }
+        if (!modelEntry) { setError('Pick a model. If the list is empty, add your AI key in Settings → AI keys.'); return; }
         setSaving(true);
         try {
           const csrf = document.querySelector('meta[name=csrf-token]')?.content || '';
@@ -3580,7 +3934,7 @@ export default function init() {
                 <select value=${modelV} onChange=${e => setModelV(e.target.value)} className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep">
                   ${modelOpts.map(o => html`<option key=${o.v} value=${o.v}>${o.l}</option>`)}
                 </select>
-                <div className="text-[10.5px] text-ink-500 mt-1 leading-snug">Only admin-enabled providers appear. <a href="/admin/api-keys" className="text-wa-deep underline">Manage keys →</a></div>
+                <div className="text-[10.5px] text-ink-500 mt-1 leading-snug">Your AI keys and any platform-enabled models appear here. <a href="/settings?tab=aikeys" className="text-wa-deep underline">Manage AI keys →</a></div>
               </div>
               <div>
                 <label className="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">Tone</label>
@@ -3930,7 +4284,9 @@ export default function init() {
           fetchJson('/deals/stages'),
           fetchJson('/flows/api/ai-assistants'),
           fetchJson('/flows/api/call-assistants'),
-        ]).then(([tplJson, flowJson, aiJson, teamsJson, tagsJson, agentsJson, stagesJson, assistantsJson, callAsstJson]) => {
+          fetchJson('/deals/pipelines'),
+          fetchJson('/contacts/api/groups'),
+        ]).then(([tplJson, flowJson, aiJson, teamsJson, tagsJson, agentsJson, stagesJson, assistantsJson, callAsstJson, pipelinesJson, groupsJson]) => {
           if (cancelled) return;
           if (tplJson  && Array.isArray(tplJson.templates))  TEMPLATES_CACHE = tplJson.templates;
           if (flowJson && Array.isArray(flowJson.data))      FLOWS_CACHE     = flowJson.data;
@@ -3939,8 +4295,10 @@ export default function init() {
           if (callAsstJson && Array.isArray(callAsstJson.assistants)) AI_CALL_ASSISTANTS_CACHE = callAsstJson.assistants;
           if (Array.isArray(teamsJson))                      TEAMS_CACHE     = teamsJson;
           if (Array.isArray(tagsJson))                       TAGS_CACHE      = tagsJson;
+          if (Array.isArray(groupsJson))                     GROUPS_CACHE    = groupsJson;
           if (Array.isArray(agentsJson))                     AGENTS_CACHE    = agentsJson;
           if (stagesJson && Array.isArray(stagesJson.data))  STAGES_CACHE    = stagesJson.data;
+          if (pipelinesJson && Array.isArray(pipelinesJson.data)) PIPELINES_CACHE = pipelinesJson.data;
           setTplVer(v => v + 1);
         });
         return () => { cancelled = true; };
@@ -4021,6 +4379,78 @@ export default function init() {
         setNodes(d.nodes); setEdges(d.edges); setHistIdx(idx);
         setTimeout(() => { skipHistRef.current = false; }, 60);
       }, [histIdx, history]);
+
+      // Auto-arrange — a tidy hierarchical left→right layout. Walk the graph from
+      // the start/trigger node(s), give each node a depth (its longest path from a
+      // root = its column), then stack each column vertically. Only x/y change;
+      // the edge wiring (source/sourceHandle/target) is untouched and the beziers
+      // re-derive from the moved ports. Pushes one undo step.
+      const autoArrange = useCallback(() => {
+        if (!nodes.length) return;
+        const COL = 360, ROW = 150, X0 = 80, Y0 = 80;
+        const ids = new Set(nodes.map(n => n.id));
+        const adj = new Map(); nodes.forEach(n => adj.set(n.id, []));
+        const indeg = new Map(); nodes.forEach(n => indeg.set(n.id, 0));
+        edges.forEach(e => {
+          if (ids.has(e.source) && ids.has(e.target)) {
+            adj.get(e.source).push(e.target);
+            indeg.set(e.target, indeg.get(e.target) + 1);
+          }
+        });
+        let roots = nodes.filter(n => n.isStart || n.type === 'trigger').map(n => n.id);
+        if (!roots.length) roots = nodes.filter(n => indeg.get(n.id) === 0).map(n => n.id);
+        if (!roots.length) roots = [nodes[0].id];
+
+        // Longest-path depth via relaxation BFS (cycle-guarded so a loop can't hang).
+        const depth = new Map();
+        const q = [];
+        roots.forEach(r => { if (!depth.has(r)) { depth.set(r, 0); q.push(r); } });
+        let head = 0, guard = 0, cap = nodes.length * nodes.length + 10;
+        while (head < q.length && guard++ < cap) {
+          const id = q[head++], d = depth.get(id);
+          (adj.get(id) || []).forEach(t => {
+            if (!depth.has(t) || d + 1 > depth.get(t)) { depth.set(t, d + 1); q.push(t); }
+          });
+        }
+        let maxD = 0; depth.forEach(v => { if (v > maxD) maxD = v; });
+        nodes.forEach(n => { if (!depth.has(n.id)) depth.set(n.id, maxD + 1); }); // orphans → trailing column
+
+        const cols = new Map();
+        nodes.forEach(n => { const d = depth.get(n.id); if (!cols.has(d)) cols.set(d, []); cols.get(d).push(n); });
+
+        // Nodes are NOT a fixed height — one with buttons / media / long text is
+        // far taller than a plain message. A fixed ROW step stacked tall nodes on
+        // top of each other (the reported "nodes colliding"). So measure each
+        // node's ACTUAL rendered height and stack by that + a gap. Heights come
+        // back in SCREEN px, so divide by the live zoom (derived from a rendered
+        // node's width vs NODE_W, robust to a stale closure) to get model units.
+        const GAP_Y = 44;
+        const wrapEl = wrapperRef.current || null;
+        let liveZoom = zoom || 1;
+        const probe = wrapEl ? wrapEl.querySelector('[data-node-id]') : null;
+        if (probe) { const pw = probe.getBoundingClientRect().width; if (pw > 0) liveZoom = pw / NODE_W; }
+        const measureH = (id) => {
+          try {
+            const el = wrapEl ? wrapEl.querySelector('[data-node-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]') : null;
+            if (el) { const h = el.getBoundingClientRect().height / (liveZoom || 1); if (h > 8) return h; }
+          } catch (_) {}
+          return 132; // sensible fallback when a node isn't in the DOM yet
+        };
+
+        const pos = new Map();
+        [...cols.keys()].sort((a, b) => a - b).forEach(d => {
+          let y = Y0;
+          cols.get(d).forEach((n) => {
+            pos.set(n.id, { x: X0 + d * COL, y });
+            y += measureH(n.id) + GAP_Y;
+          });
+        });
+
+        const next = nodes.map(n => ({ ...n, ...(pos.get(n.id) || {}) }));
+        setNodes(next);
+        pushHistory(next, edges);
+        setZoom(1); setPan({ x: 40, y: 40 });
+      }, [nodes, edges, pushHistory, zoom]);
 
       const updateNodeData = useCallback((id, key, value) => {
         setNodes(curr => {
@@ -4409,7 +4839,10 @@ export default function init() {
             setTestLog(prev => prev.concat({ kind:'system', text: `if ${summary} → ${ok ? 'YES' : 'NO'}` }));
             return advance(ok ? 'yes' : 'no');
           }
-          case 'delay':   setTestLog(prev => prev.concat({ kind:'system', text:`wait ${d.amount} ${d.unit} (skipped in test)` })); return advance('out');
+          case 'delay':
+            if (d.eventType === 'reply') { setTestLog(prev => prev.concat({ kind:'system', text:`wait for customer reply (simulated as replied)` })); return advance('resume'); }
+            setTestLog(prev => prev.concat({ kind:'system', text:`wait ${d.amount} ${d.unit} (skipped in test)` }));
+            return advance('out');
           case 'webhook': {
             // Fire the REAL request server-side (SSRF-guarded) so the operator
             // can confirm their endpoint is actually hit from the Test Runner —
@@ -4463,7 +4896,9 @@ export default function init() {
           case 'code':    setTestLog(prev => prev.concat({ kind:'system', text:`run JS → {{${d.save || 'result'}}} (mocked — runs live only)` })); return advance('out');
           case 'mysql':   setTestLog(prev => prev.concat({ kind:'system', text:`query ${d.database || 'db'}: ${(d.sql || '').slice(0, 48)}… (mocked)` })); return advance('out');
           case 'ai':      setTestLog(prev => prev.concat({ kind:'bot', text: '[' + (d.model || 'AI') + '] (simulated reply)' })); return advance('out');
-          case 'tag':     setTestLog(prev => prev.concat({ kind:'system', text:`${d.action || 'add'} tag "${d.tag || d.tagId || '?'}"` })); return advance('out');
+          case 'task':    setTestLog(prev => prev.concat({ kind:'system', text:`create task "${d.title || '?'}"${d.dueInAmount ? ` due in ${d.dueInAmount} ${d.dueInUnit || 'days'}` : ''}` })); return advance('out');
+          case 'contact_update': setTestLog(prev => prev.concat({ kind:'system', text:`update contact: ${(d.fields || []).filter(f => f.key).map(f => f.key).join(', ') || '(no fields)'}` })); return advance('out');
+          case 'tag':     { const isG = d.action === 'add_group' || d.action === 'remove_group'; setTestLog(prev => prev.concat({ kind:'system', text: isG ? `${d.action} "${d.group || d.groupId || '?'}"` : `${d.action || 'add'} tag "${d.tag || d.tagId || '?'}"` })); return advance('out'); }
           case 'assign':  setTestLog(prev => prev.concat({ kind:'system', text:`assigned to team "${d.team || '?'}"${d.userId ? ' user ' + d.userId : ''}` })); return advance('out');
           case 'subflow': setTestLog(prev => prev.concat({ kind:'system', text:`run sub-flow "${(FLOWS_CACHE.find(f => String(f.id) === String(d.flow))?.flow_name) || ('#' + (d.flow || '?'))}" (skipped in test)` })); return advance('out');
           case 'cta': {
@@ -4524,6 +4959,14 @@ export default function init() {
             const act = d.action === 'move' ? 'move contact deal to' : 'create deal in';
             setTestLog(prev => prev.concat({ kind:'system', text:`[CRM] ${act} stage ${d.stageId || '(none)'} — "${interp(d.dealName||'deal', v)}"${d.value ? ' · ' + interp(String(d.value), v) : ''} (skipped in test)` }));
             return advance('created');
+          }
+          case 'wa_form': {
+            // The runtime DOES handle wa_form (FlowNormalizer maps it to WaForm);
+            // this case just stops the TEST simulator logging "unknown node type
+            // wa_form — skipping", which read as a runtime failure (#30).
+            setTestLog(prev => prev.concat({ kind:'bot', text: interp(d.bodyText || d.body || 'Please complete this form:', v) }));
+            setTestLog(prev => prev.concat({ kind:'system', text:`(simulated) published Meta form ${d.formId || d.formTitle || d.metaFlowId || '(select a form)'} sent → out` }));
+            return advance('out');
           }
           case 'end':     setTestLog(prev => prev.concat({ kind:'system', text:'Flow ended.' })); testStateRef.current.current = null; setTestAwaiting(false); return;
           default:
@@ -5022,6 +5465,12 @@ export default function init() {
               <${Minimap} nodes=${nodes} edges=${edges} pan=${pan} zoom=${zoom} setPan=${setPan} wrapperRef=${wrapperRef} />
 
               <div className="absolute bottom-4 right-4 flex items-center gap-2 z-20">
+                <div className="bg-paper-0/95 border border-paper-200 rounded-full shadow-card flex items-center overflow-hidden">
+                  <button onClick=${autoArrange} className="h-9 px-3 hover:bg-paper-50 text-[11.5px] font-semibold text-ink-700 inline-flex items-center gap-1.5" title="Auto-arrange nodes">
+                    <${Icon} d="M2 4h12M2 8h8M2 12h5" className="w-3.5 h-3.5" />
+                    Arrange
+                  </button>
+                </div>
                 <div className="bg-paper-0/95 border border-paper-200 rounded-full shadow-card flex items-center overflow-hidden">
                   <button onClick=${undo} disabled=${!(histIdx > 0)} className="w-9 h-9 grid place-items-center hover:bg-paper-50 disabled:opacity-40 disabled:cursor-not-allowed" title="Undo (Ctrl+Z)"><${Icon} d="M4 8h6a3 3 0 0 1 0 6M4 8l3-3M4 8l3 3" className="w-3.5 h-3.5" /></button>
                   <div className="w-px h-5 bg-paper-200"></div>

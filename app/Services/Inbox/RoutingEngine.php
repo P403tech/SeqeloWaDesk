@@ -109,24 +109,162 @@ class RoutingEngine
                 'rule_ids' => $fired,
             ], 'rule');
         }
+
+        // Per-number defaults — the simple path the operator wants, keyed off the
+        // number the message landed on: (1) stamp the contact with the number it
+        // belongs to; (2) auto-tag the conversation + contact with that number's
+        // business/segment so contacts are grouped by business; (3) auto-assign the
+        // number's default AI agent when nothing else claimed the chat. All keyed off
+        // the same number config, so they run together.
+        $this->applyNumberDefaults($conv);
+    }
+
+    /**
+     * Apply the number-level defaults (business tag + contact number-stamp +
+     * default AI agent). Everything is keyed off the config for the number the
+     * inbound landed on (Device for Unofficial, WaProviderConfig for WABA/Twilio),
+     * resolved via the conversation's provider + device_id.
+     */
+    private function applyNumberDefaults(Conversation $conv): void
+    {
+        $conv->refresh();
+        if (!$conv->device_id) return;
+
+        $provider = strtolower((string) $conv->provider);
+        $store    = null; // Device | WaProviderConfig — the number's config row
+        if ($provider === 'baileys' || $provider === '') {
+            $store = \App\Models\Device::find($conv->device_id);
+        } elseif (in_array($provider, ['waba', 'twilio', 'meta_ads', 'cloud'], true)) {
+            $store = \App\Models\WaProviderConfig::find($conv->device_id);
+        }
+        if (!$store) return;
+
+        // (1)+(2) — stamp the contact's source number and apply the business tag.
+        $this->stampContactNumber($conv, $store, $provider);
+        $this->applyDefaultTag($conv, $store);
+
+        // (3) — default AI agent: only when nothing else owns the conversation.
+        $this->applyDefaultAgent($conv, $store, $provider);
+    }
+
+    /**
+     * Record which number a freshly-created contact belongs to. Written once, on
+     * the FIRST inbound (never overwritten), so a contact keeps its original
+     * business number even if it later messages another of the workspace's numbers.
+     */
+    private function stampContactNumber(Conversation $conv, $store, string $provider): void
+    {
+        if (!$conv->contact_id) return;
+        $contact = \App\Models\Contact::find($conv->contact_id);
+        if (!$contact) return;
+
+        $attrs = is_array($contact->custom_attributes) ? $contact->custom_attributes : [];
+        if (!empty($attrs['source_device_id'])) return; // already stamped — keep the original
+
+        // Human-readable number for the two stores.
+        $number = null;
+        if ($store instanceof \App\Models\Device) {
+            $number = preg_replace('/\D+/', '', (string) ($store->country_code . $store->phone_number)) ?: null;
+        } elseif ($store instanceof \App\Models\WaProviderConfig) {
+            $number = preg_replace('/\D+/', '', (string) $store->phone_number) ?: ($store->display_label ?: null);
+        }
+
+        $attrs['source_device_id'] = (int) $conv->device_id;
+        $attrs['source_provider']  = $provider;
+        if ($number) $attrs['source_number'] = $number;
+        $contact->forceFill(['custom_attributes' => $attrs])->save();
+
+        \Illuminate\Support\Facades\Log::info('[NUMBER-STAMP] contact stamped with its number', [
+            'conv_id' => $conv->id, 'contact_id' => $contact->id, 'device_id' => $conv->device_id, 'number' => $number,
+        ]);
+    }
+
+    /** Auto-tag the conversation + its contact with the number's business/segment tag. */
+    private function applyDefaultTag(Conversation $conv, $store): void
+    {
+        $name = trim((string) ($store->default_tag ?? ''));
+        if ($name === '') return;
+
+        $tag = Tag::firstOrCreate(
+            ['workspace_id' => $conv->workspace_id, 'slug' => \Str::slug($name)],
+            ['name' => $name, 'color' => '#075E54'],
+        );
+
+        $conv->tags()->syncWithoutDetaching([$tag->id]);
+        if ($conv->contact_id) {
+            try {
+                optional(\App\Models\Contact::find($conv->contact_id))->tags()->syncWithoutDetaching([$tag->id]);
+            } catch (\Throwable $e) { /* best-effort */ }
+        }
+        // Keep parity with routing-rule add_tag — enroll any tag-triggered flow.
+        try {
+            app(\App\Services\Flow\FlowEnrollmentService::class)->onConversationTagged($conv, $tag->id);
+        } catch (\Throwable $e) { /* best-effort */ }
+
+        \Illuminate\Support\Facades\Log::info('[NUMBER-TAG] business tag auto-applied', [
+            'conv_id' => $conv->id, 'contact_id' => $conv->contact_id, 'tag' => $name,
+        ]);
+    }
+
+    /** Assign the conversation's number-level default AI agent when nothing else owns it. */
+    private function applyDefaultAgent(Conversation $conv, $store, string $provider): void
+    {
+        if ($conv->assignee_agent_id || $conv->assignee_user_id) return; // already owned (rule/operator)
+
+        $agentId = $store->default_ai_agent_id ?? null;
+        if (!$agentId) return;
+
+        // The agent must belong to this workspace (defence-in-depth).
+        if (!\App\Models\AiAgent::where('workspace_id', $conv->workspace_id)->whereKey($agentId)->exists()) return;
+
+        $conv->forceFill(['assignee_agent_id' => (int) $agentId])->save();
+        \Illuminate\Support\Facades\Log::info('[DEFAULT-AGENT] number default AI agent auto-assigned', [
+            'conv_id' => $conv->id, 'device_id' => $conv->device_id, 'provider' => $provider, 'agent_id' => $agentId,
+        ]);
     }
 
     private function runPass($rules, Conversation $conv, array $context, bool $isFollowUp = false): array
     {
         $fired = [];
         foreach ($rules as $rule) {
-            if (!$this->matches($rule->conditions ?? [], $conv, $context)) continue;
+            $matched = $this->matches($rule->conditions ?? [], $conv, $context, (bool) $rule->is_fallback);
+            // DIAGNOSTIC — one line per rule per inbound explains exactly why
+            // "Assign AI agent" (and every rule) did or didn't fire: matched?,
+            // was this a follow-up (one-shot actions like assign_agent are then
+            // skipped)?, which device the message landed on. Grep [ROUTING-TRACE].
+            \Illuminate\Support\Facades\Log::info('[ROUTING-TRACE] rule eval', [
+                'conv_id'    => $conv->id,
+                'device_id'  => $conv->device_id,
+                'channel'    => $conv->channel,
+                'rule_id'    => $rule->id,
+                'rule_name'  => $rule->name,
+                'matched'    => $matched,
+                'is_followup'=> $isFollowUp,
+                'action_types' => array_values(array_map(fn ($a) => $a['type'] ?? '?', (array) ($rule->actions ?? []))),
+            ]);
+            if (!$matched) continue;
 
             // On follow-up messages, filter out one-shot actions so we
             // don't clobber operator-driven state. The per-message
             // actions (add_tag / auto_reply / trigger_flow) still fire.
+            // EXCEPTION: assign_agent is allowed through on a follow-up ONLY
+            // when the conversation has no AI agent AND no human owner yet — so
+            // a RETURNING customer with no agent still gets auto-assigned, but an
+            // operator-owned or already-bot-owned chat is never trampled.
             $actions = $rule->actions ?? [];
             if ($isFollowUp) {
-                $actions = array_values(array_filter($actions, function ($a) {
-                    return in_array($a['type'] ?? null, self::PER_MESSAGE_ACTIONS, true);
+                $agentless = empty($conv->assignee_agent_id) && empty($conv->assignee_user_id);
+                $actions = array_values(array_filter($actions, function ($a) use ($agentless) {
+                    $t = $a['type'] ?? null;
+                    if (in_array($t, self::PER_MESSAGE_ACTIONS, true)) return true;
+                    return $t === 'assign_agent' && $agentless;
                 }));
-                if (empty($actions)) continue; // rule had no per-message actions
+                if (empty($actions)) continue; // rule had no runnable actions for a follow-up
             }
+            \Illuminate\Support\Facades\Log::info('[ROUTING-TRACE] rule FIRED', [
+                'conv_id' => $conv->id, 'rule_id' => $rule->id,
+                'ran_actions' => array_values(array_map(fn ($a) => $a['type'] ?? '?', $actions)),
+            ]);
             $this->execute($actions, $conv);
 
             $rule->forceFill([
@@ -147,9 +285,13 @@ class RoutingEngine
      *   - a group:          { type: 'group', op: 'and'|'or', conditions: [...] }
      * Groups can nest arbitrarily deep. Top-level array is AND-joined.
      */
-    private function matches(array $conditions, Conversation $conv, array $context): bool
+    private function matches(array $conditions, Conversation $conv, array $context, bool $isFallback = false): bool
     {
-        if (empty($conditions)) return false;
+        // A fallback rule IS "if nothing else matched", so carrying no
+        // conditions legitimately means ALWAYS — returning false here made the
+        // catch-all rule the UI lets you author (and badges "fallback") unable
+        // to fire. A normal rule with no conditions still matches nothing.
+        if (empty($conditions)) return $isFallback;
         foreach ($conditions as $c) {
             if (!$this->evalNode($c, $conv, $context)) return false;
         }
@@ -265,7 +407,7 @@ class RoutingEngine
                         // it calls AssignmentService::assign() directly and
                         // bypasses the routing engine. This guard only
                         // affects RULE-driven assignment.
-                        $team = \App\Models\Team::find($tid);
+                        $team = \App\Models\Team::where('workspace_id', $conv->workspace_id)->find($tid);
                         if ($team && !$team->handlesDevice($conv->device_id)) {
                             \Illuminate\Support\Facades\Log::info('[ROUTING] assign_team skipped — team device scope mismatch', [
                                 'rule_team_id' => $tid,
@@ -275,11 +417,23 @@ class RoutingEngine
                             ]);
                             break;
                         }
-                        $this->assignment->assign($conv, null, $tid, 'least_loaded', null);
+                        // teams.assignment_strategy was stored, shipped and
+                        // edited but never read — every caller hardcoded
+                        // least_loaded, so round_robin / sticky were
+                        // unreachable. Honour the configured value here (and
+                        // keep least_loaded as the fallback for teams that
+                        // never set one).
+                        $strategy = in_array($team?->assignment_strategy, \App\Models\Team::STRATEGIES, true)
+                            ? $team->assignment_strategy
+                            : 'least_loaded';
+                        $this->safeAssign($conv, null, $tid, $strategy);
                     }
                     break;
                 case 'assign_user':
-                    $this->assignment->assign($conv, (int) ($a['user_id'] ?? 0), $conv->assignee_team_id, 'manual', null);
+                    // A missing/zero id used to reach AssignmentService as
+                    // User::find(0) → null → a SILENT unassign. Skip instead.
+                    $uid = (int) ($a['user_id'] ?? 0);
+                    if ($uid > 0) $this->safeAssign($conv, $uid, $conv->assignee_team_id, 'manual');
                     break;
                 case 'set_priority':
                     if (in_array($a['value'] ?? null, Conversation::PRIORITIES, true)) {
@@ -381,6 +535,28 @@ class RoutingEngine
      * shows up in the agent UI thread even if Node-side dispatch fails.
      * Failures are logged but never throw — auto-reply is a nice-to-have.
      */
+    /**
+     * Rules are workspace-authored JSON and outlive the members/teams they
+     * name, so AssignmentService can legitimately reject a target (removed
+     * member, team from another workspace on a rule saved before the endpoint
+     * validated its payload). Never let that abort the inbound webhook — log
+     * it and move on to the rule's remaining actions.
+     */
+    private function safeAssign(Conversation $conv, ?int $userId, ?int $teamId, string $strategy): void
+    {
+        try {
+            $this->assignment->assign($conv, $userId, $teamId, $strategy, null);
+        } catch (\App\Exceptions\AssignmentTargetException $e) {
+            \Illuminate\Support\Facades\Log::warning('[ROUTING] assignment target rejected', [
+                'conv_id'   => $conv->id,
+                'user_id'   => $userId,
+                'team_id'   => $teamId,
+                'strategy'  => $strategy,
+                'reason'    => $e->reason,
+            ]);
+        }
+    }
+
     private function dispatchAutoReply(Conversation $conv, array $a): void
     {
         // Anti-spam: skip if conversation is flagged spam, in cooldown,

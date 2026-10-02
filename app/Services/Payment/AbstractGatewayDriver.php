@@ -110,6 +110,22 @@ abstract class AbstractGatewayDriver
     }
 
     /**
+     * Poll the gateway for a subscription's current state — used by the
+     * webhook-independent reconciler (SubscriptionReconciler) so a renewal
+     * still applies even if the inbound webhook was never delivered. Returns:
+     *   [
+     *     'status'      => 'active' | 'past_due' | 'canceled' | 'expired' | 'pending',
+     *     'period_end'  => <unix ts of the current paid period end> (nullable),
+     *     'paid_count'  => <int charges taken so far>               (nullable),
+     *   ]
+     * Default: null — the driver can't poll (falls back to webhook-only).
+     */
+    public function fetchSubscription(string $gatewaySubscriptionId): ?array
+    {
+        return null;
+    }
+
+    /**
      * Cancel an auto-renewing subscription at the gateway so it stops
      * charging. Default: not supported (the admin can cancel in the gateway
      * dashboard). Drivers override with the real API call.

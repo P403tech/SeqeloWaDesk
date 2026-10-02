@@ -49,6 +49,7 @@
             </div>
         @endif
         <form id="wsForm" action="{{ route('admin.workspaces.store') }}" method="POST"
+            enctype="multipart/form-data"
             class="grid grid-cols-1 xl:grid-cols-3 gap-5">
             @csrf
 
@@ -142,23 +143,10 @@
                     <div>
                         <label
                             class="text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Workspace logo') }}</label>
-                        <div
-                            class="flex items-center gap-3 px-3 py-2.5 border border-dashed border-paper-300 rounded-lg bg-paper-0 hover:border-wa-deep transition cursor-pointer">
-                            <span class="w-12 h-12 rounded-lg bg-paper-100 grid place-items-center text-ink-500"><svg
-                                    viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor"
-                                    stroke-width="1.5">
-                                    <rect x="2" y="3" width="12" height="10" rx="1.5" />
-                                    <circle cx="6" cy="7" r="1.5" />
-                                    <path d="M2 11l4-3 4 3 4-2" />
-                                </svg></span>
-                            <div class="flex-1 min-w-0">
-                                <div class="text-[12px] font-semibold">{{ __('Upload logo') }}</div>
-                                <div class="text-[10.5px] text-ink-500 font-mono">
-                                    {{ __('PNG/SVG · 256×256 recommended') }}</div>
-                            </div>
-                            <span
-                                class="text-[10.5px] font-semibold text-wa-deep px-[9px] py-1 rounded-full bg-white border border-wa-deep">{{ __('Browse') }}</span>
-                        </div>
+                        <input type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                            class="block w-full text-[12px] text-ink-700 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-wa-deep file:text-white file:text-[11px] file:font-semibold file:cursor-pointer border border-dashed border-paper-300 rounded-lg bg-paper-0 p-2">
+                        <div class="text-[10.5px] text-ink-500 font-mono mt-1">
+                            {{ __('PNG/JPG/SVG/WebP · 256×256 recommended · max 2 MB') }}</div>
                     </div>
                 </div>
             </div>

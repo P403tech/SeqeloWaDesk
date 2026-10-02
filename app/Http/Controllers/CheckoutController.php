@@ -917,6 +917,12 @@ class CheckoutController extends Controller
             ?? $payload['merchantTransactionId'] // PhonePe
             ?? $payload['merchantOrderId']  // Duitku (= our gateway_order_id)
             ?? $payload['_ptxn']            // Paddle txn id (= gateway_order_id); works session-less
+            ?? $payload['ORDERID']          // Paytm (= our gateway_order_id). Paytm posts the
+                                            // return as a CROSS-SITE POST, so the Laravel session
+                                            // cookie is dropped and the session fallback below is
+                                            // null — this ORDERID match is the ONLY way to resolve
+                                            // the order (otherwise every successful Paytm payment
+                                            // showed "Order not found").
             ?? null;
         if ($hint) $order = Order::where('gateway_order_id', $hint)->first();
         // PayU echoes our OWN order id back in udf2. This is the most reliable
@@ -1090,6 +1096,9 @@ class CheckoutController extends Controller
             ?? $payload['order_id']          // Midtrans + generic flat form-POST
             ?? $payload['token']             // LigdiCash (= our gateway_order_id / invoice token)
             ?? $payload['invoiceToken']      // LigdiCash (alt spelling)
+            ?? $payload['ORDERID']           // Paytm (= our gateway_order_id) — server-to-server
+                                             // transaction webhook, so the wallet auto-credits even
+                                             // if the buyer closed the browser before the return.
             ?? null;
         $order = $hint ? Order::where('gateway_order_id', $hint)->first() : null;
         if ($order && $result->status === 'paid' && $order->status !== 'paid') {
@@ -1511,6 +1520,19 @@ class CheckoutController extends Controller
                 \App\Models\Coupon::where('id', $order->coupon_id)->increment('uses_count');
             }
         });
+
+        // Referral payout — pay the referrer their bonus on the referee's FIRST
+        // paid purchase (moved OFF signup to stop free-account farming). Idempotent
+        // (rewardOnFirstPayment pays once per referee, then stamps the txn id) and
+        // best-effort so it can never break the checkout. Runs AFTER the commit.
+        try {
+            $buyer = $order->user ?: \App\Models\User::find($order->user_id);
+            if ($buyer) {
+                app(\App\Services\ReferralService::class)->rewardOnFirstPayment($buyer);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[REFERRAL] paid-payout failed: ' . $e->getMessage());
+        }
 
         Log::info('[CHECKOUT] order paid + plan applied', [
             'order_id'     => $order->id,

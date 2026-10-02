@@ -206,14 +206,24 @@ function wireResetModal(root) {
 // provider picker is reintroduced.
 // ─────────────────────────────────────────────────────────────────
 function wireWaba() {
-    const btn = document.getElementById('waba-signup-btn');
-    if (!btn) return;
-    const appId = btn.dataset.appId;
-    const configId = btn.dataset.configId;
+    const btn     = document.getElementById('waba-signup-btn');
+    const coexBtn = document.getElementById('waba-signup-coex-btn');
+    const baseBtn = btn || coexBtn;
+    if (!baseBtn) return;
+    const appId    = baseBtn.dataset.appId;
+    const configId = baseBtn.dataset.configId;
     // Graph/SDK version comes from the admin "Graph API version" setting
     // (data-graph-version) so the FB dialog matches the server-side REST calls
     // instead of being pinned to an old hardcoded version.
-    const graphVersion = btn.dataset.graphVersion || 'v23.0';
+    const graphVersion = baseBtn.dataset.graphVersion || 'v23.0';
+    // Embedded Signup version. v4 moves every product/asset/permission/feature
+    // choice into the Facebook Login-for-Business configuration (empty extras);
+    // v2 selects coexistence at CALL time via featureType. Defaults to v2.
+    const esVersion    = (baseBtn.dataset.esVersion || 'v2').toLowerCase();
+    const isV4         = esVersion === 'v4';
+    // v4 selects coexistence in the CONFIGURATION, so the coex launch needs its
+    // own Config ID; falls back to the main one when none is configured.
+    const coexConfigId = baseBtn.dataset.coexConfigId || '';
     if (!appId || !configId) return;
 
     if (!window.FB) {
@@ -224,16 +234,24 @@ function wireWaba() {
         document.head.appendChild(s);
     } else initFB(appId, graphVersion);
 
-    btn.addEventListener('click', async () => {
+    // coexMode is set per click by the two buttons just before FB.login().
+    const runLaunch = (coexMode) => {
         if (!window.FB) return alert('Meta SDK still loading.');
         showStatus('Opening Meta dialog…');
+        window.__waba_finish = null;
 
         const listener = (event) => {
             if (!['https://www.facebook.com', 'https://web.facebook.com'].includes(event.origin)) return;
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH' && data.data) {
+                if (data.type !== 'WA_EMBEDDED_SIGNUP' || !data.data) return;
+                // Standard onboarding fires FINISH; coexistence (Business App)
+                // fires FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING — and may carry
+                // only waba_id (phone_number_id is resolved server-side). Capture
+                // both, and treat is_wa_login_user as coexistence too.
+                if (data.event === 'FINISH' || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
                     window.__waba_finish = data.data;
+                    if (data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' || data.data.is_wa_login_user) coexMode = true;
                 }
             } catch (_) {}
         };
@@ -243,11 +261,14 @@ function wireWaba() {
             window.removeEventListener('message', listener);
             if (!res.authResponse?.code) return showStatus('Cancelled.');
             const f = window.__waba_finish || {};
+            // Coexistence: never block on a prompt — the server resolves the
+            // number from the WABA when the postMessage omitted it.
             const payload = {
                 code: res.authResponse.code,
-                phone_number_id: f.phone_number_id || prompt('Phone number ID:'),
+                phone_number_id: f.phone_number_id || (coexMode ? '' : (prompt('Phone number ID:') || '')),
                 waba_id:         f.waba_id         || prompt('WABA ID:'),
                 business_id:     f.business_id     || null,
+                coexistence:     coexMode ? 1 : 0,
             };
             showStatus('Provisioning on Meta…');
             try {
@@ -265,10 +286,23 @@ function wireWaba() {
                 }
             } catch (e) { showStatus('Network error: ' + e.message, 'err'); }
         }, {
-            config_id: configId, response_type: 'code', override_default_response_type: true,
-            extras: { feature: 'whatsapp_embedded_signup', sessionInfoVersion: 3 },
+            config_id: (isV4 && coexMode && coexConfigId) ? coexConfigId : configId,
+            response_type: 'code',
+            override_default_response_type: true,
+            // Extras are version-specific EXCEPT featureType. Meta requires
+            // featureType: 'whatsapp_business_app_onboarding' in extras for the
+            // Coexistence screen to appear (even on a v4 config with Coexistence
+            // enabled). v2 also needs setup:{} + sessionInfoVersion:'3' (string)
+            // so waba_id comes back in the postMessage.
+            extras: {
+                ...(isV4 ? {} : { feature: 'whatsapp_embedded_signup', setup: {}, sessionInfoVersion: '3' }),
+                ...(coexMode ? { featureType: 'whatsapp_business_app_onboarding' } : {}),
+            },
         });
-    });
+    };
+
+    btn?.addEventListener('click',     () => runLaunch(false));
+    coexBtn?.addEventListener('click', () => runLaunch(true));
 }
 
 function initFB(appId, version = 'v23.0') {
@@ -351,6 +385,19 @@ function wireBaileys() {
         }
     });
 
+    /**
+     * DELIBERATE EXCEPTION to the shared-poller rule (resources/js/lib/poller.js).
+     *
+     * Every other polling loop in the panel runs on createPoller for the
+     * overlap guard, hidden-tab pause and idle backoff. This one must not:
+     *   - it is BOUNDED (stops itself after 60 attempts or on pairing), so it
+     *     cannot become a forever-loop, which is the problem the poller exists
+     *     to solve;
+     *   - the operator is staring at a QR code waiting for it to turn green.
+     *     Backoff is exactly wrong here — the whole job is to react the instant
+     *     the phone scans.
+     * If you add another poll to this file, use createPoller.
+     */
     function startQrPoll(url) {
         clearInterval(qrPollTimer);
         let attempts = 0;

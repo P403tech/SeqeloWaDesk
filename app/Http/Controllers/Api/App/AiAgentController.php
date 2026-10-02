@@ -27,6 +27,18 @@ class AiAgentController extends Controller
         return app(TeamInboxController::class)->aiAgentsIndex($request);
     }
 
+    /**
+     * GET /ai-agents/models — the providers + models this workspace can ACTUALLY
+     * use, so the app populates the provider/model picker instead of hardcoding
+     * model strings. Source = admin-enabled AI keys + the workspace's own BYOK
+     * keys (the SAME list the web agent modal uses), so an option never resolves
+     * to a provider the server has no key for. Returns { ok, models:[{value,label,provider}] }.
+     */
+    public function models(Request $request): JsonResponse
+    {
+        return app(\App\Http\Controllers\TemplatesController::class)->apiAiModels();
+    }
+
     /** POST /ai-agents — create an AI agent (name, provider, model, prompt, …). */
     public function store(Request $request): JsonResponse
     {

@@ -16,7 +16,7 @@ class ChatbotWidget extends Model
     protected $table = 'chatbot_widgets';
 
     protected $fillable = [
-        'workspace_id', 'user_id', 'assistant_id',
+        'workspace_id', 'user_id', 'assistant_id', 'flow_id',
         'name', 'slug', 'embed_token', 'mode',
         'target_whatsapp_cc', 'target_whatsapp_number', 'prefilled_message',
         'position', 'button_color', 'button_image_url',
@@ -25,15 +25,18 @@ class ChatbotWidget extends Model
         'body_bg_kind', 'body_bg_color', 'body_bg_image_url', 'auto_open',
         'button_label', 'action_button_bg', 'action_button_text_color',
         'collect_name', 'collect_email', 'collect_phone',
+        // AI conversational lead capture — extract visitor details from the chat.
+        'ai_capture_enabled',
         'status', 'allowed_domains',
     ];
 
     protected $casts = [
-        'auto_open'       => 'boolean',
-        'collect_name'    => 'boolean',
-        'collect_email'   => 'boolean',
-        'collect_phone'   => 'boolean',
-        'allowed_domains' => 'array',
+        'auto_open'          => 'boolean',
+        'collect_name'       => 'boolean',
+        'collect_email'      => 'boolean',
+        'collect_phone'      => 'boolean',
+        'ai_capture_enabled' => 'boolean',
+        'allowed_domains'    => 'array',
     ];
 
     public static function freshToken(): string
@@ -102,9 +105,49 @@ class ChatbotWidget extends Model
         return $this->hasMany(ChatbotWidgetVisitor::class, 'widget_id');
     }
 
+    public function flow(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Flow::class, 'flow_id');
+    }
+
     public function usesAi(): bool
     {
         return in_array($this->mode, ['ai', 'both'], true) && $this->assistant_id !== null;
+    }
+
+    /**
+     * True when this widget should hand the visitor's message to a flow.
+     *
+     * Deliberately NOT folded into `both`: that value already means "AI chat +
+     * WhatsApp deeplink", so accepting it here would silently arm three paths
+     * at once. `flow` is its own mode.
+     *
+     * An assistant may still be configured alongside it — the flow answers
+     * first, and anything it does not consume falls through to the assistant.
+     */
+    public function usesFlow(): bool
+    {
+        return $this->mode === 'flow' && $this->flow_id !== null;
+    }
+
+    /**
+     * The bound flow, but only when it is still usable. A flow that was deleted
+     * nulls this column (nullOnDelete); one that was unpublished or deactivated
+     * still exists but must not run, or the widget would go silent mid-funnel
+     * with nothing in the UI explaining why.
+     */
+    public function activeFlow(): ?\App\Models\Flow
+    {
+        if (! $this->flow_id) {
+            return null;
+        }
+        $f = $this->relationLoaded('flow') ? $this->flow : $this->flow()->first();
+        if (! $f) {
+            return null;
+        }
+        $live = ((int) ($f->is_active ?? 0) === 1) && ((int) ($f->is_published ?? 0) === 1);
+
+        return $live ? $f : null;
     }
 
     public function usesWhatsApp(): bool

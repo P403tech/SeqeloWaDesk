@@ -93,6 +93,16 @@
         {{-- Sign in / Start free. If the visitor is already authed, show
  Dashboard instead so they don't have to log in twice. --}}
         <div class="hidden lg:flex items-center gap-2">
+            {{-- Language switcher — HIDDEN ON THE PUBLIC SITE for now.
+                 The marketing copy is authored through the Frontend Editor
+                 (fc() keys stored per section), NOT through __() lang files, so
+                 switching locale re-translated only the nav and left every
+                 headline, paragraph and button in English — a half-translated
+                 page that reads worse than an English one. Re-enable once the
+                 editor stores per-locale content. The app and admin headers
+                 keep their switcher; those ARE fully translated.
+            <x-locale-switcher />
+            --}}
             @auth
                 <a href="{{ url('/dashboard') }}" data-fc="nav.cta_dashboard_label"
                     class="px-4 py-2.5 rounded-full bg-wa-deep text-paper-0 text-[13px] font-semibold hover:bg-wa-teal flex items-center gap-1.5">
@@ -138,6 +148,11 @@
         @endforeach
     </div>
     <div class="mt-8 flex flex-col gap-4">
+        {{-- Language switcher (mobile menu) — hidden for the same reason as the
+             desktop one above: the public copy is Frontend-Editor content, not
+             __() strings, so switching locale half-translates the page.
+        <div class="border-b border-paper-200 pb-4"><x-locale-switcher /></div>
+        --}}
         @auth
             <a href="{{ url('/dashboard') }}"
                 class="w-full py-4 text-center rounded-full bg-wa-deep text-paper-0 text-[16px] font-semibold hover:bg-wa-teal">

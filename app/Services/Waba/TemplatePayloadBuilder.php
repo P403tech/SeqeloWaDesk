@@ -96,7 +96,13 @@ class TemplatePayloadBuilder
         }
 
         $send = [
-            'name'       => $this->normalizeName((string) $t->template_name),
+            // SEND uses the template name EXACTLY as stored — it came from Meta via
+            // sync, so it IS the approved name. We must NOT re-normalize/slugify it
+            // here: normalizeName() strips leading/trailing underscores, but Meta
+            // KEEPS them (e.g. `new_2_..._`, `_form_submitted_` are all approved),
+            // so re-normalizing sent `...template` for `...template_` → Meta 132001
+            // "template name does not exist". Whitespace-trim only.
+            'name'       => trim((string) $t->template_name),
             'language'   => ['code' => $t->language ?: 'en_US'],
             'components' => [],
         ];
@@ -873,15 +879,32 @@ class TemplatePayloadBuilder
     {
         $n = mb_strtolower(trim($name));
         $n = preg_replace('/[^a-z0-9]+/u', '_', $n);
-        $n = trim($n, '_');
+        // Do NOT trim leading/trailing underscores — Meta ALLOWS them and keeps
+        // them (approved names like `_form_submitted_` and `new_2_..._` exist), so
+        // stripping them here makes the name we submit/store differ from Meta's and
+        // every later send fails with 132001 "template name does not exist".
+        $n = trim((string) $n);
         return mb_substr($n, 0, 512) ?: 'untitled_template';
     }
 
-    /** Count distinct `{{N}}` placeholders in a string. */
+    /**
+     * Count DISTINCT `{{token}}` placeholders in a string.
+     *
+     * Meta expects ONE parameter per unique placeholder, NOT one per
+     * occurrence. A body that reuses {{1}} three times and {{2}} once has
+     * 2 parameters, not 4 — sending 4 is Meta #132000 "number of
+     * localizable_params (4) does not match the expected number of params
+     * (2)", which fails the whole send (the reported reminder_meeting_demo
+     * campaign hit exactly this). For numeric POSITIONAL placeholders the
+     * distinct count equals the highest index in a well-formed (sequential)
+     * template; for NAMED it equals the number of unique names.
+     */
     public function countPlaceholders(string $s): int
     {
-        preg_match_all('/\{\{\s*[\w_]+\s*\}\}/', $s, $m);
-        return count($m[0]);
+        if (!preg_match_all('/\{\{\s*([\w_]+)\s*\}\}/', $s, $m)) {
+            return 0;
+        }
+        return count(array_unique($m[1]));
     }
 
     /**

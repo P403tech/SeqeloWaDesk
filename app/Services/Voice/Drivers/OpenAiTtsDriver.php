@@ -48,7 +48,7 @@ class OpenAiTtsDriver implements TtsDriver
 
         $apiKey = AiKeyResolver::keyFor($this->workspace, 'openai');
         if (!$apiKey) {
-            throw new RuntimeException('No OpenAI key configured — set one in Admin → AI Keys.');
+            throw new RuntimeException(setup_hint('No OpenAI key configured — set one in Admin → AI Keys.', 'Voice replies are temporarily unavailable. Please contact support.'));
         }
 
         $voice = $voiceId ?: self::DEFAULT_VOICE;

@@ -3,6 +3,12 @@
     $configId = (string) \App\Models\SystemSetting::get('waba_config_id', '');
     $missing = $appId === '' || $configId === '';
     $cred = $existing && $existing->provider === 'waba' ? $existing->creds() : [];
+    // Embedded Signup version + coexistence config — same admin settings the
+    // /devices launcher reads, so both connect surfaces behave identically.
+    $esVersion = (string) \App\Models\SystemSetting::get('waba_es_version', 'v2');
+    $coexConfigId = (string) \App\Models\SystemSetting::get('waba_coex_config_id', '');
+    $coexEnabled = (bool) \App\Models\SystemSetting::get('waba_coexistence', false);
+    $graphVersion = \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0');
 @endphp
 
 <h1 class="font-serif text-[32px] tracking-[-0.02em] leading-tight mt-2">{{ __('Connect with') }} <span
@@ -49,7 +55,9 @@
 
         <button id="waba-signup-btn" type="button" data-app-id="{{ $appId }}"
             data-config-id="{{ $configId }}"
-            data-graph-version="{{ \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0') }}"
+            data-graph-version="{{ $graphVersion }}"
+            data-es-version="{{ $esVersion }}"
+            data-coex-config-id="{{ $coexConfigId }}"
             class="mt-5 w-full px-4 py-3 rounded-full bg-[#1877F2] hover:bg-[#1864d6] text-paper-0 text-[13px] font-semibold inline-flex items-center justify-center gap-2">
             <svg viewBox="0 0 16 16" class="w-4 h-4" fill="currentColor">
                 <path
@@ -57,6 +65,31 @@
             </svg>
             Continue with Meta
         </button>
+
+        @if ($coexEnabled)
+            {{-- Coexistence: link a number already on the WhatsApp Business App.
+                 Meta shows a QR inside its popup; the app keeps working alongside
+                 Cloud-API automation on the same number. Same setting + config the
+                 /devices launcher uses. --}}
+            <div class="relative text-center mt-4">
+                <div class="absolute inset-0 flex items-center"><span class="w-full border-t border-paper-200"></span></div>
+                <span class="relative px-2 bg-paper-0 text-[10px] font-mono uppercase tracking-[0.16em] text-ink-400">{{ __('or') }}</span>
+            </div>
+            <button id="waba-signup-coex-btn" type="button" data-app-id="{{ $appId }}"
+                data-config-id="{{ $configId }}"
+                data-graph-version="{{ $graphVersion }}"
+                data-es-version="{{ $esVersion }}"
+                data-coex-config-id="{{ $coexConfigId }}"
+                class="mt-4 w-full px-4 py-3 rounded-full border-2 border-[#1877F2] text-[#1877F2] hover:bg-[#1877F2]/5 text-[13px] font-semibold inline-flex items-center justify-center gap-2">
+                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2.3" y="2.3" width="4.4" height="4.4" rx="1" />
+                    <rect x="9.3" y="2.3" width="4.4" height="4.4" rx="1" />
+                    <rect x="2.3" y="9.3" width="4.4" height="4.4" rx="1" />
+                    <path d="M9.3 9.3h2.2M13.7 9.3v2.2M9.3 13.7h4.4M13.7 12.5v1.2" />
+                </svg>
+                {{ __('Connect my existing Business App number') }}
+            </button>
+        @endif
         <p class="text-[10.5px] text-ink-500 mt-2 text-center">
             {{ __('Requires a Meta Business account, a verified business, and a phone not already on the consumer WhatsApp app.') }}
         </p>

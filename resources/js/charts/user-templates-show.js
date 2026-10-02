@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /*
  * /templates/{id} — Meta status auto-sync.
  *
@@ -148,15 +150,14 @@ function humanizeTime(iso) {
     }
 }
 
-function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(refresh, POLL_MS);
-}
-
-function stopPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
-}
+// Shared poller — overlap guard, hidden-tab pause, and a widening gap. A
+// template sitting in Meta review changes state maybe once in an hour, so a
+// flat 30s poll was almost entirely wasted requests.
+const poller = createPoller(async () => { await refresh(); return false; }, {
+    interval: POLL_MS, maxInterval: 240_000,
+});
+function startPolling() { poller.start(); }
+function stopPolling()  { poller.stop(); }
 
 function onVisibilityChange() {
     const el = root();

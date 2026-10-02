@@ -45,6 +45,10 @@ class AiHelpersController extends Controller
         foreach ($rows as $r) {
             $label = $providerLabel[$r->provider] ?? ucfirst($r->provider);
             $default = (string) ($r->default_model ?? '');
+            // An active key with a blank default_model used to be dropped
+            // silently, so the provider disappeared from the picker with no
+            // hint why. Fall back to a current model id for that brand.
+            if ($default === '') $default = \App\Services\AiAgentService::fallbackModel($r->provider);
             if ($default === '') continue;
             $extra = json_decode((string) ($r->extra_config ?? '[]'), true) ?: [];
             $extraModels = is_array($extra['models'] ?? null) ? $extra['models'] : [];
@@ -84,7 +88,7 @@ class AiHelpersController extends Controller
         $data = $request->validate([
             'text'     => 'required|string|max:4096',
             'context'  => 'nullable|string|max:120',
-            'provider' => 'nullable|string|in:openai,anthropic,gemini,mistral,muse',
+            'provider' => ['nullable', 'string', \Illuminate\Validation\Rule::in(\App\Services\AiAgentService::supportedProviders())],
             'model'    => 'nullable|string|max:120',
         ]);
 
@@ -174,7 +178,7 @@ SYS;
             return response()->json([
                 'ok'      => false,
                 'error'   => 'provider_failed',
-                'message' => 'AI provider returned no content.',
+                'message' => $ai->lastProviderError() ?: 'AI provider returned no content.',
             ], 502);
         }
 

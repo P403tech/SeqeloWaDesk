@@ -68,12 +68,28 @@ class CommerceEventNotifier
             }
         }
 
+        Log::info('[WC-AUTO] notify → engine', [
+            'workspace' => $workspaceId,
+            'to'        => $to,
+            'template'  => $tpl->name ?? $tpl->id,
+            'engine'    => $engine->value,
+            'positional' => $positional['body'] ?? [],
+            'sender_key' => $senderKey,
+        ]);
+
         try {
-            return match ($engine) {
+            $res = match ($engine) {
                 WaProvider::Waba   => $this->sendWaba($tpl, $to, $positional, $workspaceId, $configId),
                 WaProvider::Twilio => $this->sendTwilio($tpl, $to, $userId, $workspaceId, $rendered, $positional),
                 default            => $this->sendBaileys($tpl, $to, $userId, $workspaceId, $rendered, $fromNumber),
             };
+            Log::info('[WC-AUTO] notify ← result', [
+                'engine' => $res['engine'] ?? $engine->value,
+                'ok'     => $res['ok'] ?? false,
+                'provider_id' => $res['provider_id'] ?? null,
+                'error'  => $res['error'] ?? null,
+            ]);
+            return $res;
         } catch (\Throwable $e) {
             Log::warning('[CommerceNotifier] send threw', ['engine' => $engine->value, 'tpl' => $tpl->id, 'err' => $e->getMessage()]);
             return ['ok' => false, 'engine' => $engine->value, 'provider_id' => null, 'error' => $e->getMessage()];
@@ -203,16 +219,26 @@ class CommerceEventNotifier
         if ($body === '') return $body;
         $positional = array_values($ctx['_positional'] ?? []);
 
-        return (string) preg_replace_callback('/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/', function ($m) use ($ctx, $positional) {
-            $key = $m[1];
-            if (ctype_digit($key)) {
-                $idx = (int) $key - 1;
+        // Match EVERY placeholder shape, including spaced/capitalised names
+        // like {{Order ID}} — the old [a-zA-Z0-9_.] pattern could not match a
+        // space, so such tokens leaked raw braces to the customer. Resolve a
+        // named token by an exact (case-insensitive) ctx key first, then by
+        // its normalised key ("Order ID" → order_id), so mapped values land.
+        return (string) preg_replace_callback(\App\Services\TemplateOverrideResolver::TOKEN_RE, function ($m) use ($ctx, $positional) {
+            $raw = trim((string) $m[1]);
+            if ($raw === '') return '';
+            if (ctype_digit($raw)) {
+                $idx = (int) $raw - 1;
                 return $positional[$idx] ?? '';
             }
             foreach ($ctx as $k => $v) {
-                if (is_string($k) && strcasecmp($k, $key) === 0 && is_scalar($v)) {
+                if (is_string($k) && strcasecmp($k, $raw) === 0 && is_scalar($v)) {
                     return (string) $v;
                 }
+            }
+            $norm = \App\Services\TemplateOverrideResolver::normalizeKey($raw);
+            if ($norm !== '' && isset($ctx[$norm]) && is_scalar($ctx[$norm])) {
+                return (string) $ctx[$norm];
             }
             return '';
         }, $body);

@@ -8,7 +8,7 @@
 <x-layouts.user :title="$company->name" nav-key="companies">
     <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7">
 
-        <a href="{{ route('companies.index') }}" class="inline-flex items-center gap-1.5 text-[12px] text-ink-500 hover:text-wa-deep mb-4">
+        <a href="{{ route('user.companies.index') }}" class="inline-flex items-center gap-1.5 text-[12px] text-ink-500 hover:text-wa-deep mb-4">
             <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3L5 8l5 5"/></svg>
             {{ __('All companies') }}
         </a>
@@ -24,17 +24,30 @@
                     @if ($company->phone)<span>{{ $company->phone }}</span>@endif
                 </div>
             </div>
-            {{-- AI-CRM Phase 5 — generate a shareable Client Brief deck. Opens the
-                 public deck in a new tab. --}}
-            <form method="POST" action="{{ route('user.crm.briefs.store') }}" target="_blank" class="shrink-0">
-                @csrf
-                <input type="hidden" name="subject_type" value="company">
-                <input type="hidden" name="subject_id" value="{{ $company->id }}">
-                <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-1.5">
-                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="2" width="11" height="12" rx="1.5"/><path d="M5 6h6M5 8.5h6M5 11h3.5"/></svg>
-                    {{ __('Generate brief') }}
-                </button>
-            </form>
+            <div class="shrink-0 flex items-center gap-2">
+                {{-- AI-CRM Phase 5 — generate a shareable Client Brief deck. Opens the
+                     public deck in a new tab. --}}
+                <form method="POST" action="{{ route('user.crm.briefs.store') }}" target="_blank">
+                    @csrf
+                    <input type="hidden" name="subject_type" value="company">
+                    <input type="hidden" name="subject_id" value="{{ $company->id }}">
+                    <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-1.5">
+                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="2" width="11" height="12" rx="1.5"/><path d="M5 6h6M5 8.5h6M5 11h3.5"/></svg>
+                        {{ __('Generate brief') }}
+                    </button>
+                </form>
+                {{-- Delete the company (contacts + deals are kept and unlinked). --}}
+                <form method="POST" action="{{ url('/companies/'.$company->id) }}"
+                    onsubmit="return confirm('{{ __('Delete this company? Its contacts and deals are kept and just unlinked.') }}')">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" title="{{ __('Delete company') }}"
+                        class="px-3.5 py-2 rounded-full border border-paper-200 text-accent-coral text-[12px] font-semibold inline-flex items-center gap-1.5 hover:bg-accent-coral/10 transition">
+                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6 4V2.5h4V4M4.3 4l.6 9.5h6.2l.6-9.5"/></svg>
+                        {{ __('Delete') }}
+                    </button>
+                </form>
+            </div>
         </div>
 
         {{-- Rollup KPIs --}}

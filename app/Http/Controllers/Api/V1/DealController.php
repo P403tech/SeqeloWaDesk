@@ -152,6 +152,96 @@ class DealController extends V1Controller
         return $this->ok(['deleted' => true]);
     }
 
+    /**
+     * GET /api/v1/pipelines — the boards and their stages.
+     *
+     * A caller creating a deal has to name a `stage_id`, and there was no way to
+     * discover one over the API without opening the UI. Stage order matters
+     * (it is the sales sequence), so it is returned sorted, with the terminal
+     * flags a client needs to tell "Won" from "Negotiating".
+     */
+    public function pipelines(): JsonResponse
+    {
+        if ($r = $this->ensurePlan()) return $r;
+
+        $rows = Pipeline::query()->forCurrentWorkspace()
+            ->with(['stages' => fn ($q) => $q->orderBy('sort_order')->orderBy('id')])
+            ->orderBy('sort_order')->orderBy('id')->get();
+
+        return $this->ok($rows->map(fn (Pipeline $p) => [
+            'id'           => $p->id,
+            'name'         => $p->name,
+            'currency'     => $p->currency,
+            'is_default'   => (bool) $p->is_default,
+            'lost_reasons' => array_values((array) ($p->lost_reasons ?? [])),
+            'stages'       => $p->stages->map(fn (PipelineStage $st) => [
+                'id'         => $st->id,
+                'name'       => $st->name,
+                'sort_order' => (int) $st->sort_order,
+                'is_won'     => (bool) $st->is_won,
+                'is_lost'    => (bool) $st->is_lost,
+            ])->values()->all(),
+        ])->all());
+    }
+
+    /**
+     * GET /api/v1/leads — Meta Instant-Form submissions with their ad attribution.
+     *
+     * Read-only on purpose: leads are produced by Meta, not by API callers, so
+     * there is nothing meaningful to POST. Filterable by form, ingest status and
+     * date so a nightly sync can pull "everything since yesterday" rather than
+     * re-walking the whole table.
+     */
+    public function leads(Request $request): JsonResponse
+    {
+        if ($r = $this->ensurePlan()) return $r;
+
+        $perPage = min(max((int) $request->input('per_page', 25), 1), 100);
+
+        $q = \App\Models\MetaLead::query()
+            ->where('workspace_id', $this->workspaceId())
+            ->orderByDesc('submitted_at')->orderByDesc('id');
+
+        if ($request->filled('form_id'))  $q->where('form_id', (string) $request->input('form_id'));
+        if ($request->filled('status'))   $q->where('ingest_status', (string) $request->input('status'));
+        if ($request->filled('since')) {
+            try { $q->where('submitted_at', '>=', \Illuminate\Support\Carbon::parse($request->input('since'))); }
+            catch (\Throwable $e) { return $this->fail('bad_request', 'since must be a date.', 422); }
+        }
+
+        $page = $q->paginate($perPage);
+
+        return $this->ok(
+            collect($page->items())->map(fn ($l) => [
+                'id'            => (int) $l->id,
+                'leadgen_id'    => (string) $l->leadgen_id,
+                'form_id'       => $l->form_id,
+                // The customer's answers, flattened from Meta's nested
+                // field_data[] so a receiving CRM does not have to walk it.
+                'answers'       => $l->answers(),
+                'campaign_id'   => $l->campaign_id,
+                'campaign_name' => $l->campaign_name,
+                'adset_id'      => $l->adset_id,
+                'adset_name'    => $l->adset_name,
+                'ad_id'         => $l->ad_id,
+                'ad_name'       => $l->ad_name,
+                'platform'      => $l->platform,      // fb | ig
+                'is_organic'    => (bool) $l->is_organic,
+                'contact_id'    => $l->contact_id,
+                'deal_id'       => $l->deal_id,
+                'status'        => $l->ingest_status,
+                'error'         => $l->ingest_error,
+                'submitted_at'  => optional($l->submitted_at)->toIso8601String(),
+            ])->all(),
+            [
+                'page'      => $page->currentPage(),
+                'per_page'  => $page->perPage(),
+                'total'     => $page->total(),
+                'last_page' => $page->lastPage(),
+            ],
+        );
+    }
+
     /* -------------------- helpers -------------------- */
 
     private function ensurePlan(): ?JsonResponse

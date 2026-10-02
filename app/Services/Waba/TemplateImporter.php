@@ -51,6 +51,7 @@ class TemplateImporter
         $imported = 0;
         $updated  = 0;
         $total    = 0;
+        $orphaned = 0;        // local templates Meta no longer has → reset to pending
         $ok       = 0;        // accounts that synced without throwing
         $failures = [];       // per-account "<label>: <reason>" for the aggregate error
 
@@ -68,6 +69,7 @@ class TemplateImporter
                 $imported += $r['imported'];
                 $updated  += $r['updated'];
                 $total    += $r['total'];
+                $orphaned += $r['orphaned'] ?? 0;
                 $ok++;
             } catch (\Throwable $e) {
                 $label = $cfg->phone_number ?: ($cfg->display_label ?: ('WABA #' . $cfg->id));
@@ -92,7 +94,7 @@ class TemplateImporter
             );
         }
 
-        return ['imported' => $imported, 'updated' => $updated, 'total' => $total];
+        return ['imported' => $imported, 'updated' => $updated, 'total' => $total, 'orphaned' => $orphaned];
     }
 
     /** Import every template from ONE WABA account (paged). */
@@ -128,6 +130,7 @@ class TemplateImporter
         $total    = 0;
         $after    = null;
         $guard    = 0; // hard page cap so a pathological cursor can't loop forever
+        $metaIds  = []; // every template id Meta returned — used to spot orphans
 
         do {
             $page = $client->list($after, 200);
@@ -138,6 +141,7 @@ class TemplateImporter
                     continue;
                 }
                 $total++;
+                $metaIds[] = (string) $tpl['id'];
                 [$isNew] = $this->upsert($cfg, $workspaceId, $tpl);
                 $isNew ? $imported++ : $updated++;
             }
@@ -147,15 +151,50 @@ class TemplateImporter
             $guard++;
         } while ($hasNext && $guard < 50);
 
+        // ORPHAN RECONCILE — a local template linked to a Meta id that Meta no
+        // longer returns (deleted/renamed on Meta, or a name that only ever
+        // existed locally) lingers forever showing a false "Approved" and breaks
+        // sends with 132001 "template does not exist". Unlink those and flip them
+        // back to PENDING/unsubmitted so the operator can just re-submit them (the
+        // "Submit to Meta" button reappears once meta_template_id is null), which
+        // recreates the template on Meta. Only when the list fetch actually
+        // returned templates ($total > 0) — an empty page (transient) must NEVER
+        // orphan the whole library. Scoped to THIS WABA's rows.
+        $orphaned = 0;
+        if ($total > 0) {
+            $orphans = WaTemplate::query()
+                ->where('workspace_id', $workspaceId)
+                ->where('provider_config_id', $cfg->id)
+                ->where('channel', 'waba')
+                ->whereNotNull('meta_template_id')
+                ->whereNotIn('meta_template_id', $metaIds)
+                ->get();
+            foreach ($orphans as $o) {
+                $o->update([
+                    'meta_template_id' => null,       // unlink the dead Meta id → re-submittable
+                    'meta_status'      => 'PENDING',
+                    'status'           => 'pending',
+                    'approved_at'      => null,
+                    'last_synced_at'   => now(),
+                ]);
+                $orphaned++;
+                Log::info('[WABA-template-import] orphan reset to pending (not on Meta)', [
+                    'workspace' => $workspaceId, 'config' => $cfg->id,
+                    'tpl' => $o->id, 'name' => $o->template_name,
+                ]);
+            }
+        }
+
         Log::info('[WABA-template-import] done', [
             'workspace' => $workspaceId,
             'config'    => $cfg->id,
             'imported'  => $imported,
             'updated'   => $updated,
             'total'     => $total,
+            'orphaned'  => $orphaned,
         ]);
 
-        return ['imported' => $imported, 'updated' => $updated, 'total' => $total];
+        return ['imported' => $imported, 'updated' => $updated, 'total' => $total, 'orphaned' => $orphaned];
     }
 
     /** ALL WhatsApp Cloud (waba) provider configs for the workspace. */
@@ -314,7 +353,20 @@ class TemplateImporter
             // renders a mapping field for it (Meta only gives us the text, not
             // which contact attribute fills each slot — the operator maps that
             // when they send). Positional keys by default; remappable in the UI.
-            'variable_map'       => $this->buildVariableMap($parsed['header'], $parsed['template_body']),
+            //
+            // PRESERVE the operator's slot→attribute mapping across re-syncs.
+            // Meta returns only positional placeholders ({{1}}) with no
+            // attribute identity, so a naive rebuild keys every slot to its own
+            // number — wiping a mapping the operator set in the editor
+            // ({{1}} → first_name). Meta approval (and the PENDING sweep) then
+            // made the template render the literal "1" and the editor show
+            // "— not mapped —". Layer the freshly-parsed structure (authoritative
+            // for slot COUNT/positions) over the existing non-numeric keys so a
+            // real attribute map survives every sync.
+            'variable_map'       => $this->mergeVariableMap(
+                $existing?->variable_map,
+                $this->buildVariableMap($parsed['header'], $parsed['template_body'])
+            ),
             'status'             => $localStatus,
             'last_synced_at'     => now(),
         ];
@@ -496,6 +548,53 @@ class TemplateImporter
         if ($h = $extract($header)) $map['header'] = $h;
         if ($b = $extract($body))   $map['body']   = $b;
         return $map ?: null;
+    }
+
+    /**
+     * Merge a freshly-parsed positional `variable_map` with the one already
+     * stored on the row, PRESERVING operator-assigned attribute keys.
+     *
+     * Meta only knows positional placeholders ({{1}}), so the rebuilt map keys
+     * every slot to its own number. The operator, however, maps each slot to a
+     * real contact attribute in the editor ({{1}} → first_name), stored as the
+     * slot's `key`. Blindly taking the fresh map wiped that on every approval /
+     * sync, so the template rendered the literal "1" and the editor showed
+     * "— not mapped —".
+     *
+     * Rule: the FRESH map is authoritative for which slots EXIST (Meta may have
+     * added/removed a placeholder). For each surviving slot we keep the stored
+     * key when it is a real attribute (non-numeric); a stored literal number
+     * carries no mapping, so the fresh positional default wins. Same slot `num`
+     * links the two sides.
+     */
+    private function mergeVariableMap(?array $existing, ?array $fresh): ?array
+    {
+        if (!is_array($fresh) || !is_array($existing)) return $fresh;
+
+        foreach (['header', 'body'] as $section) {
+            if (empty($fresh[$section]) || !is_array($fresh[$section])) continue;
+
+            // Index the operator's stored keys by slot number for this section.
+            $priorByNum = [];
+            foreach ((array) ($existing[$section] ?? []) as $entry) {
+                if (!is_array($entry)) continue;
+                $num = (string) ($entry['num'] ?? '');
+                $key = (string) ($entry['key'] ?? '');
+                if ($num !== '' && $key !== '') $priorByNum[$num] = $key;
+            }
+            if (!$priorByNum) continue;
+
+            foreach ($fresh[$section] as $i => $entry) {
+                if (!is_array($entry)) continue;
+                $priorKey = $priorByNum[(string) ($entry['num'] ?? '')] ?? null;
+                // Keep the operator's real attribute (non-numeric) key; a stored
+                // literal number is an unmapped slot, so let the fresh default win.
+                if ($priorKey !== null && $priorKey !== '' && !ctype_digit($priorKey)) {
+                    $fresh[$section][$i]['key'] = $priorKey;
+                }
+            }
+        }
+        return $fresh;
     }
 
     /**

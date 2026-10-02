@@ -41,16 +41,21 @@ class UsersController extends Controller
             $query->where('role', $role);
         }
         if (is_numeric($wsId)) {
-            $query->where('current_workspace_id', (int) $wsId);
+            // Filter by actual MEMBERSHIP (workspace_user pivot), not the user's
+            // currently-selected workspace — otherwise a real member who happens to
+            // be viewing another workspace disappears from the filtered list.
+            $query->whereHas('workspaces', fn ($q) => $q->where('workspaces.id', (int) $wsId));
         }
 
         $users = $query->orderByDesc('id')->paginate(12)->withQueryString();
 
         $stats = [
             'total'     => User::query()->count(),
-            'active'    => User::query()->whereNull('deleted_at')->count(),
+            // "Active" = enabled account: not deleted AND not suspended (suspended
+            // users were double-counted in both Active and Suspended tiles).
+            'active'    => User::query()->whereNull('deleted_at')->where('role', '!=', 'suspended')->count(),
             'admin'     => User::query()->where('role', 'admin')->count(),
-            'owners'    => User::query()->where('role', 'owner')->count(),
+            'users'     => User::query()->where('role', 'user')->count(),
             'suspended' => User::query()->where('role', 'suspended')->count(),
             'trashed'   => User::onlyTrashed()->count(),
             'thisMonth' => User::query()->where('created_at', '>=', now()->startOfMonth())->count(),
@@ -109,6 +114,11 @@ class UsersController extends Controller
             'email_verified_at'     => $request->boolean('active') ? now() : null,
         ]);
 
+        // Assign the selected workspace as REAL membership, not just
+        // current_workspace_id — otherwise the user has no workspace_user row and
+        // login bounces them to "create a workspace" (the reported Mritunjay case).
+        $this->syncWorkspaceMembership($user, $data['workspace_id'] ?? null, $data['role'] ?? 'user');
+
         // Profile avatar — stored after create so the file is named with the id.
         $this->storeAvatarIfPresent($request, $user);
 
@@ -124,6 +134,26 @@ class UsersController extends Controller
             ->with('success', $mailNotice
                 ? 'User created — welcome email skipped: ' . $mailNotice
                 : 'User created.');
+    }
+
+    /**
+     * Make an admin-assigned workspace a REAL membership (workspace_user pivot),
+     * not just users.current_workspace_id. Without this the user has no membership
+     * row and login redirects them to workspace onboarding. The legacy account role
+     * maps to a valid workspace role (admin/owner → workspace admin; else agent).
+     * updateOrInsert because workspace_user has no unique (workspace_id,user_id) index.
+     */
+    private function syncWorkspaceMembership(User $user, $workspaceId, string $legacyRole = 'user'): void
+    {
+        $wsId = (int) ($workspaceId ?? 0);
+        if ($wsId <= 0) {
+            return;
+        }
+        $wsRole = in_array($legacyRole, ['owner', 'admin'], true) ? 'admin' : 'agent';
+        \Illuminate\Support\Facades\DB::table('workspace_user')->updateOrInsert(
+            ['workspace_id' => $wsId, 'user_id' => $user->id],
+            ['role' => $wsRole, 'joined_at' => now(), 'updated_at' => now(), 'created_at' => now()]
+        );
     }
 
     /**
@@ -233,6 +263,7 @@ class UsersController extends Controller
                     'address'              => $get($row, 'address') ?: null,
                     'email_verified_at'    => $active ? now() : null,
                 ]);
+                $this->syncWorkspaceMembership($user, $wsId, $role);
                 if ($welcomeEmail) {
                     $this->sendWelcomeEmail($user, $plain); // best-effort; never fails the row
                 }
@@ -395,7 +426,7 @@ class UsersController extends Controller
             $base->where(function ($w) use ($q) {
                 $w->where('name',  'like', "%{$q}%")
                   ->orWhere('email','like', "%{$q}%")
-                  ->orWhere('phone','like', "%{$q}%");
+                  ->orWhere('mobile','like', "%{$q}%");
             });
         }
         if ($filter === 'recent') {
@@ -498,12 +529,19 @@ class UsersController extends Controller
         }
         RateLimiter::hit($throttleKey, 3600);
 
-        Password::sendResetLink(['email' => $user->email]);
+        // Check the broker's actual result before claiming success — otherwise a
+        // throttle (RESET_THROTTLED), an unknown user, or a mail failure still
+        // showed "link sent" while nothing went out.
+        $status = Password::sendResetLink(['email' => $user->email]);
+        $ok = $status === Password::RESET_LINK_SENT;
         Audit::log('admin.user.reset_password_sent', [
             'resource' => $user,
-            'meta'     => ['email' => $user->email],
+            'result'   => $ok ? 'success' : 'failure',
+            'meta'     => ['email' => $user->email, 'status' => $status],
         ]);
-        return back()->with('success', 'Password reset link sent to ' . $user->email);
+        return $ok
+            ? back()->with('success', 'Password reset link sent to ' . $user->email)
+            : back()->with('error', 'Could not send reset link: ' . __($status));
     }
 
     /**

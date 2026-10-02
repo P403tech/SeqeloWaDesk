@@ -131,6 +131,15 @@
                     @endif
                 </button>
 
+                @if ($c->facebook_id)
+                    <button type="button" data-meta-sync="{{ $c->id }}"
+                        class="hairline border border-paper-200 rounded-full w-8 h-8 bg-paper-0 hover:bg-paper-50 flex items-center justify-center"
+                        title="{{ __('Sync this campaign from Meta') }}">
+                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                            <path d="M3 8a5 5 0 0 1 8.5-3.5L13 6M13 8a5 5 0 0 1-8.5 3.5L3 10M13 3v3h-3M3 13v-3h3" />
+                        </svg>
+                    </button>
+                @endif
                 <a href="{{ route('user.meta-ads.analytics', ['id' => $c->id]) }}"
                     class="hairline border border-paper-200 rounded-full w-8 h-8 bg-paper-0 hover:bg-wa-bubble text-wa-deep flex items-center justify-center"
                     title="{{ __('View analytics') }}">
@@ -229,6 +238,25 @@
                         stroke="currentColor" stroke-width="1.5">
                         <path d="M7 5l-2 2a2.83 2.83 0 0 0 4 4l1-1M9 11l2-2a2.83 2.83 0 0 0-4-4l-1 1" />
                     </svg>FB ID: {{ \Illuminate\Support\Str::limit($c->facebook_id, 12, '…') }}</span>
+            @elseif ($c->status !== 'DRAFT')
+                {{-- Not on Meta: the campaign was saved locally but never created on
+                     the Marketing API, so it can never show spend/impressions (all 0)
+                     even while it reads ACTIVE. Let the user push it now. --}}
+                <span class="flex items-center gap-1.5 text-accent-coral font-semibold"><svg viewBox="0 0 16 16"
+                        class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <circle cx="8" cy="8" r="6" />
+                        <path d="M8 5v3.2M8 10.6v.4" />
+                    </svg>{{ __('Not on Meta') }}</span>
+                <button type="button" data-meta-push="{{ $c->id }}"
+                    class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[11px] font-semibold">
+                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path d="M8 12V4M4.5 7.5L8 4l3.5 3.5" />
+                    </svg>{{ __('Push to Meta') }}
+                </button>
+            @endif
+            @if ($c->meta_last_error && !$c->facebook_id && $c->status !== 'FAILED')
+                <span class="flex items-center gap-1.5 text-accent-coral" title="{{ $c->meta_last_error }}">
+                    {{ \Illuminate\Support\Str::limit($c->meta_last_error, 60, '…') }}</span>
             @endif
             @if ($c->ctwa_enabled)
                 <span class="flex items-center gap-1.5 text-wa-deep"><svg viewBox="0 0 16 16" class="w-3.5 h-3.5"

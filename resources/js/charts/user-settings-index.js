@@ -1,11 +1,14 @@
 export default function init() {
-    const TAB_LABELS = { general:'General', branding:'Branding', team:'Team & roles', notifications:'Notifications', aikeys:'AI keys', security:'Security', api:'API & webhooks', data:'Data & export', appearance:'Appearance' };
+    const TAB_LABELS = { general:'General', branding:'Branding', team:'Team & roles', notifications:'Notifications', aikeys:'AI keys', payments:'Payment gateways', domain:'Custom domain', metaapp:'Meta app', security:'Security', api:'API & webhooks', data:'Data & export', appearance:'Appearance' };
       const TAB_TITLES = {
         general:       ['Workspace <span class="italic text-wa-deep">settings</span>',  'Configure your workspace, team, and integrations.'],
         branding:      ['Branding',                                                     'Logo, favicon, colors. Used in invoices and the customer portal.'],
         team:          ['Team &amp; <span class="italic text-wa-deep">roles</span>',    'Members, roles, invitations.'],
         notifications: ['Notifications',                                                'Route alerts to email, Slack, and the in-app bell.'],
         aikeys:        ['AI <span class="italic text-wa-deep">keys</span>',             'Plug in your OpenAI, Gemini, Claude, and Mistral keys for the AI Assist node and Generate-with-AI flows.'],
+        payments:      ['Payment <span class="italic text-wa-deep">gateways</span>',    'Add your own payment-gateway keys so checkouts, store orders, and booking deposits charge into your account.'],
+        domain:        ['Custom <span class="italic text-wa-deep">domain</span>',       'Point your own domain at your workspace.'],
+        metaapp:       ['Your own <span class="italic text-wa-deep">Meta app</span>',   'Connect Facebook and Instagram with your own Meta app instead of the platform default.'],
         security:      ['Security',                                                     'Two-factor, sessions, audit log.'],
         api:           ['API &amp; <span class="italic text-wa-deep">webhooks</span>',  'API keys and event delivery to external endpoints.'],
         data:          ['Data &amp; export',                                            'Export contacts and conversations · delete the workspace.'],

@@ -72,7 +72,7 @@
                         __('The complete WhatsApp') .
                             '<br>
                      ' .
-                            __('platform') .
+                            __('& omnichannel platform') .
                             '<span class="text-wa-deep">.</span> ' .
                             __('Built for') .
                             '<br>
@@ -88,7 +88,7 @@
             <div class="col-span-12 lg:col-span-3 reveal" style="--d:120ms">
                 <p class="text-[14px] text-ink-700 leading-relaxed border-l-2 border-wa-deep pl-4"
                     data-fc="hero-home.subhead">
-                    {{ fc('hero-home.subhead', __('Broadcasts, flows, shared inbox, templates, AI, payments — twelve products under one roof. Pay for conversations, never per-seat. Live in four minutes.')) }}
+                    {{ fc('hero-home.subhead', __('WhatsApp, Instagram, Facebook, Telegram, TikTok & SMS — broadcasts, flows, shared inbox, templates, AI and payments, all under one roof. Pay for conversations, never per-seat. Live in four minutes.')) }}
                 </p>
                 <div class="mt-6 flex flex-col gap-2.5">
                     <a href="{{ fc('hero-home.cta1_url', Route::has('register') ? route('register') : url('/')) }}"

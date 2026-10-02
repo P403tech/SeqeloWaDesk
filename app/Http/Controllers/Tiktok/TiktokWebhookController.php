@@ -252,7 +252,7 @@ class TiktokWebhookController extends Controller
             ],
             'post.publish.failed' => [
                 'status' => 'failed',
-                'error'  => mb_substr((string) ($content['reason'] ?? 'publish failed'), 0, 990),
+                'error'  => mb_substr(self::explainPublishFailure((string) ($content['reason'] ?? '')), 0, 990),
             ],
             'post.publish.no_longer_available' => [
                 'status' => 'failed',
@@ -262,7 +262,66 @@ class TiktokWebhookController extends Controller
         };
         if ($upd) {
             $post->forceFill($upd)->save();
-            Log::info('[TT-HOOK] '.$event, ['publish_id' => $publishId, 'post' => $post->id]);
+            // (see explainPublishFailure below for why the reason is rewritten)
+            // Log TikTok's REASON, not just the ids. Without it the line read
+            // "post.publish.failed {publish_id, post}" and told nobody why —
+            // the reason was stored on the row but never surfaced anywhere the
+            // operator looks. TikTok's reason is the whole diagnosis here
+            // (unverified URL prefix, pull failed, duration/format check,
+            // spam risk…), so it belongs in the log line.
+            Log::info('[TT-HOOK] '.$event, array_filter([
+                'publish_id' => $publishId,
+                'post'       => $post->id,
+                'reason'     => $upd['error'] ?? null,
+                // p_inbox_* = draft to the user's TikTok inbox (video.upload),
+                // p_pub_*   = direct post (video.publish). Different failure modes.
+                'mode'       => str_starts_with($publishId, 'p_inbox') ? 'inbox_draft' : 'direct_post',
+                'source'     => str_contains($publishId, '_url') ? 'PULL_FROM_URL' : 'FILE_UPLOAD',
+            ], fn ($v) => $v !== null));
         }
+    }
+
+    /**
+     * Turn TikTok's terse failure code into something the operator can act on.
+     *
+     * TikTok sends machine codes like `url_ownership_unverified` — accurate but
+     * meaningless to the person looking at a red "failed" badge, who then has no
+     * idea whether to fix their video, their domain, or wait. The raw code is
+     * kept on the end so support can still match it against TikTok's docs.
+     */
+    private static function explainPublishFailure(string $reason): string
+    {
+        $code = strtolower(trim($reason));
+        if ($code === '') {
+            return 'TikTok rejected the post but gave no reason.';
+        }
+
+        $map = [
+            // BY FAR the most common on a fresh install. We publish via
+            // PULL_FROM_URL, so TikTok downloads the file from your server —
+            // and it refuses to download from a domain you have not proven you own.
+            'url_ownership_unverified' => 'Your domain is not verified with TikTok. In the TikTok developer portal open your app and add this site under URL properties, then verify it. TikTok downloads the video from your server and refuses unverified domains.',
+            'video_pull_failed'        => 'TikTok could not download the video from your server. The URL must be public HTTPS, reachable from the internet, and still available when TikTok fetches it.',
+            'photo_pull_failed'        => 'TikTok could not download the image from your server. It must be public HTTPS and reachable from the internet.',
+            'file_format_check_failed' => 'Unsupported file format. Use MP4 or MOV for video, JPEG or WebP for photos.',
+            'duration_check_failed'    => 'Video length is outside what this account may post. Check the minimum and maximum duration allowed for the creator.',
+            'frame_rate_check_failed'  => 'Video frame rate is out of range. TikTok accepts roughly 23-60 fps.',
+            'picture_size_check_failed'=> 'Image dimensions are out of range for TikTok.',
+            'video_size_check_failed'  => 'Video file is too large for TikTok.',
+            'spam_risk_too_many_posts' => 'TikTok is rate-limiting this account for posting too often. Wait before trying again.',
+            'spam_risk_user_banned_from_posting' => 'TikTok has blocked this account from posting. This must be resolved with TikTok directly.',
+            'spam_risk'                => 'TikTok flagged this post as spam risk and refused it.',
+            'auth_removed'             => 'The creator revoked access. Reconnect the TikTok account.',
+            'privacy_level_option_mismatch' => 'The chosen privacy setting is not allowed for this creator.',
+            'internal'                 => 'TikTok had an internal error. Retry shortly.',
+        ];
+
+        foreach ($map as $needle => $friendly) {
+            if (str_contains($code, $needle)) {
+                return $friendly . ' (TikTok: ' . $reason . ')';
+            }
+        }
+
+        return 'TikTok rejected the post: ' . $reason;
     }
 }

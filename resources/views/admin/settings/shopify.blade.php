@@ -91,13 +91,14 @@
                                     class="w-7 h-7 rounded-full bg-wa-bubble text-wa-deep grid place-items-center font-mono text-[12px] font-semibold shrink-0">1</span>
                                 <div class="min-w-0 flex-1">
                                     <div class="font-semibold text-[13px]">
-                                        {{ __('Create a Shopify Partners account') }}</div>
+                                        {{ __('Sign in to the Shopify Dev Dashboard') }}</div>
                                     <p class="text-[12px] text-ink-600 mt-1 leading-relaxed">
-                                        Go to <a href="https://partners.shopify.com/signup" target="_blank"
+                                        Go to <a href="https://dev.shopify.com/dashboard" target="_blank"
                                             rel="noopener"
-                                            class="text-wa-deep font-medium underline">{{ __('partners.shopify.com/signup') }}</a>
-                                        and sign in with the email that will own this integration. Partners accounts are
-                                        free.
+                                            class="text-wa-deep font-medium underline">dev.shopify.com/dashboard</a>
+                                        and sign in with the email that will own this integration (a free Shopify /
+                                        Partner login works). This is the new home for building apps — it replaced the
+                                        Partner Dashboard in 2026.
                                     </p>
                                 </div>
                             </li>
@@ -110,19 +111,20 @@
                                     <div class="font-semibold text-[13px]">
                                         {{ __('Open the Dev Dashboard and create an app') }}</div>
                                     <p class="text-[12px] text-ink-600 mt-1 leading-relaxed">
-                                        From your Partner account open the
-                                        <a href="https://shopify.dev/dashboard" target="_blank" rel="noopener"
-                                            class="text-wa-deep font-medium underline">{{ __('Shopify Dev Dashboard') }}</a>
-                                        →
-                                        <span class="font-mono text-ink-900">{{ __('Apps → Create app') }}</span>.
-                                        Pick <b>Public app</b> (so any Shopify merchant can install). Name it after your
-                                        platform.
+                                        Open the
+                                        <a href="https://dev.shopify.com/dashboard" target="_blank" rel="noopener"
+                                            class="text-wa-deep font-medium underline">dev.shopify.com/dashboard</a>
+                                        → in the left nav pick
+                                        <span class="font-mono text-ink-900">{{ __('Apps → Create app') }}</span> →
+                                        <span class="font-mono text-ink-900">{{ __('Start from Dev Dashboard') }}</span>,
+                                        then name it after your platform.
                                     </p>
                                     <p class="text-[11px] text-ink-500 mt-1.5 leading-relaxed">
                                         <span class="font-mono text-accent-amber">{{ __('Note (2026):') }}</span>
-                                        legacy custom apps created from <span
-                                            class="font-mono">{{ __('Shopify Admin → Apps') }}</span> can no longer be
-                                        created since Jan 1, 2026 — you must use the Dev Dashboard or Shopify CLI.
+                                        the <b>{{ __('Dev Dashboard') }}</b> (<span class="font-mono">dev.shopify.com/dashboard</span>)
+                                        now replaces the old <span class="font-mono">{{ __('Partner Dashboard') }}</span> for building apps.
+                                        Legacy custom apps from <span class="font-mono">{{ __('Shopify Admin → Apps') }}</span>
+                                        can no longer be created since Jan 1, 2026 — use the Dev Dashboard (or Shopify CLI).
                                     </p>
                                 </div>
                             </li>
@@ -135,11 +137,13 @@
                                     <div class="font-semibold text-[13px]">
                                         {{ __('Set the App URL and Allowed redirection URL') }}</div>
                                     <p class="text-[12px] text-ink-600 mt-1 leading-relaxed">
-                                        In the app's <span
-                                            class="font-mono text-ink-900">{{ __('Configuration') }}</span> tab, scroll
-                                        to <span class="font-mono text-ink-900">{{ __('URLs') }}</span>. Paste these
-                                        exactly — the redirect URL must match what we send to Shopify or OAuth fails
-                                        with <span
+                                        Open the app's <span class="font-mono text-ink-900">{{ __('Configuration') }}</span>
+                                        (in the Dev Dashboard these settings are applied when you release a
+                                        <span class="font-mono text-ink-900">{{ __('Version') }}</span>) and find the
+                                        <span class="font-mono text-ink-900">{{ __('URLs') }}</span> section. Also pick the
+                                        newest <span class="font-mono text-ink-900">{{ __('Webhooks API version') }}</span>
+                                        there. Paste these exactly — the redirect URL must match what we send to Shopify or
+                                        OAuth fails with <span
                                             class="font-mono text-accent-coral">{{ __('redirect_uri mismatch') }}</span>:
                                     </p>
                                     <div class="mt-2 space-y-2">
@@ -175,8 +179,8 @@
                                 <div class="min-w-0 flex-1">
                                     <div class="font-semibold text-[13px]">{{ __('Copy the API credentials') }}</div>
                                     <p class="text-[12px] text-ink-600 mt-1 leading-relaxed">
-                                        Open <span
-                                            class="font-mono text-ink-900">{{ __('Configuration → Client credentials') }}</span>.
+                                        In the Dev Dashboard open <span
+                                            class="font-mono text-ink-900">{{ __('Apps → your app → Settings → Credentials') }}</span>.
                                         Reveal both values and paste them into
                                         <span class="text-wa-deep font-medium">{{ __('Client ID') }}</span> (a.k.a.
                                         <span class="font-mono">{{ __('API Key') }}</span>) and
@@ -195,11 +199,27 @@
                                     <div class="font-semibold text-[13px]">{{ __('Add mandatory GDPR webhooks') }}
                                     </div>
                                     <p class="text-[12px] text-ink-600 mt-1 leading-relaxed">
-                                        In <span
-                                            class="font-mono text-ink-900">{{ __('Configuration → Compliance webhooks') }}</span>,
-                                        set all three URLs to the endpoint below.
-                                        Shopify <b>requires</b> these before App Store submission and silently fails
-                                        install otherwise.
+                                        Shopify <b>requires</b> these three GDPR webhooks or install silently fails and
+                                        the app-review checks stay red. <b>The new Dev Dashboard has no UI field for
+                                            them</b> — they are declared in the app's
+                                        <span class="font-mono text-ink-900">shopify.app.toml</span> and pushed once
+                                        with the Shopify CLI (a one-time setup, no ongoing CLI use):
+                                    </p>
+                                    <ol class="mt-2 space-y-1 text-[12px] text-ink-600 list-decimal list-inside">
+                                        <li><span class="font-mono text-ink-900">npm i -g &#64;shopify/cli&#64;latest</span></li>
+                                        <li><span class="font-mono text-ink-900">shopify app config link</span> — pick
+                                            this app; it writes <span class="font-mono">shopify.app.toml</span>.</li>
+                                        <li>Add the block below to that file, then run
+                                            <span class="font-mono text-ink-900">shopify app deploy</span>.</li>
+                                    </ol>
+                                    <pre class="mt-2 rounded-lg border border-paper-200 bg-paper-50 px-3 py-2 text-[11px] font-mono overflow-x-auto leading-relaxed">[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "{{ url('/shopify/compliance') }}"</pre>
+                                    <p class="text-[12px] text-ink-600 mt-2 leading-relaxed">
+                                        All three topics point to this one fixed URL — copy it:
                                     </p>
                                     <div class="mt-2 flex gap-2">
                                         <input value="{{ url('/shopify/compliance') }}" readonly
@@ -258,6 +278,20 @@
                             </label>
                         </div>
                         <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {{-- Self-serve BYO Shopify app — lets a workspace owner paste
+                                 their OWN API key + secret on /shopify and connect without
+                                 these platform credentials. --}}
+                            <div class="col-span-2 flex items-center justify-between gap-4 rounded-xl border border-paper-200 bg-paper-50/60 px-4 py-3">
+                                <div class="min-w-0">
+                                    <div class="text-[12.5px] font-semibold text-ink-900">{{ __('Let workspaces use their OWN Shopify app') }}</div>
+                                    <div class="text-[11.5px] text-ink-500 mt-0.5">{{ __('On: the workspace owner pastes their own API key + secret on the Shopify page and connects — no platform keys needed. Off: everyone uses the platform app above.') }}</div>
+                                </div>
+                                <label class="flex items-center gap-2 cursor-pointer shrink-0">
+                                    <input type="hidden" name="shopify_allow_manual_app" value="0">
+                                    <input type="checkbox" name="shopify_allow_manual_app" value="1"
+                                        @checked($manualAllowed ?? false) class="w-5 h-5 accent-wa-deep">
+                                </label>
+                            </div>
                             <label class="space-y-1.5 col-span-2">
                                 <span class="text-[11.5px] font-semibold">{{ __('Client ID') }} <span
                                         class="text-accent-coral">*</span></span>
@@ -386,10 +420,10 @@
                                 <div class="font-semibold text-[12.5px] text-ink-900">
                                     {{ __('Client ID / Client Secret') }}</div>
                                 <p class="text-ink-600 mt-0.5">{{ __('In the') }} <a
-                                        href="https://shopify.dev/dashboard" target="_blank" rel="noopener"
-                                        class="text-wa-deep underline">{{ __('Dev Dashboard') }}</a> → your app →
+                                        href="https://dev.shopify.com/dashboard" target="_blank" rel="noopener"
+                                        class="text-wa-deep underline">{{ __('Dev Dashboard') }}</a> →
                                     <span
-                                        class="font-mono text-[11px]">{{ __('Configuration → Client credentials') }}</span>.
+                                        class="font-mono text-[11px]">{{ __('Apps → your app → Settings → Credentials') }}</span>.
                                     Rotate the secret if it leaks.</p>
                             </div>
                             <div>
@@ -430,6 +464,12 @@
                             <h3 class="font-serif text-[16px] leading-tight mt-0.5">{{ __('Official docs') }}</h3>
                         </div>
                         <div class="p-4 space-y-1.5 text-[11.5px]">
+                            <a href="https://shopify.dev/docs/apps/build/dev-dashboard/create-apps-using-dev-dashboard"
+                                target="_blank" rel="noopener"
+                                class="block text-wa-deep hover:underline">{{ __('Create apps using the Dev Dashboard →') }}</a>
+                            <a href="https://shopify.dev/docs/apps/build/dev-dashboard/migrate-from-partners"
+                                target="_blank" rel="noopener"
+                                class="block text-wa-deep hover:underline">{{ __('Migrate from the Partner Dashboard →') }}</a>
                             <a href="https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/authorization-code-grant"
                                 target="_blank" rel="noopener"
                                 class="block text-wa-deep hover:underline">{{ __('OAuth authorization code grant →') }}</a>

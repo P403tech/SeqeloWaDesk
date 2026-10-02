@@ -141,6 +141,7 @@ $purpose = match ($cat) {
 $triggerLabel = match ($flow->trigger_kind) {
     'tag_added' => 'Auto · on tag',
     'group_join' => 'Auto · on group join',
+    'campaign_engagement' => 'Auto · on campaign engagement',
     'manual_enroll' => 'Manual enroll',
     default => 'Keyword',
 };
@@ -189,6 +190,18 @@ $isManual = $flow->trigger_kind === 'manual_enroll';
             @else
                 <a href="{{ url('/flows/builder/' . $flow->id) }}"
                     class="flex-1 text-center hairline border border-paper-200 rounded-full px-3 py-1.5 text-[11.5px] font-medium hover:bg-paper-50">{{ __('Open builder') }}</a>
+            @endif
+
+            {{-- Per-flow analytics: runs, errors and retry history for THIS flow.
+                 Instagram flows run remotely, so they have no local run rows. --}}
+            @if ($flow->flow_type !== 'instagram')
+                <a href="{{ route('user.flows.analytics.show', $flow->id) }}"
+                    class="hairline border border-paper-200 rounded-full w-7 h-7 hover:bg-paper-50 flex items-center justify-center"
+                    title="{{ __('Analytics') }}">
+                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M2 13.5h12" /><path d="M4.5 13.5V9" /><path d="M8 13.5V3.5" /><path d="M11.5 13.5V6.5" />
+                    </svg>
+                </a>
             @endif
 
             <button type="button" data-flow-toggle="{{ $flow->id }}"

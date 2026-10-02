@@ -14,6 +14,28 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    {{-- ========== SHOPIFY APP BRIDGE (embedded app only) ==========
+         Shopify's automated "Embedded app checks" require BOTH:
+           1. the latest App Bridge loaded from Shopify's CDN, and
+           2. session tokens used for authentication.
+         Loading it from cdn.shopify.com/shopifycloud/app-bridge.js always
+         installs the LATEST version — it must NOT be bundled through Vite or
+         self-hosted, or the check fails no matter how current the copy is.
+
+         It must also be the FIRST <script> in <head>: App Bridge patches
+         `fetch` so same-origin calls carry `Authorization: Bearer <id token>`
+         automatically, and anything that runs before it would issue
+         un-authenticated requests. Hence its position above the i18n shim and
+         @vite below — do not move it down.
+
+         Emitted ONLY inside the Shopify admin iframe. On every other page this
+         is absent, so the ordinary app never loads Shopify's script or has its
+         fetch patched. --}}
+    @if (\App\Http\Middleware\EmbeddedShopifySession::isEmbedded(request())
+        && ($shopifyApiKey = app(\App\Services\Shopify\ShopifyService::class)->clientId()) !== '')
+        <meta name="shopify-api-key" content="{{ $shopifyApiKey }}">
+        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+    @endif
     {{-- Real-time (Pusher) — public key + cluster only (never the secret); the
          current workspace id for the private inbox channel. Blank when an admin
          hasn't enabled real-time, in which case Echo stays off and the inbox
@@ -187,49 +209,38 @@
 <body data-nav="{{ $navKey }}" @if ($page) data-page="{{ $page }}" @endif
     data-theme="{{ auth()->check() ? \App\Support\Brand::activeTheme() : 'paper' }}"
     class="min-h-screen font-sans antialiased bg-paper-50 text-ink-900 overflow-x-clip">
-    {{-- Impersonation strip — only present when ImpersonationBanner middleware
- shared a non-null `$impersonation`. Sticky so it survives scroll on
- every page; the form posts to /admin/impersonate/stop which clears
- the session and audit-logs the duration. --}}
-    @if (!empty($impersonation) && ($impersonation['active'] ?? false))
-        <div class="sticky top-0 z-[60] bg-accent-amber text-ink-900 border-b border-accent-amber/60 shadow-sm">
-            <div class="max-w-screen-2xl mx-auto px-4 py-2 flex items-center gap-3 text-[12.5px]">
-                <span class="font-mono uppercase tracking-[0.16em] text-[10px]">{{ __('Impersonating') }}</span>
-                <span class="font-semibold">{{ $impersonation['target_workspace_name'] ?? 'workspace' }}</span>
-                <span class="hidden md:inline text-ink-700">— {{ $impersonation['reason'] }}</span>
-                <form method="POST" action="{{ url('/admin/impersonate/stop') }}" class="ml-auto">
-                    @csrf
-                    <button type="submit"
-                        class="px-3 py-1 rounded-full bg-ink-900 text-paper-0 text-[11.5px] font-semibold hover:bg-ink-700">
-                        {{ __('Stop impersonating') }}
-                    </button>
-                </form>
-            </div>
-        </div>
-    @endif
-
+    {{-- Impersonation strip renders INSIDE each layout branch below (via
+         partials.impersonation-strip). In the sidebar shell it must be a
+         shrink-0 row of the 100vh flex column, not stacked on top of an
+         h-screen shell — the latter pushed the shell below the fold and caused a
+         phantom "scroll to blank" on every page while impersonating. --}}
     @php $__userLayout = \App\Support\UserNav::layout(); @endphp
 
     @if ($__userLayout === 'sidebar' && !$hideHeader)
         {{-- Admin-selected SIDEBAR layout — dark left rail (all nav, no /more,
              no top menu header). Every page's $slot renders unchanged inside the
              main column, so no page can break. --}}
-        {{-- App shell — copied 1:1 from ui/dash/dashboard-v3.html: plain flex,
-             fixed-height viewport, rail is shrink-0 + h-screen (stays put), and
-             ONLY the inner content div scrolls. --}}
-        <div class="flex h-screen overflow-hidden">
-            <div id="user-rail-backdrop"
-                class="fixed inset-0 bg-ink-950/50 z-40 hidden md:hidden transition-opacity"></div>
-            <aside id="user-rail"
-                class="fixed inset-y-0 left-0 z-50 w-[260px] shrink-0 h-screen transform -translate-x-full md:static md:translate-x-0 transition-transform duration-300 ease-in-out md:transition-none flex flex-col">
-                <x-user.sidebar-rail :active="$navKey" />
-            </aside>
-            <div class="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
-                <x-announcement-bar />
-                <x-trial-bar />
-                <x-user.topstrip :title="$title" />
-                <div class="flex-1 min-h-0 overflow-y-auto">
-                    {{ $slot }}
+        {{-- App shell — a 100vh flex COLUMN: the impersonation strip is a
+             shrink-0 row at the top (so the shell stays exactly one viewport
+             tall whether or not you're impersonating — no phantom scroll), then
+             a flex ROW of rail + content. Rail is shrink-0 + full height; ONLY
+             the inner content div scrolls. --}}
+        <div class="flex flex-col h-screen overflow-hidden">
+            @include('partials.impersonation-strip', ['wrapClass' => 'shrink-0'])
+            <div class="flex flex-1 min-h-0 overflow-hidden">
+                <div id="user-rail-backdrop"
+                    class="fixed inset-0 bg-ink-950/50 z-40 hidden md:hidden transition-opacity"></div>
+                <aside id="user-rail"
+                    class="fixed inset-y-0 left-0 z-50 w-[260px] shrink-0 transform -translate-x-full md:static md:translate-x-0 transition-transform duration-300 ease-in-out md:transition-none flex flex-col">
+                    <x-user.sidebar-rail :active="$navKey" />
+                </aside>
+                <div class="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
+                    <x-announcement-bar />
+                    <x-trial-bar />
+                    <x-user.topstrip :title="$title" />
+                    <div class="flex-1 min-h-0 overflow-y-auto">
+                        {{ $slot }}
+                    </div>
                 </div>
             </div>
         </div>
@@ -313,6 +324,7 @@
             })();
         </script>
     @else
+        @include('partials.impersonation-strip', ['wrapClass' => 'sticky top-0'])
         @unless ($hideHeader)
             <x-announcement-bar />
             <x-trial-bar />
@@ -354,6 +366,10 @@
              and customise shortcuts from any page. --}}
         <x-user.quick-access-drawer />
         <x-user.quick-access-modal />
+
+        {{-- Client Support Bot — floating help launcher. Renders only when the
+             platform admin has enabled it (/admin/settings/support-bot). --}}
+        <x-user.support-bot-widget />
     @endauth
 </body>
 

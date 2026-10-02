@@ -80,27 +80,32 @@ export function cancelSchedule(req, res, app) {
   const { scheduleId } = req.params;
 
   try {
+    // Match BOTH the internal node id (msg.id) AND the caller-supplied
+    // scheduleId (msg.scheduleId). Appointment reminders / campaigns cancel by
+    // the scheduleId THEY control (Laravel never learns the random node id, e.g.
+    // `bulk_<ts>_<rand>`), so matching only msg.id silently failed to cancel
+    // them — the reminder still fired after an appointment was cancelled. There
+    // may be more than one row for a scheduleId (a stacked re-schedule) — cancel
+    // ALL of them, stopping each job by its own node id.
+    const sid = String(scheduleId);
+    const isMatch = (msg) => String(msg.id) === sid || String(msg.scheduleId) === sid;
 
-
-    const msgIndex = app.locals.scheduledMessages.findIndex(
-      (msg) => msg.id === scheduleId
-    );
-
-    if (msgIndex === -1) {
+    const matches = (app.locals.scheduledMessages || []).filter(isMatch);
+    if (matches.length === 0) {
       return res.status(404).json({ error: "Schedule not found" });
     }
 
-    app.locals.scheduledMessages[msgIndex].status = "cancelled";
-
-    if (app.locals.scheduledJobs[scheduleId]) {
-      app.locals.scheduledJobs[scheduleId].stop();
-      delete app.locals.scheduledJobs[scheduleId];
+    for (const msg of matches) {
+      const nodeId = msg.id;
+      if (app.locals.scheduledJobs[nodeId]) {
+        app.locals.scheduledJobs[nodeId].stop();
+        delete app.locals.scheduledJobs[nodeId];
+      }
+      msg.status = "cancelled";
     }
+    app.locals.scheduledMessages = app.locals.scheduledMessages.filter((msg) => !isMatch(msg));
 
-    // Remove from scheduled messages array
-    app.locals.scheduledMessages.splice(msgIndex, 1);
-
-    res.json({ success: true, message: "Schedule cancelled" });
+    res.json({ success: true, message: "Schedule cancelled", cancelled: matches.length });
   } catch (error) {
 
     res.status(500).json({ error: "Failed to cancel schedule" });
@@ -232,6 +237,21 @@ export function scheduleBulkMessage(req, res, app) {
       createdAt: moment().format(),
       scheduledFor: scheduledMoment.format("YYYY-MM-DD HH:mm:ss z"), // Store readable format
     };
+
+    // Dedup by the caller's scheduleId — a re-schedule with the SAME id REPLACES
+    // the previous one instead of stacking a second fire. Appointment reminders
+    // rely on this (a reschedule re-arms the same appointment id), and it also
+    // keeps cancel-by-scheduleId cancelling exactly one live row.
+    if (scheduleId !== undefined && scheduleId !== null && scheduleId !== "") {
+      const sid = String(scheduleId);
+      for (const dupe of (app.locals.scheduledMessages || []).filter((m) => String(m.scheduleId) === sid)) {
+        if (app.locals.scheduledJobs[dupe.id]) {
+          app.locals.scheduledJobs[dupe.id].stop();
+          delete app.locals.scheduledJobs[dupe.id];
+        }
+      }
+      app.locals.scheduledMessages = (app.locals.scheduledMessages || []).filter((m) => String(m.scheduleId) !== sid);
+    }
 
     app.locals.scheduledMessages.push(scheduleData);
 

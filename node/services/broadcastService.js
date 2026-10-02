@@ -3,6 +3,7 @@ import axios from "axios";
 import moment from "moment-timezone";
 import {
   formatPhoneNumber,
+  resolveRecipientJid,
   getWhatsAppSettings,
   sendMessageViaFacebookApi,
   sendMessageViaTwilioApi,
@@ -774,7 +775,12 @@ export async function executeBroadcastSchedule(nodeScheduleId, app, appDomainNam
             }
 
             const phoneNumber = contactData.phone;
-            const finalNumber = formatPhoneNumber(phoneNumber);
+            // Baileys: resolve to the SERVER's canonical JID (fixes Mexico +52↔+52
+            // 1, Argentina +54↔+54 9, LID — "sent but not delivered"). Provider
+            // (WABA/Twilio) sends keep the raw format; Meta/Twilio normalise.
+            const finalNumber = (!useWaba && !useTwilio)
+              ? await resolveRecipientJid(sock, phoneNumber)
+              : formatPhoneNumber(phoneNumber);
 
             let success = false;
             let whatsappMessageId = null;
@@ -907,7 +913,11 @@ export async function executeBroadcastSchedule(nodeScheduleId, app, appDomainNam
           }
 
           const phoneNumber = contactData.phone;
-          const finalNumber = formatPhoneNumber(phoneNumber);
+          // Baileys: resolve to the SERVER's canonical JID (fixes Mexico/Argentina/
+          // LID "sent but not delivered"). Provider sends keep the raw format.
+          const finalNumber = (!useWaba && !useTwilio)
+            ? await resolveRecipientJid(sock, phoneNumber)
+            : formatPhoneNumber(phoneNumber);
 
           let success = false;
           let whatsappMessageId = null;

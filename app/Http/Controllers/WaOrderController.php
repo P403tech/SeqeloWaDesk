@@ -101,7 +101,7 @@ class WaOrderController extends Controller
         if ($body === '') return;
 
         try {
-            $msg = \App\Models\Message::create([
+            $msg = \App\Models\Message::create(array_merge([
                 'user_id'      => Auth::id(),
                 // Pin to the ORDER's workspace — NOT the operator's current
                 // workspace. Without this the dispatcher resolved the device from
@@ -113,7 +113,8 @@ class WaOrderController extends Controller
                 'to_number'    => $phone,
                 'body'         => $body,
                 'status'       => 'pending',
-            ]);
+                // ...and send FROM the shop's own number (threads under it too).
+            ], $order->shopSenderFields()));
             $result = $this->dispatcher->send($msg);
             $msg->status         = ($result['ok'] ?? false) ? 'sent' : 'failed';
             $msg->failure_reason = $result['error'] ?? null;
@@ -134,14 +135,14 @@ class WaOrderController extends Controller
         $order->save();
 
         $body = "Hi {$order->customer_name}, here's your payment link for *{$order->total_display}*:\n\n{$data['payment_link']}";
-        $msg = \App\Models\Message::create([
+        $msg = \App\Models\Message::create(array_merge([
             'user_id'      => Auth::id(),
             'workspace_id' => $order->workspace_id,   // route via the ORDER's device, not the operator's current workspace
             'direction'    => 'out',
             'to_number'    => $order->customer_phone,
             'body'         => $body,
             'status'       => 'pending',
-        ]);
+        ], $order->shopSenderFields()));   // FROM the shop's own chosen number
         $result = $this->dispatcher->send($msg);
         $msg->status = ($result['ok'] ?? false) ? 'sent' : 'failed';
         $msg->failure_reason = $result['error'] ?? null;
@@ -212,14 +213,14 @@ class WaOrderController extends Controller
 
         // Deliver via WhatsApp (same path as a manual link).
         $body = "Hi {$order->customer_name}, here's your secure payment link for *{$order->total_display}*:\n\n{$link['url']}";
-        $msg = \App\Models\Message::create([
+        $msg = \App\Models\Message::create(array_merge([
             'user_id'      => Auth::id(),
             'workspace_id' => $order->workspace_id,   // route via the ORDER's device
             'direction'    => 'out',
             'to_number'    => $order->customer_phone,
             'body'         => $body,
             'status'       => 'pending',
-        ]);
+        ], $order->shopSenderFields()));   // FROM the shop's own chosen number
         $result = $this->dispatcher->send($msg);
         $msg->status = ($result['ok'] ?? false) ? 'sent' : 'failed';
         $msg->failure_reason = $result['error'] ?? null;

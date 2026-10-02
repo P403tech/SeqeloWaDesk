@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\WaMerchantGateway;
 use App\Services\Payment\PaymentGatewayManager;
-use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -19,26 +18,15 @@ use Illuminate\Http\Request;
  */
 class MerchantGatewaysController extends Controller
 {
-    public function index(Request $request): View
+    /**
+     * The gateway-KEYS UI moved to Settings → Payment gateways (a single home
+     * shared by store checkout AND appointment booking). Old links/bookmarks to
+     * /store/gateways redirect there. The save/toggle/destroy endpoints below
+     * are unchanged — the Settings form still posts to them.
+     */
+    public function index(Request $request): RedirectResponse
     {
-        $wsId = (int) $request->user()->current_workspace_id;
-        $configured = WaMerchantGateway::forWorkspace($wsId)
-            ->where('storefront_id', 0)->get()->keyBy('slug');
-
-        // Each driver declares its own credential fields (label/type/required/hint)
-        // so we render a proper labelled form per gateway, not a guess-the-key box.
-        $fields = [];
-        foreach (array_keys(PaymentGatewayManager::GATEWAY_META) as $slug) {
-            $cls = PaymentGatewayManager::DRIVER_MAP[$slug] ?? null;
-            $fields[$slug] = ($cls && method_exists($cls, 'credentialFields')) ? $cls::credentialFields() : [];
-        }
-
-        return view('user.store.gateways', [
-            'catalog'     => PaymentGatewayManager::GATEWAY_META,   // slug => ['name','desc']
-            'configured'  => $configured,                          // slug => WaMerchantGateway
-            'fields'      => $fields,                               // slug => [key => ['label','type','required','hint']]
-            'webhookBase' => rtrim((string) config('app.url'), '/') . '/wa/checkout/webhook/',
-        ]);
+        return redirect()->to(route('user.settings') . '?tab=payments');
     }
 
     public function save(Request $request, string $slug): RedirectResponse|JsonResponse

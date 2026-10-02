@@ -57,6 +57,13 @@
         @media print {
             @page { margin: 10mm; size: A4; }
             html, body { background: #fff !important; }
+            /* The admin shell forces min-height:100vh (a FULL A4 page = 297mm),
+               but the printable area after the @page 10mm margins is only ~277mm,
+               so that full-page-tall box spills ~20mm onto a blank 2nd sheet.
+               Collapse it to content height so the invoice prints on ONE page. */
+            html, body, .admin-shell, .admin-shell > * {
+                min-height: 0 !important; height: auto !important;
+            }
             body * { visibility: hidden !important; }
             .invoice-doc, .invoice-doc * { visibility: visible !important; }
             .invoice-doc {

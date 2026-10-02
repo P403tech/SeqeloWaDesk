@@ -20,6 +20,18 @@ final class FacebookWebhookSignature
             'waba_app_secret' => (string) SystemSetting::get('waba_app_secret', ''),
         ];
 
+        // Workspaces that connected with their OWN Meta app sign webhooks with
+        // THEIR app secret — include those so their inbound DMs/comments verify
+        // (else the event is rejected and automation never fires). UNGATED (mirrors
+        // WhatsApp): ALWAYS include every stored workspace secret — required for
+        // own-app clients to get inbound while the platform app is in App Review.
+        try {
+            foreach (\App\Models\Workspace::query()->whereNotNull('meta_app_secret')->get() as $ws) {
+                $s = trim((string) $ws->meta_app_secret);
+                if ($s !== '') $configured['ws_' . $ws->id] = $s;
+            }
+        } catch (\Throwable $e) { /* never break signature verification */ }
+
         $out = [];
         $seen = [];
         foreach ($configured as $label => $secret) {

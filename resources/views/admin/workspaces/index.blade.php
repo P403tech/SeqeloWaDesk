@@ -24,6 +24,11 @@
                 </p>
             </div>
             <div class="flex items-center gap-2 shrink-0 pb-1">
+                <a href="{{ route('admin.workspaces.trash') }}"
+                    class="px-4 py-2 rounded-full border border-paper-200 bg-white text-[12px] font-medium hover:bg-paper-50 flex items-center gap-2">
+                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6.5 4V3h3v1M4.5 4l.5 9h6l.5-9"/></svg>
+                    {{ __('Trash') }}
+                </a>
                 <a href="{{ route('admin.workspaces.create') }}"
                     class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2">

@@ -43,9 +43,21 @@ class AccountController extends Controller
             ->orderByDesc('created_at')
             ->limit(50)
             ->get();
-        $totalEarnedFromReferrals = \App\Models\Referral::query()
+        // TWO totals, because the Earned card shows two different units and
+        // used to derive both from one column — dividing the same figure by
+        // 100 for money on one line and by credits-per-message on the next.
+        //   ...Money   → reward_minor    (what was promised, in money)
+        //   ...Credits → credits_awarded (what landed in the wallet)
+        // reward_minor is backfilled from credits_awarded for pre-fix rows,
+        // so historical money totals read exactly as they always did.
+        $totalEarnedMinor = (int) \App\Models\Referral::query()
+            ->forReferrer($user->id)
+            ->sum(\Illuminate\Support\Facades\DB::raw('COALESCE(reward_minor, credits_awarded)'));
+        $totalEarnedCredits = (int) \App\Models\Referral::query()
             ->forReferrer($user->id)
             ->sum('credits_awarded');
+        // Kept for any view/partial still reading the old name.
+        $totalEarnedFromReferrals = $totalEarnedMinor;
 
         $creditsPerMessage = max(1, (int) \App\Models\SystemSetting::get('credits_per_message', 1));
         $signupReward      = max(0, (int) \App\Models\SystemSetting::get('referral_signup_credits', 100));
@@ -88,17 +100,30 @@ class AccountController extends Controller
         // to the current workspace currency, so the lifetime number is
         // meaningful even when orders span multiple currencies (e.g. user
         // signed up paying USD, later switched workspace currency to INR).
-        $targetCode = optional($user->currentWorkspace)->currency
+        // Lifetime spend. When every paid order shares ONE currency (the common
+        // case) sum it RAW in that currency so the total, the per-order rows and
+        // the invoice all agree — the reported "order history S$52.65 vs invoice
+        // US$39" mismatch came from converting HERE to the workspace currency.
+        // Only when orders genuinely span multiple currencies do we convert to a
+        // single display currency so the sum is still meaningful.
+        $wsCurrency = optional($user->currentWorkspace)->currency
             ?: (string) \App\Models\SystemSetting::get('default_currency', 'USD');
-        $ordersLifetimeAmount = \App\Models\Order::query()
+        $paidOrders = \App\Models\Order::query()
             ->where('user_id', $user->id)
             ->where('status', 'paid')
-            ->get(['total_amount', 'currency'])
-            ->sum(fn ($o) => \App\Support\FormatSettings::convert(
+            ->get(['total_amount', 'currency']);
+        $paidCurrencies = $paidOrders->pluck('currency')->filter()->unique();
+        if ($paidCurrencies->count() <= 1) {
+            $ordersLifetimeCurrency = (string) ($paidCurrencies->first() ?: $wsCurrency);
+            $ordersLifetimeAmount   = (float) $paidOrders->sum('total_amount');
+        } else {
+            $ordersLifetimeCurrency = $wsCurrency;
+            $ordersLifetimeAmount   = (float) $paidOrders->sum(fn ($o) => \App\Support\FormatSettings::convert(
                 (float) $o->total_amount,
-                (string) ($o->currency ?: $targetCode),
-                $targetCode,
+                (string) ($o->currency ?: $wsCurrency),
+                $wsCurrency,
             ));
+        }
 
         // Support tab — full ticket history for the signed-in user.
         // Same rows the /support page shows, just without the limit so
@@ -120,6 +145,8 @@ class AccountController extends Controller
             'totalEarnedFromReferrals' => $totalEarnedFromReferrals,
             'creditsPerMessage'        => $creditsPerMessage,
             'signupReward'             => $signupReward,
+            'totalEarnedMinor'         => $totalEarnedMinor,
+            'totalEarnedCredits'       => $totalEarnedCredits,
             'creditsPerCurrencyMinor'  => $creditsPerCurrencyMinor,
             'referralUrl'              => $referralUrl,
             'creditPackages'           => $creditPackages,
@@ -129,6 +156,7 @@ class AccountController extends Controller
             'hasActivePlan'            => $hasActivePlan,
             'orders'                   => $orders,
             'ordersLifetimeAmount'     => (float) $ordersLifetimeAmount,
+            'ordersLifetimeCurrency'   => (string) $ordersLifetimeCurrency,
             'supportTickets'           => $supportTickets,
             'supportCounts'            => $supportCounts,
         ]);
@@ -526,18 +554,29 @@ class AccountController extends Controller
         }
         $contents = file_get_contents($path);
 
-        // Rewrite the WADESK_BASE constant in Code.gs so downloads
-        // come pre-configured for THIS WaDesk deployment. The user
-        // won't have to hand-edit the URL after uploading.
+        $origin = $request->getSchemeAndHttpHost();
+        $brand  = function_exists('brand_name') ? trim((string) brand_name()) : '';
+        if ($brand === '') $brand = 'WaDesk';
+
+        // 1) Point the deployment URL at THIS install. The base is stored in a
+        //    const whose name may be WASNAP_BASE (legacy source) or WADESK_BASE —
+        //    match either and keep the name, only swap the value. Also rewrite any
+        //    hardcoded default domain that appears in strings/links.
         if ($file === 'Code.gs') {
-            $origin = $request->getSchemeAndHttpHost();
             $contents = preg_replace(
-                "/const\s+WADESK_BASE\s*=\s*'[^']*';/",
-                "const WADESK_BASE = '" . addslashes($origin) . "';",
+                "/const\s+(WASNAP_BASE|WADESK_BASE)\s*=\s*'[^']*';/",
+                "const $1 = '" . addslashes($origin) . "';",
                 $contents,
                 1
             );
         }
+        $contents = str_replace(['https://wasnap.app', 'http://wasnap.app'], $origin, $contents);
+
+        // 2) White-label the VISIBLE brand name across every served file. Done
+        //    case-SENSITIVELY so the code identifiers (WASNAP_BASE, the
+        //    `wasnap_base` config key, the wsn_live_ token prefix) are untouched —
+        //    only the human-readable "Wasnap"/"WaDesk" text becomes the brand.
+        $contents = str_replace(['Wasnap', 'WaDesk'], $brand, $contents);
 
         // Plain-text MIME so the browser doesn't try to render HTML.
         $mime = match (pathinfo($file, PATHINFO_EXTENSION)) {

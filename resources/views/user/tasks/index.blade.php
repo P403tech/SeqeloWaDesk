@@ -46,7 +46,7 @@
                             <div class="flex items-start gap-3 px-5 py-3">
                                 <form method="POST" action="{{ route('user.tasks.complete', $t->id) }}" class="shrink-0 mt-0.5">
                                     @csrf
-                                    <button type="submit" class="w-4.5 h-4.5 w-[18px] h-[18px] rounded-md border border-paper-300 hover:border-wa-deep grid place-items-center" aria-label="Complete"></button>
+                                    <button type="submit" class="w-4.5 h-4.5 w-[18px] h-[18px] rounded-md border border-paper-300 hover:border-wa-deep grid place-items-center" aria-label="{{ __('Complete') }}"></button>
                                 </form>
                                 <div class="min-w-0 flex-1">
                                     <div class="text-[13px] text-ink-900 leading-snug">{{ $t->title }}</div>
@@ -59,7 +59,7 @@
                                 </div>
                                 <form method="POST" action="{{ route('user.tasks.destroy', $t->id) }}" class="shrink-0">
                                     @csrf @method('DELETE')
-                                    <button type="submit" class="w-6 h-6 rounded-md grid place-items-center text-ink-400 hover:text-accent-coral hover:bg-accent-coral/10" aria-label="Delete">
+                                    <button type="submit" class="w-6 h-6 rounded-md grid place-items-center text-ink-400 hover:text-accent-coral hover:bg-accent-coral/10" aria-label="{{ __('Delete') }}">
                                         <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 8h8"/></svg>
                                     </button>
                                 </form>
@@ -93,7 +93,7 @@
             @csrf
             <div class="flex items-center justify-between">
                 <div class="text-[15px] font-serif">{{ __('New task') }}</div>
-                <button type="button" id="task-close" class="w-7 h-7 grid place-items-center rounded-lg hover:bg-paper-100 text-ink-500" aria-label="Close">
+                <button type="button" id="task-close" class="w-7 h-7 grid place-items-center rounded-lg hover:bg-paper-100 text-ink-500" aria-label="{{ __('Close') }}">
                     <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4l8 8M12 4l-8 8"/></svg>
                 </button>
             </div>

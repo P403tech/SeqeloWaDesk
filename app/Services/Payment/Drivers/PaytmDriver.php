@@ -18,8 +18,13 @@ use Illuminate\Support\Facades\Http;
  */
 class PaytmDriver extends AbstractGatewayDriver
 {
-    private const STAGING_BASE = 'https://securegw-stage.paytm.in';
-    private const PROD_BASE    = 'https://securegw.paytm.in';
+    // Paytm migrated off *.paytm.in to *.paytmpayments.com (the old
+    // business.paytm.com docs URL now 301s to paytmpayments.com, and the old
+    // secure hosts are being retired). Use the new hosts for both prod + staging.
+    //   OLD: https://securegw.paytm.in / https://securegw-stage.paytm.in
+    //   NEW: https://secure.paytmpayments.com / https://securestage.paytmpayments.com
+    private const STAGING_BASE = 'https://securestage.paytmpayments.com';
+    private const PROD_BASE    = 'https://secure.paytmpayments.com';
 
     public static function credentialFields(): array
     {
@@ -39,13 +44,21 @@ class PaytmDriver extends AbstractGatewayDriver
             return PaymentResult::failed('paytm_credentials_missing');
         }
 
-        $orderId = 'PAYTM_' . $order->order_number . '_' . time();
+        // Paytm orderId must be alphanumeric + underscore only. order_number can
+        // carry a hyphen (e.g. "BK-XXXX"); strip anything else so the id stays
+        // compliant and matches the bytes we sign.
+        $cleanOrderNumber = preg_replace('/[^A-Za-z0-9_]/', '', (string) $order->order_number);
+        $orderId = 'PAYTM_' . $cleanOrderNumber . '_' . time();
+
+        // Field order MATCHES Paytm's official cURL sample exactly (requestType,
+        // mid, websiteName, orderId, txnAmount, userInfo, callbackUrl). Paytm
+        // re-serialises the body in receive order before recomputing the hash —
+        // a different order signs different bytes → "checksum invalid".
         $body = [
             'requestType' => 'Payment',
             'mid'         => $merchantId,
             'websiteName' => $website,
             'orderId'     => $orderId,
-            'callbackUrl' => $callbackUrl,
             'txnAmount'   => [
                 'value'    => number_format((float) $order->amount, 2, '.', ''),
                 'currency' => strtoupper($order->currency ?? 'INR'),
@@ -53,23 +66,37 @@ class PaytmDriver extends AbstractGatewayDriver
             'userInfo' => [
                 'custId' => (string) ($order->user_id ?? 'GUEST'),
             ],
+            'callbackUrl' => $callbackUrl,
         ];
 
-        $bodyJson = json_encode($body);
+        // CRITICAL: JSON_UNESCAPED_SLASHES on BOTH the signed body and the wire
+        // body. Default json_encode escapes slashes (https:\/\/…); Paytm's server
+        // reconstructs the body with UNescaped slashes before recomputing the
+        // hash, so escaped bytes → checksum never matches → "501 System Error".
+        $bodyJson = json_encode($body, JSON_UNESCAPED_SLASHES);
         $checksum = $this->generateChecksum($bodyJson, $merchantKey);
 
         $envelope = ['body' => $body, 'head' => ['signature' => $checksum]];
+        $wireBody = json_encode($envelope, JSON_UNESCAPED_SLASHES);
         $url = $this->baseUrl() . "/theia/api/v1/initiateTransaction?mid={$merchantId}&orderId={$orderId}";
 
         try {
+            // Send the EXACT pre-encoded bytes we signed — withBody(), NOT asJson()
+            // which would re-encode with escaped slashes and break the checksum.
             $r = Http::timeout(self::HTTP_TIMEOUT_SECONDS)
-                ->acceptJson()->asJson()
-                ->post($url, $envelope);
+                ->acceptJson()
+                ->withBody((string) $wireBody, 'application/json')
+                ->post($url);
             $json = $r->json() ?: [];
-            $resultCode = $json['body']['resultInfo']['resultCode'] ?? '';
-            $txnToken   = $json['body']['txnToken'] ?? null;
+            $resultStatus = $json['body']['resultInfo']['resultStatus'] ?? '';
+            $resultCode   = $json['body']['resultInfo']['resultCode'] ?? '';
+            $txnToken     = $json['body']['txnToken'] ?? null;
 
-            if ($resultCode === 'S' && $txnToken) {
+            // Success indicator per Paytm docs: resultStatus = 'S' (resultCode is
+            // '0000'/'0002', NOT 'S'). The old check `$resultCode === 'S'` treated
+            // every successful response as a failure and returned resultMsg
+            // ("Success") as the error — the "Payment failed: paytm: Success" bug.
+            if (($resultStatus === 'S' || in_array($resultCode, ['0000', '0002'], true)) && $txnToken) {
                 $redirectUrl = $this->baseUrl() . "/theia/api/v1/showPaymentPage?mid={$merchantId}&orderId={$orderId}&txnToken={$txnToken}";
                 return PaymentResult::redirect($redirectUrl, $orderId, $json);
             }
@@ -123,12 +150,16 @@ class PaytmDriver extends AbstractGatewayDriver
         $merchantKey = (string) $this->cred('merchant_key');
 
         $body     = ['mid' => $merchantId, 'orderId' => $orderId];
-        $checksum = $this->generateChecksum(json_encode($body), $merchantKey);
+        // Same JSON_UNESCAPED_SLASHES + raw-body rule as initiate().
+        $bodyJson = json_encode($body, JSON_UNESCAPED_SLASHES);
+        $checksum = $this->generateChecksum((string) $bodyJson, $merchantKey);
         $envelope = ['body' => $body, 'head' => ['signature' => $checksum]];
+        $wireBody = json_encode($envelope, JSON_UNESCAPED_SLASHES);
 
         try {
-            $r = Http::timeout(self::HTTP_TIMEOUT_SECONDS)->acceptJson()->asJson()
-                ->post($this->baseUrl() . '/v3/order/status', $envelope);
+            $r = Http::timeout(self::HTTP_TIMEOUT_SECONDS)->acceptJson()
+                ->withBody((string) $wireBody, 'application/json')
+                ->post($this->baseUrl() . '/v3/order/status');
             $json = $r->json() ?: [];
             $resultCode   = $json['body']['resultInfo']['resultCode'] ?? '';
             $resultStatus = $json['body']['resultInfo']['resultStatus'] ?? '';
@@ -160,6 +191,10 @@ class PaytmDriver extends AbstractGatewayDriver
      */
     private function generateChecksum(string $body, string $key): string
     {
+        // Paytm's official SDK html_entity_decode()s the key before AES (a no-op
+        // for plain keys; the real fix for keys that picked up HTML entities on
+        // the storage path). Match it in both directions.
+        $key        = html_entity_decode($key, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $salt       = substr(bin2hex(random_bytes(4)), 0, 4);
         $hash       = hash('sha256', $body . '|' . $salt);
         $hashString = $hash . $salt;
@@ -171,6 +206,7 @@ class PaytmDriver extends AbstractGatewayDriver
 
     private function verifyChecksum(array $params, string $key, string $checksum): bool
     {
+        $key = html_entity_decode($key, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $iv = '@@@@&&&&####$$$$';
         $decrypted = openssl_decrypt($checksum, 'AES-128-CBC', $key, 0, $iv);
         if ($decrypted === false || strlen($decrypted) < 68) return false;

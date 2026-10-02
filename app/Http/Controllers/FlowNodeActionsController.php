@@ -26,6 +26,219 @@ class FlowNodeActionsController extends Controller
 
     public function __construct(private AssignmentService $assignment) {}
 
+    /**
+     * POST /api/flow-node/complete
+     *
+     * Marks a flow RUN finished so /flows/analytics shows a real completion
+     * rate + average duration. The Node runtime fires this from endFlowSession
+     * the moment a flow reaches a NATURAL end (End node, linear tail, agent
+     * hand-off) — a loop-guard break, a mid-flow send failure, or an operator
+     * AI-takeover pass a non-completed outcome and never call this, so those
+     * runs are correctly left un-completed.
+     *
+     * Keyed by flow_subscriber_id: the enroll path (tag / group / order / CRM /
+     * inbound / keyword-webhook) is the ONLY launcher that creates a
+     * flow_subscribers row, so that id uniquely names the run to close.
+     * Campaign + mobile-chat flow starts carry no id and no row, so they're a
+     * clean no-op. A run already failed is left alone (a failure is not a
+     * completion) and completing twice keeps the FIRST completion time.
+     */
+    public function complete(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+        $data = $request->validate([
+            'flow_subscriber_id' => 'required|integer',
+        ]);
+
+        $sub = \App\Models\FlowSubscriber::find((int) $data['flow_subscriber_id']);
+        if (!$sub) {
+            // No subscriber row (campaign / mobile-chat start) — nothing tracked
+            // to complete. Not an error.
+            return response()->json(['ok' => true, 'updated' => false, 'reason' => 'no_subscriber_row']);
+        }
+
+        // Never clobber a failure, never re-stamp an already-completed run.
+        if (in_array($sub->status, ['failed', 'completed'], true)) {
+            return response()->json(['ok' => true, 'updated' => false, 'status' => $sub->status]);
+        }
+
+        $sub->update(['status' => 'completed', 'completed_at' => now()]);
+
+        return response()->json(['ok' => true, 'updated' => true, 'flow_subscriber_id' => $sub->id]);
+    }
+
+    /**
+     * POST /api/flow-node/position
+     *
+     * Records where a run is parked (drop-off funnel — analytics Phase 2). Node
+     * fires this each time a flow reaches a WAIT node (Question / Buttons / List
+     * / Poll / booking / shop), so /flows/analytics can show which question is
+     * losing customers. Enroll-path runs only (they alone carry a subscriber id
+     * + row); a finished run's position is frozen — never moved backwards over a
+     * completed/failed status.
+     */
+    public function position(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+        $data = $request->validate([
+            'flow_subscriber_id' => 'required|integer',
+            'node_id'            => 'required|string|max:64',
+            'node_label'         => 'nullable|string',
+        ]);
+
+        $sub = \App\Models\FlowSubscriber::find((int) $data['flow_subscriber_id']);
+        if (!$sub) {
+            return response()->json(['ok' => true, 'updated' => false, 'reason' => 'no_subscriber_row']);
+        }
+        if (in_array($sub->status, ['failed', 'completed'], true)) {
+            return response()->json(['ok' => true, 'updated' => false, 'status' => $sub->status]);
+        }
+
+        $sub->update([
+            'current_node_id'    => (string) $data['node_id'],
+            'current_node_label' => mb_substr(trim((string) ($data['node_label'] ?? '')), 0, 191) ?: null,
+            'last_advanced_at'   => now(),
+        ]);
+
+        return response()->json(['ok' => true, 'updated' => true, 'node_id' => $sub->current_node_id]);
+    }
+
+    /**
+     * POST /api/flow-node/delay-park
+     *
+     * Durable long delays (Phase 3). Node calls this when a flow hits a LONG
+     * duration-delay node ("wait N hours/days") instead of holding an in-process
+     * timer that a restart would drop. We store a pending flow_delay_resumes row
+     * with resume_at = now + N; the heartbeat sweep (FlowDelayResumeSweeper)
+     * later POSTs it back to Node to continue. Short delays never reach here —
+     * they keep the original in-process await.
+     */
+    public function delayPark(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+        $data = $request->validate([
+            'flow_id'            => 'required|integer',
+            'flow_subscriber_id' => 'nullable|integer',
+            'session_key'        => 'required|string|max:191',
+            'device_phone'       => 'required|string|max:32',
+            'customer_phone'     => 'required|string|max:32',
+            'node_id'            => 'required|string|max:64',
+            'provider'           => 'nullable|string|max:24',
+            'resume_seconds'     => 'required|integer|min:1|max:315360000',
+            'variables'          => 'nullable|array',
+        ]);
+
+        $row = app(\App\Services\Flow\FlowDelayResumeService::class)->park($data);
+
+        // Entering a scheduled delay means the run has ANSWERED everything up to
+        // here — it is NOT stalled at a question. Clear its drop-off position so
+        // the "where customers stop replying" funnel doesn't count an in-delay
+        // run as abandoned at the last question it already answered. It re-stamps
+        // at the next real wait node when the delay resumes.
+        if (!empty($data['flow_subscriber_id'])) {
+            \App\Models\FlowSubscriber::whereKey((int) $data['flow_subscriber_id'])
+                ->whereIn('status', ['active', 'paused'])
+                ->update(['current_node_id' => null, 'current_node_label' => null, 'last_advanced_at' => now()]);
+        }
+
+        return response()->json(['ok' => true, 'id' => $row->id, 'resume_at' => $row->resume_at?->toIso8601String()]);
+    }
+
+    /**
+     * POST /api/flow-node/park-session
+     *
+     * Durable SESSIONS. Node calls this after an inbound settles: upsert a
+     * snapshot of a session parked waiting for the customer's reply (so a
+     * restart can rehydrate it), or clear it once the run advances past the park
+     * or ends. One row per session_key. `clear:true` deletes it.
+     */
+    public function parkSession(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+
+        $sessionKey = (string) $request->input('session_key', '');
+        if ($sessionKey === '') {
+            return response()->json(['ok' => false, 'error' => 'session_key required'], 422);
+        }
+
+        if ($request->boolean('clear')) {
+            \App\Models\FlowParkedSession::where('session_key', $sessionKey)->delete();
+            return response()->json(['ok' => true, 'cleared' => true]);
+        }
+
+        $data = $request->validate([
+            'session_key'        => 'required|string|max:191',
+            'flow_id'            => 'nullable|integer',
+            'flow_subscriber_id' => 'nullable|integer',
+            'device_phone'       => 'required|string|max:32',
+            'customer_phone'     => 'required|string|max:32',
+            'node_id'            => 'required|string|max:64',
+            'waiting'            => 'required|array',
+            'variables'          => 'nullable|array',
+            'provider'           => 'nullable|string|max:24',
+        ]);
+
+        $row = \App\Models\FlowParkedSession::updateOrCreate(
+            ['session_key' => $sessionKey],
+            [
+                'flow_id'            => $data['flow_id'] ?? null,
+                'flow_subscriber_id' => $data['flow_subscriber_id'] ?? null,
+                'device_phone'       => $data['device_phone'],
+                'customer_phone'     => $data['customer_phone'],
+                'node_id'            => $data['node_id'],
+                'waiting'            => $data['waiting'],
+                'variables'          => $data['variables'] ?? [],
+                'provider'           => $data['provider'] ?? null,
+            ],
+        );
+
+        return response()->json(['ok' => true, 'id' => $row->id]);
+    }
+
+    /**
+     * GET /api/flow-node/park-session?session_key=...
+     *
+     * Node calls this when it has NO in-memory session for an inbound (e.g. after
+     * a restart) — returns the parked snapshot so the reply can rehydrate the
+     * flow and continue.
+     */
+    public function getParkSession(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+        $sessionKey = (string) $request->query('session_key', '');
+        if ($sessionKey === '') {
+            return response()->json(['ok' => false, 'error' => 'session_key required'], 422);
+        }
+
+        $row = \App\Models\FlowParkedSession::where('session_key', $sessionKey)->first();
+        if (!$row) {
+            return response()->json(['ok' => true, 'found' => false]);
+        }
+
+        return response()->json([
+            'ok'                 => true,
+            'found'              => true,
+            'flow_id'            => $row->flow_id,
+            'flow_subscriber_id' => $row->flow_subscriber_id,
+            'device_phone'       => $row->device_phone,
+            'customer_phone'     => $row->customer_phone,
+            'node_id'            => $row->node_id,
+            'waiting'            => $row->waiting,
+            'variables'          => $row->variables ?? [],
+            'provider'           => $row->provider,
+        ]);
+    }
+
     /** POST /api/flow-node/tag */
     public function tag(Request $request): JsonResponse
     {
@@ -35,55 +248,420 @@ class FlowNodeActionsController extends Controller
         $data = $request->validate([
             'workspace_id'   => 'required|integer',
             'customer_phone' => 'required|string|max:32',
-            'action'         => 'required|string|in:add,remove',
+            // add/remove = conversation TAG; add_group/remove_group = CONTACT
+            // group membership (audience segmentation).
+            'action'         => 'required|string|in:add,remove,add_group,remove_group',
             'tag_id'         => 'nullable|integer',
             'tag_name'       => 'nullable|string|max:64',
+            'group_id'       => 'nullable|integer',
+            'group_name'     => 'nullable|string|max:191',
         ]);
 
-        $conv = $this->findConversation((int) $data['workspace_id'], (string) $data['customer_phone']);
-        if (!$conv) {
-            return response()->json(['ok' => false, 'error' => 'conversation_not_found'], 404);
+        $wsId  = (int) $data['workspace_id'];
+        $phone = (string) $data['customer_phone'];
+
+        // Trace id so every line of ONE node run can be grepped together.
+        $trace = substr(md5($wsId . $phone . microtime(true)), 0, 6);
+        Log::info("[flow-node/tag][$trace] IN ws=$wsId phone=$phone action={$data['action']}"
+            . ' tag_id=' . ($data['tag_id'] ?? '-') . ' tag_name=' . ($data['tag_name'] ?? '-')
+            . ' canon=' . \App\Models\Contact::canonicalizePhone(null, $phone));
+
+        // A conversation is helpful (so the tag also shows in the inbox) but NOT
+        // required. Lead-nurture flows tag people who have never messaged —
+        // form / webhook / Justdial leads with no conversation yet — so the node
+        // is named "Tag CONTACT" and must act on the CONTACT. Previously it hard
+        // 404'd on `conversation_not_found` and the tag/segment never landed.
+        $conv    = $this->findConversation($wsId, $phone);
+        $contact = $this->resolveContactForNode($conv, $wsId, $phone);
+
+        Log::info("[flow-node/tag][$trace] resolved"
+            . ' conv=' . ($conv ? ('#' . $conv->id . ' contact_id=' . ($conv->contact_id ?? 'null')) : 'none')
+            . ' contact=' . ($contact ? ('#' . $contact->id . ' "' . mb_substr((string) $contact->name, 0, 24) . '"') : 'NULL'));
+
+        // Group membership acts on the CONTACT's contact_group array.
+        if (in_array($data['action'], ['add_group', 'remove_group'], true)) {
+            if (!$contact) {
+                Log::warning("[flow-node/tag][$trace] ABORT group action — no contact");
+                return response()->json(['ok' => false, 'error' => 'contact_not_found'], 404);
+            }
+            return $this->groupMembership($wsId, $contact, $data);
+        }
+
+        if (!$contact && !$conv) {
+            Log::warning("[flow-node/tag][$trace] ABORT — neither contact nor conversation for phone=$phone");
+            return response()->json(['ok' => false, 'error' => 'contact_not_found'], 404);
         }
 
         // Resolve the tag by id first, then by name (create-on-the-fly
         // so flow authors don't have to pre-seed every tag they'll use).
         $tag = null;
         if (!empty($data['tag_id'])) {
-            $tag = Tag::where('workspace_id', $conv->workspace_id)->find($data['tag_id']);
+            $tag = Tag::where('workspace_id', $wsId)->find($data['tag_id']);
         }
         if (!$tag && !empty($data['tag_name'])) {
             $name = trim($data['tag_name']);
             $tag = Tag::firstOrCreate(
-                ['workspace_id' => $conv->workspace_id, 'slug' => Str::slug($name)],
+                ['workspace_id' => $wsId, 'slug' => Str::slug($name)],
                 ['name' => $name, 'color' => '#075E54'],
             );
         }
         if (!$tag) {
+            Log::warning("[flow-node/tag][$trace] ABORT — tag_unresolved (id={$data['tag_id']} name={$data['tag_name']})");
             return response()->json(['ok' => false, 'error' => 'tag_unresolved'], 422);
         }
+        Log::info("[flow-node/tag][$trace] tag=#{$tag->id} \"{$tag->name}\"");
 
         try {
             if ($data['action'] === 'add') {
-                $conv->tags()->syncWithoutDetaching([$tag->id => ['added_by' => null]]);
-                ConversationEvent::record($conv->id, $conv->workspace_id, null, 'tag_added', [
-                    'tag_id'   => $tag->id,
-                    'tag_name' => $tag->name,
-                    'source'   => 'flow',
-                ], 'flow');
+                // Contact tag (durable, segmentation) — the point of "Tag contact".
+                if ($contact) {
+                    $before = $contact->tags()->count();
+                    $contact->tags()->syncWithoutDetaching([$tag->id => ['added_by' => null]]);
+                    $after = $contact->tags()->count();
+                    Log::info("[flow-node/tag][$trace] ADD contact=#{$contact->id} tags {$before}->{$after}");
+                    // Parity with a manual tag: fire tag_added flow enrollment.
+                    try { app(\App\Services\Flow\FlowEnrollmentService::class)->onTagAdded($contact, (int) $tag->id); }
+                    catch (\Throwable $e) { Log::warning("[flow-node/tag][$trace] onTagAdded " . $e->getMessage()); }
+                }
+                // Conversation tag too, when a chat exists (shows in the inbox).
+                if ($conv) {
+                    $conv->tags()->syncWithoutDetaching([$tag->id => ['added_by' => null]]);
+                    ConversationEvent::record($conv->id, $conv->workspace_id, null, 'tag_added', [
+                        'tag_id' => $tag->id, 'tag_name' => $tag->name, 'source' => 'flow',
+                    ], 'flow');
+                }
             } else {
-                $conv->tags()->detach($tag->id);
-                ConversationEvent::record($conv->id, $conv->workspace_id, null, 'tag_removed', [
-                    'tag_id'   => $tag->id,
-                    'tag_name' => $tag->name,
-                    'source'   => 'flow',
-                ], 'flow');
+                if ($contact) {
+                    $before = $contact->tags()->count();
+                    $contact->tags()->detach($tag->id);
+                    $after = $contact->tags()->count();
+                    Log::info("[flow-node/tag][$trace] REMOVE contact=#{$contact->id} tags {$before}->{$after}");
+                }
+                if ($conv) {
+                    $conv->tags()->detach($tag->id);
+                    ConversationEvent::record($conv->id, $conv->workspace_id, null, 'tag_removed', [
+                        'tag_id' => $tag->id, 'tag_name' => $tag->name, 'source' => 'flow',
+                    ], 'flow');
+                }
             }
         } catch (\Throwable $e) {
-            Log::warning('[flow-node/tag] ' . $e->getMessage());
+            Log::warning("[flow-node/tag][$trace] FAILED " . $e->getMessage());
             return response()->json(['ok' => false, 'error' => 'tag_failed', 'message' => $e->getMessage()], 500);
         }
 
+        Log::info("[flow-node/tag][$trace] OK tag=#{$tag->id} action={$data['action']}");
         return response()->json(['ok' => true, 'tag_id' => $tag->id, 'action' => $data['action']]);
+    }
+
+    /**
+     * Resolve the contact a flow "Tag contact" node acts on: the conversation's
+     * contact when there is a chat, else the workspace contact matching the
+     * phone, else create the lead (the flow is actively engaging this number, so
+     * a tag/segment on it should persist even with no prior conversation).
+     */
+    private function resolveContactForNode(?\App\Models\Conversation $conv, int $wsId, string $phone): ?\App\Models\Contact
+    {
+        // 1) Conversation already linked → the single source of truth, BUT only
+        //    when that link still resolves to a live contact. A DANGLING
+        //    contact_id (the contact was merged/deleted, so find() is null) must
+        //    NOT strand the node — it falls through, re-resolves by phone, and
+        //    relinks the thread in step 4 so the stale id is overwritten.
+        if ($conv && $conv->contact_id) {
+            $c = \App\Models\Contact::find($conv->contact_id);
+            if ($c) return $c;
+        }
+
+        // 2) Match an existing contact by phone (exact canonical, then a
+        //    trailing-digits fallback — see resolveContactIdByPhone).
+        $cid     = $this->resolveContactIdByPhone($wsId, $phone);
+        $contact = $cid ? \App\Models\Contact::find($cid) : null;
+
+        // 3) Still none → create the lead ONCE.
+        if (!$contact) {
+            $contact = \App\Models\Contact::rememberPhone($wsId, null, $phone, null, null);
+        }
+
+        // 4) Backfill the conversation link. Without this a WABA thread whose
+        //    contact_id was never set (the common gap) makes EVERY tag node
+        //    fall through to step 2/3 — and when the stored number is in a
+        //    different dialing shape (MX +52 1, trunk-0, cc split) the match
+        //    missed and rememberPhone spawned a DUPLICATE contact that got the
+        //    tag while the real inbox contact stayed untouched. Linking here
+        //    means the tag shows in the inbox AND every later node in this run
+        //    reuses the same contact (idempotent on re-trigger).
+        //    Relink whenever the thread points somewhere other than the contact
+        //    we resolved — covers a NULL link AND a dangling one (stale id 1499
+        //    → live contact), so the thread self-heals to a real contact.
+        if ($contact && $conv && (int) $conv->contact_id !== (int) $contact->id) {
+            try { $conv->contact_id = $contact->id; $conv->save(); }
+            catch (\Throwable $e) { Log::warning('[flow-node/tag] conv link ' . $e->getMessage()); }
+        }
+
+        return $contact;
+    }
+
+    /**
+     * Add / remove the contact from an AUDIENCE GROUP (the flow "Tag contact"
+     * node's group actions). Groups live on `contacts.contact_group` — an
+     * encrypted array of ContactGroup ids — so we mutate that array and save;
+     * the Contact model's saved-hook fires FlowEnrollmentService/DripRunner
+     * onGroupJoin for any NEWLY added group, exactly like a manual add.
+     */
+    private function groupMembership(int $wsId, \App\Models\Contact $contact, array $data): JsonResponse
+    {
+        // Resolve the group by id first, then by name (create-on-add so flow
+        // authors don't have to pre-seed a group — same UX as the tag path).
+        $group = null;
+        if (!empty($data['group_id'])) {
+            $group = \App\Models\ContactGroup::where('workspace_id', $wsId)->find($data['group_id']);
+        }
+        if (!$group && !empty($data['group_name'])) {
+            $name = trim((string) $data['group_name']);
+            // user_group is ENCRYPTED (no SQL match) — compare in PHP.
+            $group = \App\Models\ContactGroup::where('workspace_id', $wsId)->get()
+                ->first(fn ($g) => mb_strtolower(trim((string) $g->user_group)) === mb_strtolower($name));
+            if (!$group && $data['action'] === 'add_group' && $name !== '') {
+                $group = \App\Models\ContactGroup::create([
+                    'user_id'      => $contact->user_id,
+                    'workspace_id' => $wsId,
+                    'user_group'   => $name,
+                ]);
+            }
+        }
+        if (!$group) {
+            return response()->json(['ok' => false, 'error' => 'group_unresolved'], 422);
+        }
+
+        try {
+            $ids = is_array($contact->contact_group)
+                ? array_values(array_unique(array_map('intval', $contact->contact_group)))
+                : [];
+            $gid = (int) $group->id;
+
+            if ($data['action'] === 'add_group') {
+                if (!in_array($gid, $ids, true)) { $ids[] = $gid; }
+            } else {
+                $ids = array_values(array_filter($ids, fn ($x) => (int) $x !== $gid));
+            }
+
+            $contact->contact_group = $ids;
+            $contact->save(); // saved-hook fires onGroupJoin for new adds
+        } catch (\Throwable $e) {
+            Log::warning('[flow-node/tag] group ' . $e->getMessage());
+            return response()->json(['ok' => false, 'error' => 'group_failed', 'message' => $e->getMessage()], 500);
+        }
+
+        return response()->json(['ok' => true, 'group_id' => (int) $group->id, 'action' => $data['action']]);
+    }
+
+    /**
+     * POST /api/flow-node/task
+     *
+     * The "Create task" flow node. Turns a conversation into follow-up work an
+     * agent actually sees, instead of the flow ending with a note nobody reads.
+     * Pairs with the `task_due` trigger: this creates the follow-up, that one
+     * fires when its date arrives.
+     */
+    public function task(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+
+        $wsId = (int) $request->input('workspace_id');
+        $data = $request->validate([
+            'workspace_id'   => 'required|integer',
+            'customer_phone' => 'nullable|string|max:32',
+            'title'          => 'required|string|max:255',
+            'notes'          => 'nullable|string|max:4000',
+            // Flow JSON is workspace-authored AND importable, so a bare integer
+            // is not a control: an imported flow could otherwise park work on a
+            // member of ANOTHER workspace. Same guard assign() already applies.
+            'assignee_id'    => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $wsId)],
+            'priority'       => 'nullable|string|in:low,medium,high',
+            'due_in_seconds' => 'nullable|integer|min:0|max:31536000',
+            'related_type'   => 'nullable|string|in:contact,deal,company',
+        ], [
+            'assignee_id.exists' => __('That member is not part of this workspace.'),
+        ]);
+
+        // Resolve who the task is ABOUT. The flow knows the customer's phone;
+        // everything else hangs off the conversation it belongs to.
+        $conv    = $data['customer_phone'] ? $this->findConversation($wsId, (string) $data['customer_phone']) : null;
+        $contact = $conv && $conv->contact_id ? \App\Models\Contact::find($conv->contact_id) : null;
+
+        $relatedType = $data['related_type'] ?? null;
+        $relatedId   = null;
+        if ($relatedType === 'contact' && $contact) {
+            $relatedId = $contact->id;
+        } elseif ($relatedType === 'deal' && $contact) {
+            // Newest OPEN deal for this contact — a closed deal is finished work
+            // and pinning a follow-up to it would bury the task.
+            $relatedId = (int) (\App\Models\Deal::where('workspace_id', $wsId)
+                ->where('contact_id', $contact->id)->where('status', 'open')
+                ->orderByDesc('id')->value('id') ?? 0) ?: null;
+        } elseif ($relatedType === 'company' && $contact && $contact->company_id) {
+            $relatedId = (int) $contact->company_id;
+        }
+        // A link that could not be resolved becomes a standalone task rather
+        // than a dangling pointer — the work still needs doing.
+        if ($relatedId === null) {
+            $relatedType = null;
+        }
+
+        try {
+            $task = \App\Models\Task::create([
+                'workspace_id' => $wsId,
+                'created_by'   => null,                       // authored by a flow, not a person
+                'assignee_id'  => $data['assignee_id'] ?? null,
+                'title'        => trim($data['title']),
+                'notes'        => $data['notes'] ?? null,
+                'priority'     => $data['priority'] ?? 'medium',
+                'status'       => 'open',
+                'related_type' => $relatedType,
+                'related_id'   => $relatedId,
+                'due_at'       => isset($data['due_in_seconds'])
+                    ? now()->addSeconds((int) $data['due_in_seconds'])
+                    : null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('[flow-node/task] ' . $e->getMessage());
+            return response()->json(['ok' => false, 'error' => 'task_failed', 'message' => $e->getMessage()], 500);
+        }
+
+        return response()->json(['ok' => true, 'task_id' => $task->id, 'due_at' => (string) $task->due_at]);
+    }
+
+    /**
+     * POST /api/flow-node/contact-update
+     *
+     * The "Update contact" flow node. Writes answers a flow collected back onto
+     * the contact record — standard columns and workspace-defined custom fields.
+     * Before this, a flow could tag a contact but never store what it learned,
+     * so an Ask node's answer lived only inside that one session.
+     */
+    public function contactUpdate(Request $request): JsonResponse
+    {
+        if (!$this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+
+        $data = $request->validate([
+            'workspace_id'   => 'required|integer',
+            'customer_phone' => 'required|string|max:32',
+            'fields'         => 'required|array|max:40',
+            'fields.*.key'   => 'required|string|max:64',
+            'fields.*.value' => 'nullable|string|max:2000',
+        ]);
+
+        $wsId = (int) $data['workspace_id'];
+        $conv = $this->findConversation($wsId, (string) $data['customer_phone']);
+        $contact = $conv && $conv->contact_id ? \App\Models\Contact::find($conv->contact_id) : null;
+        if (!$contact) {
+            return response()->json(['ok' => false, 'error' => 'contact_not_found'], 404);
+        }
+
+        // WRITE WHITELIST. Never derived from $fillable: that includes
+        // workspace_id, user_id, mobile and mobile_hash — a flow rewriting any
+        // of those would move the contact to another tenant or break the phone
+        // index that every inbound lookup depends on.
+        $allowed = ['first_name', 'middle_name', 'last_name', 'name', 'title',
+                    'email', 'language', 'address', 'msg', 'subject', 'image'];
+
+        $defs = \App\Models\ContactCustomField::where('workspace_id', $wsId)->get()->keyBy('key');
+        $custom  = is_array($contact->custom_attributes) ? $contact->custom_attributes : [];
+        $patch   = [];
+        $written = [];
+        $skipped = [];
+
+        foreach ($data['fields'] as $f) {
+            $key = trim((string) $f['key']);
+            $val = trim((string) ($f['value'] ?? ''));
+            if ($key === '') continue;
+
+            if (in_array($key, $allowed, true)) {
+                $patch[$key] = $val;
+                $written[]   = $key;
+                continue;
+            }
+
+            $def = $defs->get($key);
+            if (!$def) {
+                $skipped[] = $key;   // neither a standard column nor a defined custom field
+                continue;
+            }
+
+            $coerced = $this->coerceCustomFieldValue($def, $val);
+            if ($coerced === false) {
+                // Wrong type / off-list select. Skip THIS field and keep the
+                // old value — a bad answer must not wipe good data, and one
+                // bad field must not fail the whole node.
+                $skipped[] = $key;
+                continue;
+            }
+            $custom[$key] = $coerced;
+            $written[]    = $key;
+        }
+
+        try {
+            // Merge, never replace: keys this flow did not mention keep their
+            // values. Replacing the whole map would erase everything another
+            // flow (or an operator) had already stored.
+            $patch['custom_attributes'] = $custom;
+            $contact->fill($patch)->save();
+        } catch (\Throwable $e) {
+            Log::warning('[flow-node/contact-update] ' . $e->getMessage());
+            return response()->json(['ok' => false, 'error' => 'update_failed', 'message' => $e->getMessage()], 500);
+        }
+
+        if ($skipped) {
+            Log::info('[flow-node/contact-update] skipped fields: ' . implode(',', $skipped) . ' (contact ' . $contact->id . ')');
+        }
+
+        return response()->json(['ok' => true, 'contact_id' => $contact->id, 'written' => $written, 'skipped' => $skipped]);
+    }
+
+    /**
+     * Coerce a flow-supplied string to a custom field's declared type.
+     * Returns the value to store, or FALSE when it does not fit the type —
+     * the caller then leaves the existing value alone.
+     */
+    private function coerceCustomFieldValue(\App\Models\ContactCustomField $def, string $val)
+    {
+        if ($val === '') return '';   // clearing a field is legitimate
+
+        switch ((string) $def->type) {
+            case 'number':
+                return is_numeric($val) ? $val + 0 : false;
+
+            case 'bool':
+                $t = strtolower($val);
+                if (in_array($t, ['1', 'true', 'yes', 'y', 'on'], true))  return true;
+                if (in_array($t, ['0', 'false', 'no', 'n', 'off'], true)) return false;
+                return false;   // unparseable → skip, don't guess
+
+            case 'date':
+                try { return \Illuminate\Support\Carbon::parse($val)->toDateString(); }
+                catch (\Throwable $e) { return false; }
+
+            case 'email':
+                return filter_var($val, FILTER_VALIDATE_EMAIL) ? $val : false;
+
+            case 'url':
+                return filter_var($val, FILTER_VALIDATE_URL) ? $val : false;
+
+            case 'select':
+                // Must be one of the declared options, matched case-insensitively
+                // but stored in the option's own casing so filters group cleanly.
+                $opts = is_array($def->options) ? $def->options : [];
+                foreach ($opts as $o) {
+                    if (mb_strtolower(trim((string) $o)) === mb_strtolower($val)) return (string) $o;
+                }
+                return false;
+
+            default:
+                return $val;   // text and anything unrecognised
+        }
     }
 
     /**
@@ -163,16 +741,15 @@ class FlowNodeActionsController extends Controller
         }
 
         $gcal = app(\App\Services\GoogleCalendar\GoogleCalendarService::class);
-        // Master toggle — admin can flip `google_calendar_enabled` off at
-        // /admin/settings/google-calendar to disable Google integration
-        // platform-wide WITHOUT having to wait for tokens to expire.
-        // Without this gate, every previously-connected workspace would
-        // keep running Meet/Calendar nodes for hours after the toggle.
-        if (!$gcal->isEnabled()) {
+        // Gate — Google must be enabled for THIS workspace: either the global
+        // toggle is on, or the workspace brought its own Google app. Passing
+        // $workspace matters at runtime (no login session here) so a workspace
+        // on its own app still runs even when the global toggle is off.
+        if (!$gcal->isEnabled($workspace)) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'integration_disabled',
-                'message' => 'Google integration is disabled platform-wide. Ask your admin to re-enable it at /admin/settings/google-calendar.',
+                'message' => __('Google isn\'t connected for this workspace. Connect a Google account (or add your own Google app) on the Google account page.'),
             ], 503);
         }
         $token = $gcal->ensureFreshToken($workspace);
@@ -471,6 +1048,57 @@ class FlowNodeActionsController extends Controller
         // assistant's own record_agent/record_user toggles are the only switch.
         $canRecord = true;
 
+        // KNOWLEDGE BASE — when this voice agent is linked to an AI-Training
+        // assistant, stitch that assistant's trained sources INTO the system
+        // prompt right here, so Node's realtime voice model already carries the
+        // knowledge for the whole call. Context-loaded ONCE (not per-turn RAG),
+        // which keeps the spoken reply fast + smooth. Same helper the chat AI +
+        // flow AI node use, so answers match across chat and voice.
+        $systemPrompt = (string) $a->ai_system_prompt;
+        if (!empty($a->knowledge_assistant_id)) {
+            try {
+                $assistant = \App\Models\AiChatAssistant::where('workspace_id', $wsId)
+                    ->find((int) $a->knowledge_assistant_id);
+                if ($assistant) {
+                    $kb = app(\App\Services\AiChat\AiChatService::class)->contextFor($assistant);
+                    if (trim($kb) !== '') {
+                        $systemPrompt = trim($systemPrompt)
+                            . "\n\n--- Knowledge base (answer from this; keep spoken replies short) ---\n"
+                            . $kb
+                            . "\n--- End knowledge base ---";
+                    }
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('[CALL-AI] knowledge-base inject failed: ' . $e->getMessage(), ['assistant_id' => $a->id]);
+            }
+        }
+
+        // ALSO fold in the pasted "knowledge source URL" — same RAG pipeline as
+        // the AI-Training link. Crawled through the shared SSRF-safe fetcher and
+        // CACHED 12h keyed by URL, so the very first call pays the fetch once and
+        // every later call reads cache (keeps the spoken reply fast).
+        $kbUrl = trim((string) ($a->knowledge_base_url ?? ''));
+        if ($kbUrl !== '') {
+            try {
+                $urlText = \Illuminate\Support\Facades\Cache::remember(
+                    'call_kb_url:' . md5($kbUrl),
+                    now()->addHours(12),
+                    function () use ($kbUrl) {
+                        [$ok, $text] = app(\App\Services\AiTraining\UrlTextFetcher::class)->fetch($kbUrl);
+                        return $ok ? (string) $text : '';
+                    }
+                );
+                if (trim((string) $urlText) !== '') {
+                    $systemPrompt = trim($systemPrompt)
+                        . "\n\n--- Knowledge source (" . $kbUrl . ") ---\n"
+                        . mb_substr((string) $urlText, 0, 12000)
+                        . "\n--- End knowledge source ---";
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('[CALL-AI] knowledge-url inject failed: ' . $e->getMessage(), ['assistant_id' => $a->id]);
+            }
+        }
+
         return response()->json([
             'ok' => true,
             'assistant' => [
@@ -478,7 +1106,7 @@ class FlowNodeActionsController extends Controller
                 'name'                 => $a->name,
                 'ai_provider'          => $a->ai_provider,
                 'ai_model'             => $a->ai_model,
-                'ai_system_prompt'     => $a->ai_system_prompt,
+                'ai_system_prompt'     => $systemPrompt,
                 'voice_provider'       => $a->voice_provider,
                 'voice_id'             => $a->voice_id,
                 'stt_provider'         => $a->stt_provider,
@@ -651,6 +1279,9 @@ class FlowNodeActionsController extends Controller
             'workspace_id'   => 'required|integer',
             'agent_id'       => 'required|integer',
             'customer_phone' => 'required|string|max:32',
+            // Answers the customer already gave in the flow (Ask nodes + a
+            // WhatsApp Form) — passed so the agent replies based on them.
+            'flow_context'   => 'nullable|string|max:6000',
         ]);
 
         $wsId    = (int) $data['workspace_id'];
@@ -689,7 +1320,10 @@ class FlowNodeActionsController extends Controller
 
         $reply = null;
         try {
-            $reply = app(\App\Services\AiAgentService::class)->respondIfAssigned($convo->fresh());
+            $reply = app(\App\Services\AiAgentService::class)->respondIfAssigned(
+                $convo->fresh(),
+                trim((string) ($data['flow_context'] ?? '')) ?: null,
+            );
         } catch (\Throwable $e) {
             Log::warning('[FLOW-CHATBOT] agent reply failed: ' . $e->getMessage(), [
                 'agent_id' => $agentId,
@@ -758,6 +1392,23 @@ class FlowNodeActionsController extends Controller
                 }
                 if (trim((string) $ca->ai_model) !== '') {
                     $data['model'] = (string) $ca->ai_model;
+                }
+                // Fold in the voice agent's own knowledge base (AI-Training link)
+                // so a call-flow AI turn answers from the same trained content.
+                if (!empty($ca->knowledge_assistant_id)) {
+                    try {
+                        $kbAsst = \App\Models\AiChatAssistant::where('workspace_id', (int) ($data['workspace_id'] ?? 0))
+                            ->find((int) $ca->knowledge_assistant_id);
+                        if ($kbAsst) {
+                            $kb = app(\App\Services\AiChat\AiChatService::class)->contextFor($kbAsst);
+                            if (trim($kb) !== '') {
+                                $data['system_prompt'] = trim((string) ($data['system_prompt'] ?? ''))
+                                    . "\n\n--- Knowledge base ---\n" . $kb . "\n--- End knowledge base ---";
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        \Log::warning('[CALL-AI] node knowledge inject failed: ' . $e->getMessage());
+                    }
                 }
             }
         }
@@ -1276,18 +1927,39 @@ class FlowNodeActionsController extends Controller
         }
     }
 
+    /**
+     * teams.assignment_strategy, honoured. The column was stored and edited in
+     * the UI but nothing ever read it — every caller hardcoded a strategy, so
+     * round_robin / sticky were unreachable from a team's own configuration.
+     */
+    private function teamStrategy(?int $teamId, int $workspaceId): string
+    {
+        if (!$teamId) return 'round_robin';
+        $strategy = \App\Models\Team::where('workspace_id', $workspaceId)
+            ->whereKey($teamId)->value('assignment_strategy');
+        return in_array($strategy, \App\Models\Team::STRATEGIES, true) ? $strategy : 'round_robin';
+    }
+
     /** POST /api/flow-node/assign */
     public function assign(Request $request): JsonResponse
     {
         if (!$this->authed($request)) {
             return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
         }
+        // The ids come from flow JSON (node.userId / node.teamId), which is
+        // workspace-authored AND importable, so the builder's team-scoped
+        // picker is not a control — a bare `integer` let an imported flow park
+        // the conversation on a member or team of ANOTHER workspace.
+        $wsId = (int) $request->input('workspace_id');
         $data = $request->validate([
             'workspace_id'   => 'required|integer',
             'customer_phone' => 'required|string|max:32',
-            'team_id'        => 'nullable|integer',
-            'user_id'        => 'nullable|integer',
+            'team_id'        => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('teams', 'id')->where('workspace_id', $wsId)->whereNull('deleted_at')],
+            'user_id'        => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $wsId)],
             'note'           => 'nullable|string|max:1024',
+        ], [
+            'user_id.exists' => __('That member is not part of this workspace.'),
+            'team_id.exists' => __('That team is not part of this workspace.'),
         ]);
 
         $conv = $this->findConversation((int) $data['workspace_id'], (string) $data['customer_phone']);
@@ -1295,10 +1967,12 @@ class FlowNodeActionsController extends Controller
             return response()->json(['ok' => false, 'error' => 'conversation_not_found'], 404);
         }
 
-        // Pick a strategy: explicit user → manual; team only → round_robin
-        // (matches what TeamInboxController defaults to when an operator
-        // picks a team without specifying a user).
-        $strategy = !empty($data['user_id']) ? 'manual' : 'round_robin';
+        // Pick a strategy: explicit user → manual; team only → the team's own
+        // configured assignment_strategy (round_robin when it has none), which
+        // is what the flow builder's help text has always promised.
+        $strategy = !empty($data['user_id'])
+            ? 'manual'
+            : $this->teamStrategy($data['team_id'] ?? null, (int) $data['workspace_id']);
 
         try {
             $assigned = $this->assignment->assign(
@@ -1319,6 +1993,10 @@ class FlowNodeActionsController extends Controller
                 'conversation_id' => $conv->id,
                 'assignee_user_id' => $assigned?->id,
             ]);
+        } catch (\App\Exceptions\AssignmentTargetException $e) {
+            // Member/team is gone or belongs elsewhere — 422 rather than
+            // silently assigning (or, worse, silently UNassigning).
+            return response()->json(['ok' => false, 'error' => 'assignment_target_invalid', 'message' => $e->humanMessage()], 422);
         } catch (\Throwable $e) {
             Log::warning('[flow-node/assign] ' . $e->getMessage());
             return response()->json(['ok' => false, 'error' => 'assign_failed', 'message' => $e->getMessage()], 500);
@@ -1411,6 +2089,17 @@ class FlowNodeActionsController extends Controller
                     'owner_user_id'=> $ownerId,
                     'source'       => 'flow',
                     'sort_order'   => 0,
+                    // Ad attribution, taken from the CONTACT rather than a
+                    // conversation — a flow can create a deal long after the
+                    // thread that produced it, and the contact's first-touch
+                    // record is what survives that. Populated by
+                    // WaWebhookController::applyCtwaReferral.
+                    // ->value() would hand back the raw JSON string (query
+                    // builder, no casts), so read it off the model.
+                    'meta'         => array_filter(['ctwa' => data_get(
+                        $contactId ? \App\Models\Contact::find($contactId)?->attribution : null,
+                        'first'
+                    )]),
                 ]);
                 $created = true;
             }
@@ -1436,13 +2125,66 @@ class FlowNodeActionsController extends Controller
      */
     private function resolveContactIdByPhone(int $workspaceId, string $phone): ?int
     {
-        $digits = preg_replace('/\D+/', '', $phone);
-        if ($digits === '' || !$workspaceId) return null;
-        $contact = \App\Models\Contact::where('workspace_id', $workspaceId)->get()->first(function ($c) use ($digits) {
-            $stored = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
-            return $stored !== '' && $stored === $digits;
-        });
-        return $contact?->id;
+        // Single source of truth for "which contact is this number?" — exact
+        // canonical hash, then an unambiguous trailing-digit fallback for
+        // cc-split / trunk-0 / MX +52 1 / AR +54 9 shapes. See Contact::findByPhone.
+        return \App\Models\Contact::findByPhone($workspaceId, $phone)?->id;
+    }
+
+    /**
+     * POST /api/flow-node/template-header-media
+     *
+     * Flow templates are dispatched by Node directly to Graph. A Meta template
+     * sample URL is not reusable as a Graph `link` (Meta's later fetch receives
+     * 403), so upload the sample through TemplateSender and return its media id.
+     */
+    public function templateHeaderMedia(Request $request): JsonResponse
+    {
+        if (! $this->authed($request)) {
+            return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+        }
+
+        $data = $request->validate([
+            'workspace_id'    => 'required|integer',
+            'template_id'     => 'required|integer',
+            'phone_number_id' => 'required|string|max:64',
+        ]);
+
+        $template = \App\Models\WaTemplate::query()
+            ->where('workspace_id', (int) $data['workspace_id'])
+            ->find((int) $data['template_id']);
+        if (! $template) {
+            return response()->json(['ok' => false, 'error' => 'template_not_found'], 404);
+        }
+
+        $expectedPhoneId = (string) $data['phone_number_id'];
+        $config = \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', (int) $data['workspace_id'])
+            ->where('provider', 'waba')
+            ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+            ->get()
+            ->first(function ($candidate) use ($expectedPhoneId) {
+                $creds = $candidate->creds();
+                $phoneId = (string) (($candidate->meta_json['phone_number_id'] ?? '')
+                    ?: ($creds['phone_number_id'] ?? ''));
+                return $phoneId !== '' && hash_equals($phoneId, $expectedPhoneId);
+            });
+        if (! $config) {
+            return response()->json(['ok' => false, 'error' => 'waba_config_not_found'], 422);
+        }
+
+        $mediaId = app(\App\Services\Waba\TemplateSender::class)
+            ->resolveHeaderMediaIdForConfig($template, $config);
+        if (! $mediaId) {
+            Log::warning('[flow-node/template-header-media] resolve failed', [
+                'workspace_id' => $data['workspace_id'],
+                'template_id' => $template->id,
+                'phone_number_id' => $expectedPhoneId,
+            ]);
+            return response()->json(['ok' => false, 'error' => 'header_media_unavailable'], 422);
+        }
+
+        return response()->json(['ok' => true, 'media_id' => $mediaId]);
     }
 
     /**

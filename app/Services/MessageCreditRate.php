@@ -79,8 +79,10 @@ class MessageCreditRate
     /** Money (platform MINOR units) that ONE credit is worth, from the top-up rate. */
     public static function minorPerCredit(): float
     {
+        // credits_per_currency_minor = credits bought per 1 MAJOR unit (₹1),
+        // so 1 credit = (1/rate) major = (100/rate) minor units (paise).
         $rate = (float) SystemSetting::get('credits_per_currency_minor', 0.1);
-        return $rate > 0 ? (1 / $rate) : 0.0; // credits_per_currency_minor = credits bought per 1 minor unit
+        return $rate > 0 ? (100 / $rate) : 0.0;
     }
 
     /**

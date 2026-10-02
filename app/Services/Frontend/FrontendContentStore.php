@@ -51,7 +51,21 @@ class FrontendContentStore
             return $default;
         }
 
-        if (($row['type'] ?? 'text') === 'json') {
+        $type = $row['type'] ?? 'text';
+
+        // Live-editor TEXT is authored in the site's DEFAULT language, and there
+        // is no per-locale content store — so on any OTHER locale the stored
+        // default-language string would wrongly OVERRIDE the __()-translated
+        // fallback the caller passes in (this is why the frontend showed English
+        // on Arabic even though ar.json had the translation). Prefer that
+        // translated fallback on non-default locales. The editor (draft mode)
+        // authors in the default language, so it still sees the stored content.
+        if ($type === 'text' && ! $draft && $default !== null
+            && app()->getLocale() !== config('app.locale')) {
+            return $default;
+        }
+
+        if ($type === 'json') {
             $decoded = json_decode($value, true);
             return $decoded === null && json_last_error() !== JSON_ERROR_NONE ? $default : $decoded;
         }

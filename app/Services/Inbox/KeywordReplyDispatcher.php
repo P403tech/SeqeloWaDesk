@@ -149,6 +149,28 @@ class KeywordReplyDispatcher
 
         $guard = app(AutoReplyGuard::class);
 
+        // Sender scope shared by the welcome + away + out-of-hours passes: a
+        // device-bound rule fires only for its own sender; a workspace-wide one
+        // (device_id null) fires for any inbound on this workspace.
+        //
+        // The engine-agnostic bridge channels (email, and the other mirror-row
+        // channels) never stamp `conversations.device_id` — their sender row id
+        // lives in `raw_jid` as '<channel>:<rowId>:<peer>', and that row id is
+        // exactly what the /auto-reply sender picker saved on the rule. Without
+        // this leg the closure collapses to whereNull('device_id') and a
+        // mailbox-bound welcome/away/out-of-hours rule can NEVER fire. Kept
+        // provider-exact so a mirror row id can never collide with a real
+        // `devices.id` carried by a legacy NULL-provider rule.
+        $senderRowId = self::bridgeSenderRowId($convo);
+        $senderScope = function ($q) use ($convo, $provider, $senderRowId) {
+            $q->whereNull('device_id');
+            if (! empty($convo->device_id)) {
+                $q->orWhere('device_id', (int) $convo->device_id);
+            } elseif ($senderRowId !== null && $provider !== '') {
+                $q->orWhere(fn ($w) => $w->where('device_id', $senderRowId)->where('provider', $provider));
+            }
+        };
+
         // ── WELCOME MESSAGE pass ───────────────────────────────────────────
         // A welcome rule greets the customer on a NEW conversation (first
         // message, or after the "Resend after" window) — no keyword needed, and
@@ -158,14 +180,7 @@ class KeywordReplyDispatcher
         try {
             $welcomeRules = KeywordReply::query()
                 ->welcomeFor($workspaceId, $provider)
-                // Sender scoping — a device-bound welcome fires only for that
-                // sender; a workspace-wide one (device_id null) fires for any.
-                ->where(function ($q) use ($convo) {
-                    $q->whereNull('device_id');
-                    if (! empty($convo->device_id)) {
-                        $q->orWhere('device_id', (int) $convo->device_id);
-                    }
-                })
+                ->where($senderScope)
                 ->with(['selectedContents', 'outsideHoursContents', 'flow'])
                 ->orderBy('id')->get();
             foreach ($welcomeRules as $wr) {
@@ -185,16 +200,6 @@ class KeywordReplyDispatcher
         } catch (\Throwable $e) {
             Log::warning('[AR-WELCOME] pass failed: ' . $e->getMessage(), ['ws' => $workspaceId]);
         }
-
-        // Sender scope shared by the away + out-of-hours passes: a device-bound
-        // rule fires only for its own sender; a workspace-wide one (device_id
-        // null) fires for any inbound on this workspace.
-        $senderScope = function ($q) use ($convo) {
-            $q->whereNull('device_id');
-            if (! empty($convo->device_id)) {
-                $q->orWhere('device_id', (int) $convo->device_id);
-            }
-        };
 
         // ── AWAY pass ──────────────────────────────────────────────────────
         // Fires on ANY inbound while the workspace's manual "Away mode" switch is
@@ -452,6 +457,7 @@ class KeywordReplyDispatcher
                     ?: (trim(($target->first_name ?? '') . ' ' . ($target->last_name ?? '')) ?: 'Contact');
                 $tNum = Contact::canonicalizePhone($target->country_code, $target->mobile)
                     ?: preg_replace('/\D+/', '', (string) $target->mobile);
+                $tNum = Contact::canonicalizePhone($target->country_code, $target->mobile);
                 // InboxDispatcher has no native contact-card builder for
                 // WABA/Twilio — ship a clean readable text card so the
                 // reply still lands on every engine.
@@ -519,6 +525,23 @@ class KeywordReplyDispatcher
 
         $this->recordFire($rule, $needleDigits, $body, $guard, $convo);
         return $rule;
+    }
+
+    /**
+     * The sender row id an auto-reply rule was bound to, for a conversation
+     * that carries no `device_id`. Bridge channels key their threads
+     * '<channel>:<rowId>:<peer>' (e.g. 'email:18:7710002'), where <rowId> is
+     * the mirror row the sender picker offered. Returns null for a WhatsApp
+     * JID or any raw_jid that does not carry a numeric row id.
+     */
+    private static function bridgeSenderRowId(Conversation $convo): ?int
+    {
+        if (! preg_match('/^[a-z_]+:(\d+):/i', (string) ($convo->raw_jid ?? ''), $m)) {
+            return null;
+        }
+        $id = (int) $m[1];
+
+        return $id > 0 ? $id : null;
     }
 
     /**

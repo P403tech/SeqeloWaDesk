@@ -38,6 +38,8 @@ use Illuminate\Support\Facades\Validator;
  */
 class AutoreplyController extends Controller
 {
+    use \App\Http\Controllers\Api\App\Concerns\ScopesToSelectedSender;
+
     /**
      * GET /autoreplies — list the workspace's autoreplies.
      * Each row carries `messages` (selected only, to match the old index
@@ -49,14 +51,11 @@ class AutoreplyController extends Controller
         try {
             $wsId = (int) ($request->user()->current_workspace_id ?? 0);
 
-            // Device scoping — when the app's device picker is active (validated
-            // X-Device-Id → app_device_id), show only rules for THIS number so a
-            // different device's auto-replies don't appear here. Absent header =
-            // workspace-wide (back-compat with older APKs).
-            $deviceId = (int) $request->attributes->get('app_device_id', 0);
-
+            // Sender scoping — show ONLY the rules belonging to the account the
+            // app has selected. Absent selection = workspace-wide (back-compat
+            // with older APKs).
             $autoreplies = KeywordReply::where('workspace_id', $wsId)
-                ->when($deviceId > 0, fn ($q) => $q->where('device_id', $deviceId))
+                ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
                 ->orderBy('created_at', 'desc')
                 ->get();
 
@@ -87,13 +86,14 @@ class AutoreplyController extends Controller
         try {
             $wsId = (int) ($request->user()->current_workspace_id ?? 0);
 
+            // Same sender scope as the list, so a rule the list filtered out is
+            // not still readable by id.
             $autoreply = KeywordReply::where('workspace_id', $wsId)
                 ->where('id', $id)
+                ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
                 ->first();
 
-            // Device scoping — 404 an autoreply that belongs to another number.
-            $pinned = (int) $request->attributes->get('app_device_id', 0);
-            if (!$autoreply || ($pinned > 0 && (int) $autoreply->device_id !== $pinned)) {
+            if (!$autoreply) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Autoreply not found',
@@ -181,7 +181,7 @@ class AutoreplyController extends Controller
                 'keyword'          => $request->keyword,
                 'matching_method'  => $request->matching_method,
                 'fuzzy_similarity' => $request->fuzzy_similarity ?? 80,
-                'device_id'        => $request->device_id,
+                'device_id'        => $this->normalizeDeviceIdInput($request, $reply ?? null),
                 // Default ACTIVE when the field is omitted — Request::boolean()
                 // returns false for a missing key, which silently PAUSED rules
                 // saved from the app. Matches the web (?? true) and V1 API
@@ -251,7 +251,7 @@ class AutoreplyController extends Controller
                 'keyword'          => $request->keyword,
                 'matching_method'  => $request->matching_method,
                 'fuzzy_similarity' => $request->fuzzy_similarity ?? 80,
-                'device_id'        => $request->device_id,
+                'device_id'        => $this->normalizeDeviceIdInput($request, $reply ?? null),
                 // Default ACTIVE when the field is omitted — Request::boolean()
                 // returns false for a missing key, which silently PAUSED rules
                 // saved from the app. Matches the web (?? true) and V1 API
@@ -466,6 +466,70 @@ class AutoreplyController extends Controller
      * `contents` relation is remapped onto the `messages` key, and
      * `content_type` → `message_type`, to mirror the old KeywordReplyMessage.
      */
+    /** Per-request sender map: "engine:id" => sender row. Built once. */
+    private ?array $senderMap = null;
+
+    /**
+     * Resolve a rule's (provider, device_id) pair into something displayable.
+     *
+     * Returns the channel engine, the composite `engine:id` key, a human label
+     * and the channel's display name. Three cases the caller must be able to
+     * tell apart, none of which a bare `device_id` conveys:
+     *   - device_id NULL  → the rule listens on EVERY number of that channel
+     *   - id resolves     → that account's name/handle
+     *   - id is dangling  → the number was deleted; say so instead of showing
+     *                       a meaningless integer
+     */
+    private function senderFor(KeywordReply $reply): array
+    {
+        $engine = (string) ($reply->provider ?: \App\Services\WorkspaceEngine::ENGINE_BAILEYS);
+        $desc   = \App\Services\WorkspaceEngine::descriptor($engine);
+        $chan   = (string) ($desc['label'] ?? $engine);
+        $id     = $reply->device_id ? (int) $reply->device_id : 0;
+
+        if ($id <= 0) {
+            $all = __('All :channel numbers', ['channel' => $chan]);
+
+            return [
+                'engine'        => $engine,
+                'key'           => null,
+                'label'         => $all,
+                'label_or_id'   => $all,
+                'channel_label' => $chan,
+            ];
+        }
+
+        $key = $engine . ':' . $id;
+
+        if ($this->senderMap === null) {
+            $wsId = (int) (auth()->user()?->current_workspace_id ?? 0);
+            $this->senderMap = [];
+            if ($wsId > 0) {
+                foreach (\App\Services\WorkspaceEngine::senders($wsId, \App\Services\WorkspaceEngine::allEngines()) as $s) {
+                    $this->senderMap[(string) ($s['key'] ?? '')] = $s;
+                }
+            }
+        }
+
+        $hit = $this->senderMap[$key] ?? null;
+        // senders() only lists CONNECTED accounts, so a miss means the number is
+        // disconnected or was deleted. Say that — it is the useful thing to show
+        // — rather than falling back to the bare id, which is the very thing
+        // that made these cards read as "6" and "119".
+        $name = $hit
+            ? (string) ($hit['label'] ?: $hit['phone'] ?: ($chan . ' #' . $id))
+            : __('Disconnected or removed number');
+
+        return [
+            'engine'        => $engine,
+            'key'           => $key,
+            // What a client should DISPLAY for this rule. Never an id.
+            'label_or_id'   => $name,
+            'label'         => $name,
+            'channel_label' => $chan,
+        ];
+    }
+
     private function transformAutoreply(KeywordReply $reply, bool $selectedOnly): array
     {
         $contents = $selectedOnly
@@ -476,13 +540,34 @@ class AutoreplyController extends Controller
 
         $flow = $reply->flow_id ? Flow::find($reply->flow_id) : null;
 
+        // The sender this rule is bound to. `device_id` alone is a bare int
+        // whose meaning depends on `provider` — 115 is an Unofficial device on a
+        // baileys row but a Telegram bot on a telegram row — so a client with
+        // only the id can show nothing better than the number itself. Resolve it
+        // to a name + composite key here so the list can label each rule.
+        $sender = $this->senderFor($reply);
+
         return [
             'id' => $reply->id,
             'keyword' => $reply->keyword,
             'matching_method' => $reply->matching_method,
             'fuzzy_similarity' => $reply->fuzzy_similarity,
             'user_id' => $reply->user_id,
-            'device_id' => $reply->device_id,
+            // The app renders this field directly as each card's heading, so a
+            // bare id showed up as "6" with nothing to say which number it
+            // meant. Send the account's NAME here instead and keep the numeric
+            // id on `device_id_num`. Safe to swap because the write side
+            // (store/update) resolves a name back to its id — see
+            // normalizeDeviceIdInput() — so a client echoing this value back
+            // still saves against the right account.
+            'device_id' => $sender['label_or_id'],
+            'device_id_num' => $reply->device_id,
+            // Which channel + account this rule listens on.
+            'provider' => $sender['engine'],
+            'engine' => $sender['engine'],
+            'sender_key' => $sender['key'],
+            'device_label' => $sender['label'],
+            'channel_label' => $sender['channel_label'],
             'message_type' => $reply->message_type,
             'status' => (int) $reply->status,
             'reply_type' => $reply->reply_type,

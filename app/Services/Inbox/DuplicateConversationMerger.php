@@ -567,6 +567,8 @@ class DuplicateConversationMerger
         // identity) forks a second thread keyed by an id that shares NO digits
         // with the phone JID, so raw_jid/alt_jid alone can't join the phone
         // thread to its @lid twin — but both resolve to the same contact_digits.
+        // Adding it joins them. Still confined to the same provider+business
+        // partition (set in scan()), so it never merges across channels/numbers.
         $cd = $this->digits((string) ($c->contact_digits ?? ''));
         if ($cd !== '' && strlen($cd) >= 8) {
             $out[] = $cd;

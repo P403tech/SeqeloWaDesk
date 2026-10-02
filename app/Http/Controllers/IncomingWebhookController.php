@@ -75,6 +75,20 @@ class IncomingWebhookController extends Controller
             }
         }
 
+        // Webhook → send an approved template (Phase 2). Pulls the recipient
+        // number + variables from the payload and fires the template through the
+        // SAME engine-aware seam the inbox/campaigns use (InboxDispatcher), so
+        // WABA / Twilio / Unofficial all behave identically. Best-effort — never
+        // blocks the 200 to the caller.
+        if ($hook->templateSendEnabled()) {
+            try {
+                $this->sendTemplate($hook, $request, $event);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('[INCOMING-WH] template send failed: ' . $e->getMessage());
+                $event->forceFill(['template_send_status' => 'failed:exception'])->save();
+            }
+        }
+
         // Relay onward to the operator's destination, best-effort. Failures
         // are recorded on the event, never block the 200 to the caller.
         if ($hook->forward_enabled && !empty($hook->forward_url)) {
@@ -137,7 +151,28 @@ class IncomingWebhookController extends Controller
             ->map(fn ($f) => ['id' => $f->id, 'name' => $f->flow_name ?: ('Flow #' . $f->id)])
             ->values();
 
-        return view('user.webhooks.incoming', ['hooks' => $hooks, 'flows' => $flows]);
+        // ── Template-send pickers (Phase 2) ────────────────────────────────
+        // Senders = every CONNECTED channel in THIS workspace, as engine:id —
+        // parsed back by sendTemplate(). Same composite the OTP picker builds.
+        $senders = $this->senderOptions();
+        // Approved templates the operator can fire. `vars` = highest {{n}} slot
+        // in the body, so the UI renders exactly that many variable-map inputs.
+        $templates = \App\Models\WaTemplate::query()->forCurrentWorkspace()
+            ->orderByDesc('id')->limit(300)->get()
+            ->map(function ($t) {
+                $body = (string) ($t->template_body ?? '');
+                preg_match_all('/\{\{\s*(\d+)\s*\}\}/', $body, $m);
+                $slots = $m[1] ? max(array_map('intval', $m[1])) : 0;
+                $hdr = strtoupper((string) ($t->attachment_type ?: 'TEXT'));
+                return [
+                    'id'          => $t->id,
+                    'name'        => (string) $t->template_name,
+                    'vars'        => $slots,
+                    'header_media'=> in_array($hdr, ['IMAGE', 'VIDEO', 'DOCUMENT'], true),
+                ];
+            })->values();
+
+        return view('user.webhooks.incoming', compact('hooks', 'flows', 'senders', 'templates'));
     }
 
     public function store(Request $request): RedirectResponse
@@ -222,6 +257,270 @@ class IncomingWebhookController extends Controller
     }
 
     /**
+     * Save the "send a template on each payload" settings (Phase 2): which
+     * connected sender fires, which approved template, where the recipient
+     * number lives in the payload, and how each template {{n}} slot maps to a
+     * payload field.
+     */
+    public function templateSend(Request $request, int $id): RedirectResponse
+    {
+        $data = $request->validate([
+            'tpl_enabled'      => 'nullable|boolean',
+            'tpl_sender'       => 'nullable|string|max:40',
+            'tpl_template_id'  => 'nullable|integer',
+            'tpl_to_field'     => 'nullable|string|max:120',
+            'tpl_cc'           => 'nullable|string|max:8',
+            'tpl_header_field' => 'nullable|string|max:120',
+            'tpl_var'          => 'nullable|array',
+            'tpl_var.*'        => 'nullable|string|max:120',
+        ]);
+        $hook = $this->resolve($id);
+
+        // Template must belong to THIS workspace (never fire another tenant's).
+        $tplId = (int) ($data['tpl_template_id'] ?? 0);
+        if ($tplId > 0 && ! \App\Models\WaTemplate::query()
+                ->where('workspace_id', $hook->workspace_id)->whereKey($tplId)->exists()) {
+            $tplId = 0;
+        }
+        // Sender must resolve to a connected device / provider in this workspace.
+        $sender    = $this->resolveSender($hook, (string) ($data['tpl_sender'] ?? ''));
+        $senderVal = $sender['value'] ?? null;
+
+        // Keep only filled var-map slots, keyed by the positional slot number.
+        $varMap = [];
+        foreach ((array) ($data['tpl_var'] ?? []) as $slot => $path) {
+            $slot = (int) $slot; $path = trim((string) $path);
+            if ($slot >= 1 && $path !== '') $varMap[(string) $slot] = $path;
+        }
+
+        $hook->update(['template_config' => [
+            'enabled'      => (bool) ($data['tpl_enabled'] ?? false),
+            'sender'       => $senderVal,
+            'template_id'  => $tplId ?: null,
+            'to_field'     => trim((string) ($data['tpl_to_field'] ?? '')) ?: null,
+            'country_code' => preg_replace('/\D+/', '', (string) ($data['tpl_cc'] ?? '')) ?: null,
+            'header_field' => trim((string) ($data['tpl_header_field'] ?? '')) ?: null,
+            'var_map'      => $varMap ?: null,
+        ]]);
+
+        return back()->with('status', 'Template-send settings saved.');
+    }
+
+    /**
+     * Every CONNECTED sender in the CURRENT workspace as engine:id options for
+     * the picker — devices (Unofficial), WABA + Twilio provider configs. Parsed
+     * back by resolveSender(). Mirrors the OTP sender picker, workspace-scoped.
+     *
+     * @return \Illuminate\Support\Collection<int, array{value:string,label:string}>
+     */
+    private function senderOptions(): \Illuminate\Support\Collection
+    {
+        $wsId = (int) (auth()->user()?->current_workspace_id ?? 0);
+        $out  = collect();
+        if ($wsId <= 0) return $out;
+
+        \App\Models\Device::query()->where('workspace_id', $wsId)->where('status', 'connected')
+            ->orderByDesc('id')->limit(100)->get()
+            ->each(function ($d) use ($out) {
+                $phone = trim((string) ($d->country_code ? '+' . ltrim((string) $d->country_code, '+') . ' ' : '')
+                    . preg_replace('/\D+/', '', (string) $d->phone_number)) ?: ('Device #' . $d->id);
+                $out->push(['value' => 'device:' . $d->id, 'label' => $phone . ' (Unofficial)']);
+            });
+
+        \App\Models\WaProviderConfig::query()->where('workspace_id', $wsId)
+            ->whereIn('provider', ['waba', 'twilio'])->where('status', 'connected')
+            ->orderByDesc('id')->limit(100)->get()
+            ->each(function ($c) use ($out) {
+                $num = trim((string) ($c->phone_number ?: ($c->display_label ?? '')));
+                $eng = $c->provider === 'waba' ? 'WABA' : 'Twilio';
+                if ($num === '') $num = $eng . ' #' . $c->id;
+                $out->push(['value' => $c->provider . ':' . $c->id, 'label' => $num . ' (' . $eng . ')']);
+            });
+
+        return $out->values();
+    }
+
+    /**
+     * Parse a saved sender string ("device:ID" | "waba:ID" | "twilio:ID") into
+     * the pieces the send path needs, VALIDATING it belongs to the hook's
+     * workspace. Returns null when it doesn't resolve.
+     *
+     * @return array{value:string,engine:string,device_id:?int,provider_config_id:?int,from:string}|null
+     */
+    private function resolveSender(IncomingWebhook $hook, string $sender): ?array
+    {
+        [$kind, $idRaw] = array_pad(explode(':', trim($sender), 2), 2, '');
+        $id = (int) $idRaw;
+        if ($id <= 0) return null;
+
+        if ($kind === 'device') {
+            $d = \App\Models\Device::query()->where('workspace_id', $hook->workspace_id)->whereKey($id)->first();
+            if (! $d) return null;
+            return [
+                'value'   => 'device:' . $d->id,
+                'engine'  => 'baileys',
+                'device_id' => (int) $d->id,
+                'provider_config_id' => null,
+                'from'    => preg_replace('/\D+/', '', (string) ($d->country_code . $d->phone_number)),
+            ];
+        }
+        if (in_array($kind, ['waba', 'twilio'], true)) {
+            $c = \App\Models\WaProviderConfig::query()->where('workspace_id', $hook->workspace_id)
+                ->where('provider', $kind)->whereKey($id)->first();
+            if (! $c) return null;
+            return [
+                'value'   => $kind . ':' . $c->id,
+                'engine'  => $kind,
+                'device_id' => null,
+                'provider_config_id' => (int) $c->id,
+                'from'    => (string) ($c->phone_number ?: ''),
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Fire the configured approved template for a received payload. Resolves the
+     * recipient number + {{n}} variables from the body, builds an outbound
+     * conversation + message the SAME way the inbox composer does, then dispatches
+     * through InboxDispatcher — the one engine-aware seam that already handles
+     * WABA (type:template + media header), Twilio (Content template), and
+     * Unofficial (rendered text). Session-less: scopes everything by
+     * $hook->workspace_id. Never throws to the caller; stamps the event outcome.
+     */
+    private function sendTemplate(IncomingWebhook $hook, Request $request, IncomingWebhookEvent $event): void
+    {
+        $cfg    = is_array($hook->template_config) ? $hook->template_config : [];
+        $sender = $this->resolveSender($hook, (string) ($cfg['sender'] ?? ''));
+        $tpl    = \App\Models\WaTemplate::query()->where('workspace_id', $hook->workspace_id)
+            ->whereKey((int) ($cfg['template_id'] ?? 0))->first();
+        if (! $sender || ! $tpl) {
+            $event->forceFill(['template_send_status' => 'skipped:config'])->save();
+            return;
+        }
+
+        // Normalise the payload (JSON or form) to one array, same as captureLead.
+        $input = $request->all();
+        if (empty($input)) {
+            $decoded = json_decode((string) $request->getContent(), true);
+            if (is_array($decoded)) $input = $decoded;
+        }
+
+        // Recipient number from the payload (configured path, then fallbacks).
+        $rawTo  = $this->firstValue($input, $cfg['to_field'] ?? null,
+            ['phone', 'mobile', 'phone_number', 'whatsapp', 'wa_number', 'msisdn', 'to', 'number', 'contact_number']);
+        $digits = preg_replace('/\D+/', '', (string) $rawTo);
+        $cc     = preg_replace('/\D+/', '', (string) ($cfg['country_code'] ?? ''));
+        // Prepend the default country code to a LOCAL (national) number. Keyed on
+        // LENGTH only: a national number is <= 10 digits, so it always needs the
+        // code — even when it happens to start with the code's digits (e.g. the
+        // 10-digit Indian mobile 9145808988 starts with "91"). The old
+        // `! str_starts_with($digits, $cc)` guard misread those as already-
+        // international and skipped the prefix, storing a 10-digit number while
+        // real WhatsApp inbound uses the 12-digit form → duplicate conversations.
+        if ($cc !== '' && strlen($digits) > 0 && strlen($digits) <= 10) {
+            $digits = $cc . $digits;
+        }
+        if (strlen($digits) < 8 || strlen($digits) > 15) {
+            $event->forceFill(['template_send_status' => 'skipped:no_number'])->save();
+            return;
+        }
+        $to = $digits;
+
+        // Positional body vars from the payload via the var-map. Fill 1..maxSlot
+        // so a gap doesn't misalign later slots.
+        $varMap  = (array) ($cfg['var_map'] ?? []);
+        $maxSlot = 0;
+        foreach (array_keys($varMap) as $slot) $maxSlot = max($maxSlot, (int) $slot);
+        $positional = [];   // ['1' => val, ...] for the text/Unofficial path
+        $bodyList   = [];   // 0-indexed list for template_send_vars['body'] (WABA)
+        for ($i = 1; $i <= $maxSlot; $i++) {
+            $val = isset($varMap[(string) $i])
+                ? (string) ($this->firstValue($input, (string) $varMap[(string) $i], []) ?? '')
+                : '';
+            $positional[(string) $i] = $val;
+            $bodyList[] = $val;
+        }
+
+        // template_send_vars is section-keyed (buildSend consumes it for the WABA
+        // type:template payload); template_vars is flat positional (text path).
+        $sendVars = ['body' => $bodyList];
+        if (! empty($cfg['header_field'])) {
+            $hdr = (string) ($this->firstValue($input, (string) $cfg['header_field'], []) ?? '');
+            if ($hdr !== '') $sendVars['header'] = [$hdr];   // dynamic media/text header
+        }
+
+        $meta = array_merge(
+            ['source' => 'incoming_webhook', 'target_jid' => $to],
+            array_filter([
+                'header'             => (string) ($tpl->header ?: ''),
+                'footer'             => (string) ($tpl->footer ?: ''),
+                'buttons'            => is_array($tpl->buttons) ? $tpl->buttons : [],
+                'template_id'        => (int) $tpl->id,
+                'template_name'      => (string) ($tpl->template_name ?? ''),
+                'template_language'  => (string) ($tpl->language ?? 'en'),
+                'template_vars'      => $positional,
+                'template_send_vars' => $sendVars,
+            ], fn ($v) => $v !== '' && $v !== [])
+        );
+
+        // Body text with {{n}} substituted, for the Unofficial / Twilio-text path
+        // (the WABA path rebuilds from template_send_vars instead).
+        $body = preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/',
+            fn ($m) => $positional[$m[1]] ?? '', (string) ($tpl->template_body ?? ''));
+
+        // Build the thread + outbound row, then hand to the engine-aware seam.
+        $toJid = str_contains($to, '@') ? $to : $to . '@s.whatsapp.net';
+        $conv  = \App\Services\Inbox\ConversationResolver::find($hook->workspace_id, $to);
+        if (! $conv) {
+            $conv = \App\Models\Conversation::create([
+                'user_id'          => $hook->user_id,
+                'workspace_id'     => $hook->workspace_id,
+                'device_id'        => $sender['device_id'],
+                'title'            => $to,
+                'preview'          => mb_substr($body, 0, 200),
+                'status'           => 'pending',
+                'platform'         => 'W',
+                'provider'         => $sender['engine'],
+                'origin'           => 'incoming_webhook',
+                'raw_jid'          => $toJid,
+                'recipients_count' => 1,
+                'last_message_at'  => now(),
+            ]);
+        } else {
+            $patch = ['preview' => mb_substr($body, 0, 200), 'last_message_at' => now()];
+            if ($sender['device_id'] && ! $conv->device_id) $patch['device_id'] = $sender['device_id'];
+            if (empty($conv->provider)) $patch['provider'] = $sender['engine'];
+            $conv->update($patch);
+        }
+
+        $msg = \App\Models\InboxMessage::create([
+            'conversation_id' => $conv->id,
+            'user_id'         => $hook->user_id,
+            'direction'       => 'out',
+            'from_number'     => $sender['from'] ?: null,
+            'to_number'       => $to,
+            'body'            => $body,
+            'status'          => 'pending',
+            'meta'            => $meta,
+        ]);
+        // Pin the engine so InboxDispatcher::resolveProvider() leaves on THIS
+        // sender's engine. The conversation.provider set above is the fallback
+        // pin; also stamp the message when that column exists (some installs
+        // predate inbox_messages.provider — guard like the dispatcher does).
+        if (\Illuminate\Support\Facades\Schema::hasColumn('inbox_messages', 'provider')) {
+            $msg->forceFill(['provider' => $sender['engine']])->save();
+        }
+
+        $result = app(\App\Services\InboxDispatcher::class)->send($msg, 'W');
+        $ok = ($result['ok'] ?? false) === true;
+        $msg->forceFill($ok ? ['status' => 'sent', 'sent_at' => now()] : ['status' => 'failed'])->save();
+        $event->forceFill([
+            'template_send_status' => $ok ? 'sent' : ('failed:' . mb_substr((string) ($result['error'] ?? 'send'), 0, 48)),
+        ])->save();
+    }
+
+    /**
      * Turn a received payload into a Contact. Extracts phone/name/email using
      * the operator's field mapping (with sensible fallbacks), dedupes by phone
      * hash, tags it, and optionally enrolls it in a flow. Runs in the PUBLIC,
@@ -253,7 +552,14 @@ class IncomingWebhookController extends Controller
         $digits = preg_replace('/\D+/', '', (string) $phone);
         // Apply a default country code for local-looking numbers.
         $cc = preg_replace('/\D+/', '', (string) ($cfg['country_code'] ?? ''));
-        if ($cc !== '' && strlen($digits) > 0 && strlen($digits) <= 10 && ! str_starts_with($digits, $cc)) {
+        // Prepend the default country code to a LOCAL (national) number. Keyed on
+        // LENGTH only: a national number is <= 10 digits, so it always needs the
+        // code — even when it happens to start with the code's digits (e.g. the
+        // 10-digit Indian mobile 9145808988 starts with "91"). The old
+        // `! str_starts_with($digits, $cc)` guard misread those as already-
+        // international and skipped the prefix, storing a 10-digit number while
+        // real WhatsApp inbound uses the 12-digit form → duplicate conversations.
+        if ($cc !== '' && strlen($digits) > 0 && strlen($digits) <= 10) {
             $digits = $cc . $digits;
         }
         if (strlen($digits) < 8 || strlen($digits) > 15) return; // no usable phone → no lead

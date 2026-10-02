@@ -105,7 +105,17 @@ class FcmService
     {
         $tokens = array_values(array_unique(array_filter($tokens)));
         $out = ['sent' => 0, 'failed' => 0, 'invalid' => []];
-        if (empty($tokens) || !$this->enabled()) return $out;
+        Log::info('[FCM] sendToTokens', [
+            'tokens'       => count($tokens),
+            'enabled'      => $this->enabled(),
+            'project'      => $this->projectId(),
+            'notification' => $notification,
+            'data'         => $data,
+        ]);
+        if (empty($tokens) || !$this->enabled()) {
+            Log::warning('[FCM] send skipped', ['tokens' => count($tokens), 'enabled' => $this->enabled()]);
+            return $out;
+        }
 
         $access = $this->accessToken();
         if (!$access) { $out['failed'] = count($tokens); return $out; }
@@ -135,12 +145,19 @@ class FcmService
                 if ($resp->successful()) { $out['sent']++; continue; }
                 $out['failed']++;
                 $status = (string) ($resp->json('error.status') ?? '');
+                Log::warning('[FCM] token send failed', [
+                    'http'   => $resp->status(),
+                    'status' => $status,
+                    'body'   => mb_substr($resp->body(), 0, 300),   // FCM's exact rejection reason
+                    'token'  => substr($token, 0, 12) . '…',
+                ]);
                 // Dead/unregistered token → tell the caller to prune it.
                 if (in_array($status, ['NOT_FOUND', 'UNREGISTERED', 'INVALID_ARGUMENT'], true)) {
                     $out['invalid'][] = $token;
                 }
             }
         }
+        Log::info('[FCM] send summary', $out);
         return $out;
     }
 

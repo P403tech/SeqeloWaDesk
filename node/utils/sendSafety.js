@@ -72,6 +72,39 @@ export function getJitteredMessageDelay(appLocals, overrideGap = null) {
  * functions, so its behaviour is untouched. Idempotent — re-wrapping an
  * already-wrapped socket is a no-op.
  */
+/**
+ * Retarget a bare LID recipient (`<lid>@lid`) to its real phone JID
+ * (`<pn>@s.whatsapp.net`) before sending, using the Signal store's
+ * reverse LID→PN mapping that Baileys learns from inbound + USync traffic.
+ *
+ * Why this exists: after WhatsApp's LID rollout, a contact whose inbound
+ * arrived WITHOUT a `senderPn` gets stored (in Laravel) as a bare
+ * `<lid>@lid`, so every reply is addressed to that LID. Sending to a plain
+ * LID is unreliable, while the phone JID is the confirmed-working path. So
+ * when the socket already knows the LID↔PN pair, retarget the send to the
+ * phone number; when it doesn't, leave the LID untouched so Baileys' own
+ * USync resolution can still try. It NEVER fabricates a phone from LID
+ * digits, and never touches group / @s.whatsapp.net / broadcast / channel
+ * JIDs. Fully best-effort — any error leaves the original recipient as-is.
+ */
+export async function resolveLidRecipient(sock, jid, devicePhone = '') {
+  if (typeof jid !== 'string' || !jid.endsWith('@lid')) return jid;
+  try {
+    const pn = await sock?.signalRepository?.lidMapping?.getPNForLID?.(jid);
+    if (pn && typeof pn === 'string' && pn.includes('@s.whatsapp.net')) {
+      // getPNForLID returns a device-specific JID (`<pn>:<device>@...`);
+      // strip the device so the public sendMessage gets the base user JID.
+      const pnJid = pn.replace(/:\d+(?=@)/, '');
+      console.log(`[LID-RESOLVE] ${devicePhone || '?'} ${jid} → ${pnJid}`);
+      return pnJid;
+    }
+    console.log(`[LID-RESOLVE] ${devicePhone || '?'} no PN mapping for ${jid} — sending to LID as-is`);
+  } catch (e) {
+    console.warn(`[LID-RESOLVE] ${devicePhone || '?'} lookup failed for ${jid}: ${e?.message}`);
+  }
+  return jid;
+}
+
 export function serializeSocketSends(sock, devicePhone = '') {
   if (!sock || typeof sock.sendMessage !== 'function' || sock.__sendSerialized) {
     return sock;
@@ -82,7 +115,14 @@ export function serializeSocketSends(sock, devicePhone = '') {
     // `chain` is always a RESOLVED promise (see the tail assignment
     // below), so `original` is guaranteed to run for every call — a
     // previous send's failure never blocks the next one.
-    const run = chain.then(() => original(...args));
+    const run = chain.then(async () => {
+      // Retarget a bare LID recipient to its phone JID when the socket
+      // knows the mapping (see resolveLidRecipient). Best-effort: the
+      // original recipient stands if nothing is resolved, so a PN send
+      // is never altered and cannot regress.
+      try { args[0] = await resolveLidRecipient(sock, args[0], devicePhone); } catch (_) {}
+      return original(...args);
+    });
     chain = run.then(() => {}, () => {});
     return run;
   };

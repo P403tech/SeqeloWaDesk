@@ -23,6 +23,22 @@ use Illuminate\Support\Facades\Http;
  */
 class DevicesController extends Controller
 {
+    /**
+     * Timeout for the ONE bulk status call to Node. Generous compared with the
+     * old per-device 4s because it now covers the whole workspace in a single
+     * round-trip — Node answers it from in-memory maps, so a slow response
+     * means the bridge is struggling, not that the list is long.
+     */
+    private const STATUS_BULK_TIMEOUT = 8;
+
+    /**
+     * How many devices the DEGRADED path (bridge without the bulk endpoint)
+     * probes per cycle, oldest-checked first. Bounds the worst case at
+     * 25 x 4s instead of "however many numbers the customer owns", which is
+     * what made a 208-device workspace unusable.
+     */
+    private const STATUS_FALLBACK_BATCH = 25;
+
     // -----------------------------------------------------------------
     // Pages
     // -----------------------------------------------------------------
@@ -294,7 +310,11 @@ class DevicesController extends Controller
         // whether inbound is wired, not just that the subscribe POST returned OK.
         $verified = $this->verifyInboundWired($cfg);
         $this->stampInboundWired($cfg, $verified);
-        $wired = $verified ?? $webhookWired;   // definite verdict wins; else POST result
+        // ONLY a verified-true counts as wired. `$webhookWired` merely means the
+        // subscribe POST returned 200 — it proves nothing about where Meta
+        // actually delivers, so it must never upgrade an unproven result into a
+        // "two-way messaging is live" claim. null = we could not confirm.
+        $wired = $verified;
 
         \App\Support\Audit::log('devices.waba_connect_manual', [
             'subject_type' => 'wa_provider_config', 'subject_id' => $cfg->id,
@@ -309,6 +329,20 @@ class DevicesController extends Controller
                 ->with('status', 'Connected WABA number "' . $label . '" for sending.')
                 ->with('warning', 'Inbound is NOT wired yet for "' . $label . '". This number is on your OWN Meta app, which can\'t auto-route inbound to us (that needs Tech-Provider access). To receive messages, open your Meta App Dashboard → WhatsApp → Configuration and set Callback URL = ' . $cbUrl . ' and Verify token = ' . $verifyTok . ' (the pasted token must have whatsapp_business_management). Then click "Fix inbound" on the number. Tip: connecting via Embedded Signup wires inbound automatically, with no webhook setup.');
         }
+
+        // null = Meta did not confirm it either way. Say exactly that. Claiming
+        // "two-way messaging is live" here is what made the toast misleading:
+        // the operator trusted it, inbound never arrived, and nothing on screen
+        // suggested the check had not actually passed.
+        if ($wired === null) {
+            $cbUrl = url('/webhooks/whatsapp/inbound');
+            return $redirect
+                ->with('status', 'Connected WABA number "' . $label . '" for sending.')
+                ->with('warning', 'Could NOT confirm inbound for "' . $label . '"'
+                    . ($webhookWired ? ' — the subscribe call succeeded, but Meta did not list this platform among the number\'s subscribed apps.' : ' — the subscribe call to Meta did not succeed.')
+                    . ' Sending works; incoming messages may not arrive. Verify in your Meta App Dashboard → WhatsApp → Configuration that Callback URL = ' . $cbUrl . ' and Verify token = ' . $verifyTok . ', then send a test message to this number and check the inbox.');
+        }
+
         return $redirect->with('status', 'Connected WABA number "' . $label . '". Two-way messaging is live — inbound is routed to this platform.');
     }
 
@@ -491,7 +525,7 @@ class DevicesController extends Controller
         // returns it decrypted — no second decrypt needed.
         $appSecret = (string) \App\Models\SystemSetting::get('waba_app_secret', '');
         if ($appId === '' || $appSecret === '') {
-            return back()->withErrors(['embedded' => 'Embedded Signup is not configured. Ask the platform admin to fill App ID + Secret at /admin/settings/wadesk-message.']);
+            return back()->withErrors(['embedded' => 'Embedded Signup is not configured. Ask the platform admin to fill App ID + Secret at /admin/settings/channel-setting.']);
         }
 
         $version = (string) \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0');
@@ -591,31 +625,43 @@ class DevicesController extends Controller
             $info = [];
         }
 
-        // Subscribe to webhooks. ES does NOT auto-subscribe — we have
-        // to call this ourselves after the token exchange. Idempotent
-        // on Meta's side. Empty JSON body for default-app subscription.
+        // Subscribe the app AND override this WABA's callback to our inbound
+        // endpoint — the SAME atomic path the manual connect uses. ES does NOT
+        // auto-subscribe. The old embedded code did only a PLAIN subscribe (no
+        // override_callback_uri), so a freshly onboarded / Meta test (virtual)
+        // number's inbound never reached us unless the platform app's DEFAULT
+        // callback happened to already point at us (#11).
         try {
-            $sub = Http::withToken($accessToken)->acceptJson()->timeout(15)
-                ->post("{$base}/{$wabaId}/subscribed_apps", []);
-            if (!$sub->successful()) {
-                $subCode = (int) ($sub->json('error.error_subcode') ?? 0);
+            $sub = $this->subscribeAndOverrideWaba($accessToken, $wabaId, $base, $this->wabaWebhookVerifyToken());
+            if (!$sub['ok']) {
+                $subCode = (int) ($sub['error']['error_subcode'] ?? 0);
                 if ($subCode === 1349174) {
                     \Log::warning('[COEX-EMBED] subscribed_apps missing whatsapp_business_management', ['workspace_id' => (int) $wsId, 'waba_id' => $wabaId]);
                     return back()->withErrors([
                         'embedded' => 'Your Meta app is missing the whatsapp_business_management permission. Submit your app for App Review with that scope to enable Embedded Signup for real merchants.',
                     ]);
                 }
-                \Log::warning('[COEX-EMBED] subscribed_apps failed', ['workspace_id' => (int) $wsId, 'code' => $subCode, 'body' => $sub->body()]);
+                \Log::warning('[COEX-EMBED] subscribe/override failed', ['workspace_id' => (int) $wsId, 'error' => $sub['error']]);
             } else {
-                \Log::info('[COEX-EMBED] subscribed_apps OK', ['workspace_id' => (int) $wsId, 'waba_id' => $wabaId]);
+                \Log::info('[COEX-EMBED] subscribed + override OK', ['workspace_id' => (int) $wsId, 'waba_id' => $wabaId, 'override_applied' => $sub['override_applied']]);
             }
         } catch (\Throwable $e) {
-            \Log::warning('[COEX-EMBED] subscribed_apps threw', ['workspace_id' => (int) $wsId, 'error' => $e->getMessage()]);
+            \Log::warning('[COEX-EMBED] subscribe/override threw', ['workspace_id' => (int) $wsId, 'error' => $e->getMessage()]);
         }
 
-        // Write the row.
+        // Write the row. Re-onboarding the SAME number (same waba_id +
+        // phone_number_id) UPDATES that row in place instead of inserting a
+        // duplicate — matches the manual connect path so the embedded flow
+        // isn't the odd one out. (meta_json compared in PHP so it works even
+        // when stored encrypted.)
+        $cfg = \App\Models\WaProviderConfig::query()->forWorkspace($wsId)->where('provider', 'waba')->get()
+            ->first(function ($row) use ($wabaId, $pnid) {
+                $m = (array) ($row->meta_json ?? []);
+                return (string) ($m['waba_id'] ?? '') === (string) $wabaId
+                    && (string) ($m['phone_number_id'] ?? '') === (string) $pnid;
+            }) ?: new \App\Models\WaProviderConfig();
+        $isNew    = !$cfg->exists;
         $existing = \App\Models\WaProviderConfig::query()->forWorkspace($wsId)->where('provider', 'waba')->count();
-        $cfg = new \App\Models\WaProviderConfig();
         $cfg->workspace_id   = $wsId;
         $cfg->provider       = 'waba';
         $cfg->status         = \App\Models\WaProviderConfig::STATUS_CONNECTED;
@@ -646,7 +692,9 @@ class DevicesController extends Controller
         ];
         $cfg->connected_at   = now();
         $cfg->last_health_at = now();
-        $cfg->is_primary     = ($existing === 0);
+        // First WABA in the workspace becomes primary; a re-onboard keeps
+        // whatever primary flag the existing row already had (don't demote it).
+        $cfg->is_primary     = $isNew ? ($existing === 0) : (bool) $cfg->is_primary;
         $cfg->setCreds(['access_token' => $accessToken]);
         $cfg->save();
 
@@ -656,6 +704,13 @@ class DevicesController extends Controller
         // migrate it off the WhatsApp Business app — so this is safe to call
         // unconditionally. Best-effort; never blocks the connect.
         app(\App\Services\Waba\WabaNumberRegistrar::class)->register($cfg);
+
+        // Confirm inbound is actually wired (ask Meta which apps this WABA is
+        // subscribed to) and stamp the verdict — so a fresh embedded connect
+        // shows "Inbound wired" instead of the grey "check" state it used to
+        // leave, which read as a webhook problem until a manual re-check (#10).
+        $verified = $this->verifyInboundWired($cfg);
+        $this->stampInboundWired($cfg, $verified);
 
         \Log::info('[COEX-EMBED] CONNECTED', [
             'workspace_id'    => (int) $wsId,
@@ -831,6 +886,48 @@ class DevicesController extends Controller
             'meta' => ['phone' => $cfg->phone_number],
         ]);
         return back()->with('status', '"' . ($cfg->display_label ?: $cfg->phone_number ?: 'WABA account') . '" is now the primary sender.');
+    }
+
+    /** POST /devices/waba/{id}/default-agent — set/clear the number's default AI agent + business tag. */
+    public function wabaSetDefaultAgent(\Illuminate\Http\Request $request, int $id): RedirectResponse
+    {
+        $wsId = (int) Auth::user()?->current_workspace_id;
+        $cfg  = \App\Models\WaProviderConfig::where('id', $id)->where('workspace_id', $wsId)->firstOrFail();
+        $cfg->forceFill([
+            'default_ai_agent_id' => $this->validAgentId($request, $wsId),
+            'default_tag'         => $this->cleanTag($request),
+        ])->save();
+
+        return back()->with('status', __('Number automation saved.'));
+    }
+
+    /** POST /devices/device/{id}/default-agent — same, for an Unofficial-API device. */
+    public function deviceSetDefaultAgent(\Illuminate\Http\Request $request, int $id): RedirectResponse
+    {
+        $wsId   = (int) Auth::user()?->current_workspace_id;
+        $device = \App\Models\Device::where('id', $id)->where('workspace_id', $wsId)->firstOrFail();
+        $device->forceFill([
+            'default_ai_agent_id' => $this->validAgentId($request, $wsId),
+            'default_tag'         => $this->cleanTag($request),
+        ])->save();
+
+        return back()->with('status', __('Number automation saved.'));
+    }
+
+    /** Validate a submitted agent id belongs to the workspace; blank/0 → null (clear). */
+    private function validAgentId(\Illuminate\Http\Request $request, int $wsId): ?int
+    {
+        $id = (int) $request->input('agent_id', 0);
+        if ($id <= 0) return null;
+
+        return \App\Models\AiAgent::where('workspace_id', $wsId)->whereKey($id)->exists() ? $id : null;
+    }
+
+    /** Sanitize the per-number business/segment tag; blank → null (clear). */
+    private function cleanTag(\Illuminate\Http\Request $request): ?string
+    {
+        $tag = trim((string) $request->input('business_tag', ''));
+        return $tag === '' ? null : mb_substr($tag, 0, 60);
     }
 
     /** DELETE /devices/waba/{id}/disconnect — wipe the row's credentials
@@ -1047,6 +1144,14 @@ class DevicesController extends Controller
         if ($verified === false) {
             return back()->with('warning', 'Re-subscribed "' . $label . '", but inbound is still NOT wired — this number is subscribed to a different Meta app. Reconnect it via "Add number" (Embedded Signup) using this platform\'s app.');
         }
+
+        // Unconfirmed is NOT success. Previously this fell through to the
+        // "inbound wired" message, so an unverifiable number reported itself as
+        // working while inbound silently never arrived.
+        if ($verified === null) {
+            return back()->with('warning', 'Re-subscribed "' . $label . '", but Meta did not confirm this platform is receiving its inbound. Send it a test message and check the inbox — if nothing arrives, set the Callback URL and Verify token in your Meta App Dashboard → WhatsApp → Configuration.');
+        }
+
         return back()->with('status', 'Re-subscribed "' . $label . '" to inbound webhooks — inbound wired. Send it a test message to confirm.');
     }
 
@@ -1124,13 +1229,27 @@ class DevicesController extends Controller
             $resp = Http::withToken($token)->acceptJson()->timeout(15)
                 ->get("{$base}/{$wabaId}/subscribed_apps");
             if (! $resp->successful()) return null;
-            foreach ((array) $resp->json('data', []) as $row) {
+            $rows = (array) $resp->json('data', []);
+            foreach ($rows as $row) {
                 $override = rtrim((string) ($row['override_callback_uri'] ?? ''), '/');
                 if ($override !== '' && $override === $ourUrl) return true;
                 $id = (string) ($row['whatsapp_business_api_data']['id'] ?? '');
                 if ($ourAppId !== '' && $id === $ourAppId) return true;
             }
-            return null;   // inconclusive — GET may not expose the override
+
+            // Meta ANSWERED and our app is not among the subscribers. When we
+            // know our own app id, that is a definite NO — not "inconclusive".
+            // Returning null here was the bug: the caller treats null as
+            // "assume fine", so a number that genuinely cannot receive inbound
+            // was reported as "inbound wired", and the ✗ branch was dead code
+            // that could never run.
+            if ($ourAppId !== '') {
+                return false;
+            }
+
+            // Only genuinely inconclusive when we don't know our own app id, so
+            // there is nothing to compare the subscriber list against.
+            return null;
         } catch (\Throwable $e) {
             \Log::warning('[WABA-inbound-check] threw', ['config_id' => $cfg->id, 'error' => $e->getMessage()]);
             return null;
@@ -1148,6 +1267,97 @@ class DevicesController extends Controller
         $meta['inbound_wired']      = $wired;   // true | false | null
         $meta['inbound_checked_at'] = now()->toIso8601String();
         $cfg->forceFill(['meta_json' => $meta])->save();
+    }
+
+    /**
+     * GET /devices/waba/{id}/webhook-check — live inbound-webhook diagnostic.
+     *
+     * The health page shows "Webhook subscribed: Yes" but that only proves an
+     * app is subscribed — NOT where Meta delivers, nor whether our handler can
+     * accept the signed POST. This returns the two facts that actually decide
+     * inbound so a "subscribed but nothing arrives" case is finally legible:
+     *   1. the EXACT override_callback_uri Meta holds, vs THIS server's URL
+     *   2. whether an App Secret is stored (else signed inbound is rejected,
+     *      unless waba_verify_by_ownership rescues it)
+     * plus the one manual confirmation step (the [WA-webhook] Meta POST log).
+     */
+    public function wabaWebhookCheck(int $id): \Illuminate\Http\JsonResponse
+    {
+        $cfg    = $this->resolveWabaConfig($id);
+        $meta   = is_array($cfg->meta_json) ? $cfg->meta_json : [];
+        $wabaId = (string) ($meta['waba_id'] ?? '');
+        $token  = (string) ($cfg->creds()['access_token'] ?? '');
+        $ourUrl = rtrim(url('/webhooks/whatsapp/inbound'), '/');
+
+        $hasSecret       = (string) ($cfg->creds()['app_secret'] ?? '') !== '';
+        $adminSecret     = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: env('META_APP_SECRET', ''));
+        $ownershipVerify = (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true);
+
+        $out = [
+            'ok'                 => true,
+            'our_url'            => $ourUrl,
+            'subscribed'         => false,
+            'apps'               => [],
+            'override_url'       => null,
+            'override_matches'   => false,
+            'app_secret_stored'  => $hasSecret,
+            'admin_secret_stored'=> $adminSecret !== '',
+            'ownership_verify'   => $ownershipVerify,
+            'verdict'            => 'unknown',
+            'messages'           => [],
+        ];
+
+        if ($wabaId === '' || $token === '') {
+            return response()->json(['ok' => false, 'message' => __('This number has no WABA id / access token stored — reconnect it first.')], 422);
+        }
+
+        $version = (string) \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0');
+        $base    = 'https://graph.facebook.com/' . ltrim($version, '/');
+        try {
+            $resp = Http::withToken($token)->acceptJson()->timeout(15)->get("{$base}/{$wabaId}/subscribed_apps");
+            if (! $resp->successful()) {
+                return response()->json(['ok' => false, 'message' => __('Meta rejected the subscribed-apps read: ') . ($resp->json('error.message') ?? ('HTTP ' . $resp->status()))]);
+            }
+            foreach ((array) $resp->json('data', []) as $row) {
+                $out['apps'][] = (string) ($row['whatsapp_business_api_data']['name'] ?? ($row['name'] ?? 'App'));
+                $ov = rtrim((string) ($row['override_callback_uri'] ?? ''), '/');
+                if ($ov !== '') {
+                    $out['override_url'] = $ov;
+                    if (strcasecmp($ov, $ourUrl) === 0) $out['override_matches'] = true;
+                }
+            }
+            $out['subscribed'] = count($out['apps']) > 0;
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'message' => __('Could not reach Meta: ') . $e->getMessage()]);
+        }
+
+        // Verdict on the subscription/delivery side.
+        if (! $out['subscribed']) {
+            $out['verdict']    = 'not_subscribed';
+            $out['messages'][] = __('This number is NOT subscribed to any Meta app, so inbound cannot arrive. Click "Fix inbound — re-subscribe & verify" above.');
+        } elseif ($out['override_url'] && ! $out['override_matches']) {
+            $out['verdict']    = 'wrong_url';
+            $out['messages'][] = __('Meta is delivering inbound to a DIFFERENT server, not this one. Click "Fix inbound — re-subscribe & verify" to point it here.');
+        } elseif ($out['override_matches']) {
+            $out['verdict']    = 'delivering_here';
+            $out['messages'][] = __('Meta is delivering inbound to THIS server — the subscription and callback URL are correct.');
+        } else {
+            $out['verdict']    = 'subscribed_default';
+            $out['messages'][] = __('Subscribed, but Meta did not report an override URL (it often omits it). Inbound uses the connected app\'s default webhook callback — make sure that callback points here.');
+        }
+
+        // Downstream cause #1 of "delivered but nothing shows": the signed POST is
+        // rejected because we hold no App Secret and ownership-verify is off.
+        if ($out['verdict'] !== 'not_subscribed') {
+            if (! $hasSecret && $adminSecret === '' && ! $ownershipVerify) {
+                $out['messages'][] = setup_hint(__('WARNING: no App Secret is stored for this number and ownership-verify is OFF — Meta\'s signed inbound POSTs will be REJECTED (401). Store the Meta App Secret in Admin → WhatsApp (WABA), or enable waba_verify_by_ownership.'), __('Inbound is not fully configured for this number. Please contact support to complete setup.'));
+            } elseif (! $hasSecret && $adminSecret === '') {
+                $out['messages'][] = __('No App Secret is stored, but ownership-verify is ON, so signed inbound is accepted by number-ownership instead.');
+            }
+            $out['messages'][] = __('Final confirmation: message this number, then check the server log for "[WA-webhook] Meta POST received". If that line is ABSENT, Meta is not delivering — subscribe the "messages" field in Meta App Dashboard → WhatsApp → Webhooks. If PRESENT but rejected, store the correct App Secret.');
+        }
+
+        return response()->json($out);
     }
 
     // -----------------------------------------------------------------
@@ -1239,7 +1449,7 @@ class DevicesController extends Controller
         $appId     = trim((string) ($creds['app_id'] ?? '')) ?: trim((string) \App\Models\SystemSetting::get('waba_app_id', ''));
         $appSecret = trim((string) ($creds['app_secret'] ?? '')) ?: trim((string) \App\Models\SystemSetting::get('waba_app_secret', ''));
         if ($appId === '' || $appSecret === '') {
-            return back()->withErrors(['token' => 'Meta App ID + Secret are not configured (Admin → WhatsApp / WABA settings), so the token can not be renewed automatically. Add them, or paste a fresh token via Replace access token.']);
+            return back()->withErrors(['token' => setup_hint('Meta App ID + Secret are not configured (Admin → WhatsApp / WABA settings), so the token can not be renewed automatically. Add them, or paste a fresh token via Replace access token.', 'This number could not be renewed automatically. Paste a fresh token via Replace access token, or contact support.')]);
         }
 
         $version = (string) \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0');
@@ -1607,6 +1817,24 @@ class DevicesController extends Controller
         $region = $request->string('region')->toString() ?: 'all';
         $search = $request->string('q')->toString();
 
+        // ---- Idle-poll short-circuit -------------------------------------
+        // The page re-polls this partial every cycle. Re-running the queries,
+        // DECRYPTING every device row and re-rendering two Blade partials each
+        // time is the bulk of the cost — and on an idle workspace nothing has
+        // changed. Fingerprint the workspace's device set (row count + newest
+        // updated_at + newest heartbeat + how many are connected + newest id):
+        // any real change moves it — a pair, a disconnect, a rename, a new row.
+        // The request's own filters are folded in, so switching tab/search/page
+        // can never return a false "unchanged". Same pattern as the team-inbox
+        // queue(). Must run BEFORE the payload is built to be worth anything.
+        if ($request->wantsJson() || $request->boolean('partial')) {
+            $sig = $this->devicesFingerprint($request, $status, $region, $search);
+            if ($sig !== '' && (string) $request->query('sig', '') === $sig) {
+                return response()->json(['unchanged' => true, 'sig' => $sig]);
+            }
+            $request->attributes->set('devices_sig', $sig);
+        }
+
         $devices = Device::query()
             ->forCurrentWorkspace()
             ->withStatus($status)
@@ -1627,6 +1855,14 @@ class DevicesController extends Controller
         $wsId = $u?->current_workspace_id;
         $providerAllowed = \App\Models\SystemSetting::get('allowed_send_methods', ['waba', 'baileys', 'twilio']);
         $providerAllowed = is_array($providerAllowed) ? $providerAllowed : ['waba', 'baileys', 'twilio'];
+        // The Unofficial API (baileys) is a removable ADD-ON, off by default. When
+        // it is not installed, WorkspaceEngine hides it everywhere in the data
+        // layer — but the connect popover reads the raw saved methods, so filter
+        // it here too, or the Unofficial connect card + QR form would still show
+        // (and post to routes the addon never registered). Single master gate.
+        if (! \App\Services\WorkspaceEngine::unofficialEnabled()) {
+            $providerAllowed = array_values(array_filter($providerAllowed, fn ($m) => $m !== 'baileys'));
+        }
         $providerConfig  = $wsId ? \App\Models\WaProviderConfig::query()->primaryForWorkspace($wsId)->first() : null;
 
         // Active engine for THIS workspace — resolved by WorkspaceEngine
@@ -1754,11 +1990,28 @@ class DevicesController extends Controller
                 ->where('provider', 'sms')->orderBy('id')->get()
             : collect();
 
+        // Linked email mailboxes (via the connected MailTrixy install) — rows in
+        // the same table. MUST be resolved HERE, not only in the Blade view: the
+        // 15s background refresh re-renders _channel_rows from THIS payload
+        // (user-devices-index.js sets list.innerHTML = data.cards), so a view-only
+        // variable is undefined on that path and the rows silently disappear a few
+        // seconds after every page load — the same trap the other channels hit.
+        $hasEmail = (bool) \App\Models\SystemSetting::get('email_enabled', false)
+            && \App\Services\Mailtrixy\MailtrixyClient::fromSettings()->isConfigured();
+        $emailAccounts = ($hasEmail && $wsId)
+            ? \App\Models\WorkspaceEmailAccount::forWorkspace((int) $wsId)->orderBy('email')->get()
+            : collect();
+
         // Connect-flow gate — when admin has set an Embedded Signup
         // Config ID at /admin/settings/wadesk-message, the "Add WABA"
         // button opens the FB JS-SDK iframe; otherwise it opens the
         // manual paste modal.
         $embeddedSignupConfigId = (string) \App\Models\SystemSetting::get('waba_config_id', '');
+        // Embedded Signup version + the v4-only coexistence configuration. v2 is
+        // the default so an install that has not built a v4 configuration yet is
+        // completely unaffected by this. See resources/js/charts/user-devices-index.js.
+        $embeddedSignupVersion      = (string) \App\Models\SystemSetting::get('waba_es_version', 'v2');
+        $embeddedSignupCoexConfigId = (string) \App\Models\SystemSetting::get('waba_coex_config_id', '');
         $wabaAppId              = (string) \App\Models\SystemSetting::get('waba_app_id', '');
         $embeddedSignupReady    = $embeddedSignupConfigId !== '' && $wabaAppId !== '';
 
@@ -1841,6 +2094,8 @@ class DevicesController extends Controller
             })->all(),
             'embeddedSignupReady'    => $embeddedSignupReady,
             'embeddedSignupConfigId' => $embeddedSignupConfigId,
+            'embeddedSignupVersion'      => $embeddedSignupVersion,
+            'embeddedSignupCoexConfigId' => $embeddedSignupCoexConfigId,
             'wabaAppId'              => $wabaAppId,
             'twilioAccount'          => $twilioAccount,
             'twilioAdminDefaults'    => $twilioAdminDefaults,
@@ -1856,6 +2111,9 @@ class DevicesController extends Controller
             'tiktokAccounts'         => $tiktokAccounts,
             // SMS numbers (Twilio / MSG91) — channel rows in the same table.
             'smsSenders'             => $smsSenders,
+            // Linked email mailboxes (MailTrixy) — channel rows in the same table.
+            'hasEmail'               => $hasEmail,
+            'emailAccounts'          => $emailAccounts,
         ];
 
         if ($request->wantsJson() || $request->boolean('partial')) {
@@ -1886,6 +2144,9 @@ class DevicesController extends Controller
                 'shown'        => $devices->count() + $connectedChannels->where('engine', '!=', 'baileys')->count() + $instagramAccounts->count() + $facebookPages->count() + $tiktokAccounts->count() + $smsSenders->count(),
                 'total'        => $devices->total() + $connectedChannels->where('engine', '!=', 'baileys')->count() + $instagramAccounts->count() + $facebookPages->count() + $tiktokAccounts->count() + $smsSenders->count(),
                 'page'         => $devices->currentPage(),
+                // Echoed back by the client on its next poll; when it still
+                // matches we return {unchanged:true} and skip all of the above.
+                'sig'          => $request->attributes->get('devices_sig', ''),
             ]);
         }
 
@@ -1960,6 +2221,22 @@ class DevicesController extends Controller
             'followers' => $data['followers'] ?? null,
         ], fn ($v) => $v !== null);
 
+        // One Instagram account = one workspace, platform-wide. Inbound DMs and
+        // comments resolve their workspace from the mirror row, so a second
+        // link would mis-route that account's messages.
+        if (\App\Support\ChannelClaim::heldElsewhere(
+            \App\Models\WorkspaceIgAccount::class,
+            'instaflow_account_id',
+            (string) $data['instaflow_account_id'],
+            (int) $wsId
+        )) {
+            $taken = \App\Support\ChannelClaim::takenMessage(__('Instagram account'));
+
+            return $request->wantsJson()
+                ? response()->json(['ok' => false, 'error' => $taken], 422)
+                : back()->withErrors(['instagram' => $taken]);
+        }
+
         $row = $this->upsertIgMirror((int) $wsId, (string) $data['instaflow_account_id'], $overrides);
         if (!$row) {
             return $request->wantsJson()
@@ -2028,12 +2305,35 @@ class DevicesController extends Controller
         if (!$wsId) return back()->with('status', 'Instagram account unlinked.');
 
         \DB::transaction(function () use ($wsId, $id) {
-            \App\Models\WorkspaceIgAccount::where('workspace_id', $wsId)->where('id', $id)->delete();
+            // Delete from the table this workspace actually uses. The NATIVE
+            // add-on stores accounts in instagram_accounts (InstagramAccount);
+            // the Instaflow bridge uses workspace_ig_accounts. Deleting from the
+            // wrong one left the account still showing after "disconnect".
+            $native = (bool) \App\Models\SystemSetting::get('instagram_enabled', false);
+            $model  = $native ? \App\Models\InstagramAccount::class : \App\Models\WorkspaceIgAccount::class;
 
-            // Only wipe the mirrored inbox once NO Instagram account remains — a
-            // workspace can link several handles, and unlinking one must not blow
-            // away the others' threads.
-            $stillLinked = \App\Models\WorkspaceIgAccount::where('workspace_id', $wsId)->exists();
+            $model::where('workspace_id', $wsId)->where('id', $id)->delete();
+
+            // Keep the two IG tables in sync. The dashboard/analytics roll-up
+            // reads the WorkspaceIgAccount MIRROR, so a native delete that only
+            // cleared instagram_accounts left a ghost account (often with an
+            // empty @handle) lingering on the dashboard. In native mode, prune
+            // every mirror row that no longer has a backing native account for
+            // this workspace — that removes the just-deleted account's mirror
+            // AND clears legacy empty-handle ghosts from earlier failed connects.
+            if ($native) {
+                $liveIds = \App\Models\InstagramAccount::where('workspace_id', $wsId)
+                    ->pluck('ig_user_id')->filter()->map(fn ($v) => (string) $v)->all();
+                \App\Models\WorkspaceIgAccount::where('workspace_id', $wsId)
+                    ->when(!empty($liveIds), fn ($q) => $q->whereNotIn('instaflow_account_id', $liveIds))
+                    ->delete();
+            }
+
+            // Only wipe the mirrored inbox once NO Instagram account remains in
+            // EITHER table — a workspace can link several handles, and unlinking
+            // one must not blow away the others' threads.
+            $stillLinked = \App\Models\InstagramAccount::where('workspace_id', $wsId)->exists()
+                || \App\Models\WorkspaceIgAccount::where('workspace_id', $wsId)->exists();
             if (!$stillLinked) {
                 $convoIds = \App\Models\Conversation::where('workspace_id', $wsId)
                     ->where('channel', 'instagram')
@@ -2094,6 +2394,225 @@ class DevicesController extends Controller
             ['workspace_id' => $wsId, 'instaflow_account_id' => $accountId],
             $attrs
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Email — link accounts that live on the linked MailTrixy install
+    // -----------------------------------------------------------------
+
+    /**
+     * GET /devices/email/available — email accounts connected on MailTrixy that
+     * this workspace hasn't linked yet, for the "link existing" picker. JSON.
+     */
+    public function emailAvailable(): JsonResponse
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        if (!$wsId) return response()->json(['ok' => false, 'accounts' => []], 422);
+
+        $client = \App\Services\Mailtrixy\MailtrixyClient::fromSettings();
+        if (! $client->isConfigured()) {
+            return response()->json([
+                'ok'       => false,
+                'accounts' => [],
+                'error'    => setup_hint(
+                    __('Email is not connected — connect :brand in Admin → Add-ons.', ['brand' => mailtrixy_brand_name()]),
+                    __('Email is not connected. Please contact support to enable it.')
+                ),
+            ], 422);
+        }
+
+        // One workspace per mailbox: hide accounts ANY workspace already
+        // linked (inbound pushes resolve their workspace through the mirror
+        // row, so a second link would fight over the same mail).
+        $linked = \App\Models\WorkspaceEmailAccount::query()
+            ->pluck('mailtrixy_account_id')->map(fn ($v) => (int) $v)->all();
+
+        // SECURITY: scope the "link existing" list to mailboxes owned by the
+        // SAME person — matched by the logged-in user's email, exactly like
+        // the Instagram twin above — so we never surface another MailTrixy
+        // tenant's mailboxes. No email → no list.
+        $ownerEmail = (string) (Auth::user()?->email ?? '');
+
+        $available = [];
+        foreach ($client->accounts($ownerEmail) as $a) {
+            $id = (int) ($a['id'] ?? 0);
+            if ($id <= 0 || in_array($id, $linked, true)) continue;
+            $available[] = [
+                'id'               => $id,
+                'mtx_workspace_id' => (int) ($a['workspace_id'] ?? 0),
+                'email'            => (string) ($a['email'] ?? ''),
+                'name'             => (string) ($a['name'] ?? ''),
+                'provider'         => (string) ($a['provider'] ?? ''),
+                'status'           => (string) ($a['status'] ?? ''),
+            ];
+        }
+
+        return response()->json(['ok' => true, 'accounts' => $available]);
+    }
+
+    /**
+     * POST /devices/email/link — upsert a mirror row for a MailTrixy email
+     * account into this workspace. Account details are resolved from MailTrixy
+     * when not supplied. Content-negotiates: JSON for the modal, redirect-back
+     * for a plain form POST (the per-row "Refresh" re-syncs via this same route).
+     */
+    public function emailLink(Request $request)
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        if (!$wsId) {
+            return $request->wantsJson()
+                ? response()->json(['ok' => false, 'error' => __('No active workspace.')], 422)
+                : back()->withErrors(['email' => __('No active workspace.')]);
+        }
+
+        $data = $request->validate([
+            'account_id'       => 'required|integer',
+            'mtx_workspace_id' => 'nullable|integer',
+            'email'            => 'nullable|string|max:190',
+            'name'             => 'nullable|string|max:190',
+            'provider'         => 'nullable|string|max:64',
+        ]);
+
+        // Fill any missing details from MailTrixy's account list so a bogus id
+        // can't mint an empty mirror row. The list is owner-scoped (same rule
+        // as the picker), so it doubles as the ownership check below.
+        $ownerEmail = (string) (Auth::user()?->email ?? '');
+        $details = null;
+        foreach (\App\Services\Mailtrixy\MailtrixyClient::fromSettings()->accounts($ownerEmail) as $a) {
+            if ((int) ($a['id'] ?? 0) === (int) $data['account_id']) { $details = $a; break; }
+        }
+
+        $alreadyMine = \App\Models\WorkspaceEmailAccount::where('workspace_id', (int) $wsId)
+            ->where('mailtrixy_account_id', (int) $data['account_id'])->exists();
+
+        if (! $alreadyMine) {
+            // SECURITY: a NEW link must come from the owner-scoped list — an
+            // arbitrary account_id (another tenant's mailbox) is rejected, not
+            // minted from caller-supplied fields. Re-sync of an existing row
+            // keeps the looser fallback below (MailTrixy may be unreachable).
+            if ($details === null) {
+                $notFound = __('That email account was not found on :brand.', ['brand' => mailtrixy_brand_name()]);
+                return $request->wantsJson()
+                    ? response()->json(['ok' => false, 'error' => $notFound], 404)
+                    : back()->withErrors(['email' => $notFound]);
+            }
+
+            // One workspace per mailbox — inbound pushes resolve their
+            // workspace through the mirror row, so a duplicate link would
+            // mis-route that account's mail.
+            $linkedElsewhere = \App\Models\WorkspaceEmailAccount::where('mailtrixy_account_id', (int) $data['account_id'])
+                ->where('workspace_id', '!=', (int) $wsId)->exists();
+            if ($linkedElsewhere) {
+                $taken = __('That email account is already linked to another workspace.');
+                return $request->wantsJson()
+                    ? response()->json(['ok' => false, 'error' => $taken], 422)
+                    : back()->withErrors(['email' => $taken]);
+            }
+        }
+
+        if ($details === null && trim((string) ($data['email'] ?? '')) === '') {
+            $notFound = __('That email account was not found on :brand.', ['brand' => mailtrixy_brand_name()]);
+            return $request->wantsJson()
+                ? response()->json(['ok' => false, 'error' => $notFound], 404)
+                : back()->withErrors(['email' => $notFound]);
+        }
+        $details = $details ?? [];
+
+        $row = \App\Models\WorkspaceEmailAccount::updateOrCreate(
+            ['workspace_id' => (int) $wsId, 'mailtrixy_account_id' => (int) $data['account_id']],
+            [
+                'mtx_workspace_id' => $data['mtx_workspace_id'] ?? (int) ($details['workspace_id'] ?? 0) ?: null,
+                'email'            => trim((string) ($data['email'] ?? '')) ?: (string) ($details['email'] ?? ''),
+                'name'             => trim((string) ($data['name'] ?? '')) ?: (string) ($details['name'] ?? ''),
+                'provider'         => trim((string) ($data['provider'] ?? '')) ?: (string) ($details['provider'] ?? ''),
+                'status'           => 'connected',
+                'synced_at'        => now(),
+            ]
+        );
+
+        // Backfill the mailbox's existing mail. The live push only announces NEW
+        // messages, so without this a mailbox with history links to an empty
+        // inbox — the "I linked it but there are no chats" report. Idempotent:
+        // the ingest dedupes on the MailTrixy message id. Never fatal — the link
+        // itself already succeeded, so a slow bridge must not fail the request.
+        $synced = null;
+        try {
+            // Bounded first pull (≈300 messages) so linking a huge mailbox
+            // returns fast; the rest streams in via the inbox-poll pull sweep,
+            // which advances the same cursor in small chunks.
+            $synced = \App\Services\Mailtrixy\MailtrixySyncService::syncAccount(
+                $row, true, (string) (Auth::user()?->email ?? ''), 6
+            );
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[MAILTRIXY] link backfill failed', [
+                'mirror' => $row->id, 'error' => mb_substr($e->getMessage(), 0, 150),
+            ]);
+        }
+        $imported = (int) ($synced['imported'] ?? 0);
+
+        return $request->wantsJson()
+            ? response()->json(['ok' => true, 'account' => $row, 'imported' => $imported])
+            : back()->with('status', $imported > 0
+                ? __('Email account :email linked — :n message(s) imported.', ['email' => $row->email, 'n' => $imported])
+                : __('Email account :email linked.', ['email' => $row->email]));
+    }
+
+    /**
+     * POST /devices/email/{id}/sync — pull this mailbox's mail from MailTrixy.
+     *
+     * The bridge's live push is fire-and-forget with an 8s timeout and no
+     * retry, so a slow moment drops a message for good. This is the repair
+     * sweep (and the way to re-pull history on demand). `?full=1` restarts from
+     * the beginning instead of resuming at the stored cursor.
+     */
+    public function emailSync(int $id, Request $request)
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        $row  = $wsId
+            ? \App\Models\WorkspaceEmailAccount::where('workspace_id', $wsId)->where('id', $id)->first()
+            : null;
+
+        if (! $row) {
+            return $request->wantsJson()
+                ? response()->json(['ok' => false, 'error' => __('Email account not found.')], 404)
+                : back()->withErrors(['email' => __('Email account not found.')]);
+        }
+
+        $res = \App\Services\Mailtrixy\MailtrixySyncService::syncAccount(
+            $row, $request->boolean('full'), (string) (Auth::user()?->email ?? '')
+        );
+
+        if (! ($res['ok'] ?? false)) {
+            $msg = __('Could not sync :email right now.', ['email' => $row->email]);
+            return $request->wantsJson()
+                ? response()->json(['ok' => false, 'error' => $msg, 'detail' => $res['error'] ?? null], 422)
+                : back()->withErrors(['email' => $msg]);
+        }
+
+        $imported = (int) ($res['imported'] ?? 0);
+        $msg = $imported > 0
+            ? __(':n new message(s) imported from :email.', ['n' => $imported, 'email' => $row->email])
+            : __('No new mail for :email.', ['email' => $row->email]);
+
+        return $request->wantsJson()
+            ? response()->json(['ok' => true, 'imported' => $imported, 'message' => $msg])
+            : back()->with('status', $msg);
+    }
+
+    /**
+     * DELETE /devices/email/{id}/unlink — disconnect this workspace's link to
+     * the email account. The mailbox itself stays connected on MailTrixy; on
+     * THIS side the mirror row is removed, so the channel (and new inbound
+     * pushes for the account) stop resolving to this workspace.
+     */
+    public function emailUnlink(int $id): RedirectResponse
+    {
+        $wsId = Auth::user()?->current_workspace_id;
+        if ($wsId) {
+            \App\Models\WorkspaceEmailAccount::where('workspace_id', $wsId)->where('id', $id)->delete();
+        }
+
+        return back()->with('status', __('Email account unlinked.'));
     }
 
     public function show(int $id, Request $request, \App\Services\UnifiedMessageStream $stream): View
@@ -2249,12 +2768,17 @@ class DevicesController extends Controller
             'scheduled' => $scheduledRows->count(),
         ];
 
+        // Message-template count for this workspace — the device detail showed
+        // chat/campaign/scheduled tiles but never a template tally (#7). Local
+        // DB count so it works even when a live Meta read is unavailable.
+        $templateCount = \App\Models\WaTemplate::query()->forCurrentWorkspace()->count();
+
         return view('user.devices.detail', compact(
             'device',
             'sentSeries', 'failSeries',
             'sent7d', 'failed7d', 'delivered7d', 'deliveryPct',
             'sent24', 'failed24',
-            'recentRows', 'kindCounts',
+            'recentRows', 'kindCounts', 'templateCount',
             'msgPaginator', 'msgSourceCounts', 'msgSources', 'msgDirection', 'msgQ',
         ));
     }
@@ -2299,13 +2823,33 @@ class DevicesController extends Controller
 
         // Phone uniqueness in PHP — `phone_number` is encrypted-at-
         // rest so we can't put a unique index on the ciphertext.
-        $taken = Device::query()->forCurrentWorkspace()->get(['id', 'phone_number', 'country_code'])
+        //
+        // Checked across EVERY workspace, not just the current one. The
+        // WhatsApp session on the Node side is stored per NUMBER
+        // (baileys_auth/session_<phone>) with no workspace in the path, so a
+        // second workspace adding the same number would attach to the first
+        // workspace's existing session and connect WITHOUT a QR scan —
+        // handing it that number's live WhatsApp line. The QR scan is the
+        // only proof of number ownership in the system, so a number already
+        // claimed anywhere on this install must be refused here.
+        $taken = Device::query()->get(['id', 'workspace_id', 'phone_number', 'country_code'])
             ->first(fn ($d) => preg_replace('/\D+/', '', $d->country_code . $d->phone_number) === $full);
         if ($taken) {
+            // Only reveal the row id when it is the caller's own device — the
+            // modal uses it to resume that connection. For a number held by
+            // another workspace, say nothing about where it lives.
+            $mine = (int) ($taken->workspace_id ?? 0) === (int) Auth::user()?->current_workspace_id;
+            $msg = $mine
+                ? __('A device with that phone number already exists.')
+                : __('That number is already connected on this platform. Disconnect it there first, or use a different number.');
             if ($request->wantsJson() || $request->ajax()) {
-                return response()->json(['ok' => false, 'message' => 'A device with that phone number already exists.', 'existing_id' => $taken->id], 422);
+                $payload = ['ok' => false, 'message' => $msg];
+                if ($mine) {
+                    $payload['existing_id'] = $taken->id;
+                }
+                return response()->json($payload, 422);
             }
-            return back()->withInput()->with('error', 'A device with that phone number already exists.');
+            return back()->withInput()->with('error', $msg);
         }
 
         $device = Device::create([
@@ -2568,32 +3112,6 @@ class DevicesController extends Controller
                 'message' => $body['message'] ?? $body['details'] ?? null,
                 'error'   => $body['error'] ?? null,
             ], $res->successful() ? 200 : $res->status());
-        } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()], 502);
-        }
-    }
-
-    /**
-     * Generate the 8-digit pairing code (the alternative to QR).
-     * Calls Node's /api/get-pairing-code/:phoneNumber.
-     */
-    public function pairingCode(int $id): JsonResponse
-    {
-        $d = Device::query()->forCurrentWorkspace()->findOrFail($id);
-        $base = $this->resolveNodeUrl();
-        $phone = $this->normalisePhone($d->country_code . $d->phone_number);
-
-        if ($base === '') {
-            $seed = abs(crc32('pair-' . $d->id));
-            return response()->json([
-                'success' => true,
-                'code'    => str_pad((string) ($seed % 100000000), 8, '0', STR_PAD_LEFT),
-                'demo'    => true,
-            ]);
-        }
-        try {
-            $res = Http::timeout(50)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])->get(rtrim($base, '/') . '/api/get-pairing-code/' . urlencode($phone));
-            return response()->json($res->json() ?: ['success' => false], $res->status());
         } catch (\Throwable $e) {
             return response()->json(['success' => false, 'error' => $e->getMessage()], 502);
         }
@@ -2942,66 +3460,405 @@ class DevicesController extends Controller
             return response()->json(['ok' => false, 'reset' => $reset, 'reason' => 'bridge unreachable']);
         }
 
-        // Bridge is up — ask Node for EACH device's real state. Catches the
-        // case where the bridge is alive but the user unlinked the device from
-        // their phone's Linked Devices screen (Baileys gets a 401 /
-        // stream:error device_removed; client_ready flips to false).
+        // Bridge is up — get EACH device's real state. Catches the case where
+        // the bridge is alive but the user unlinked the device from their
+        // phone's Linked Devices screen (Baileys gets a 401 / stream:error
+        // device_removed; client_ready flips to false).
+        //
+        // ONE call, not one per device. This method used to loop every device
+        // and make a sequential 4s-timeout HTTP request inside this single web
+        // request: a 208-number workspace meant 208 round-trips (~25s at a fast
+        // 120ms each, ~14 minutes if Node stalled) fired every 10 seconds by the
+        // page. The request died before reaching the end of the list, so devices
+        // low in the list never got promoted and showed a stale "Disconnected"
+        // while being perfectly connected — and each page load healed a
+        // different slice, which is exactly how it was reported.
         $devices = Device::query()->forCurrentWorkspace()->get();
         $reset   = 0;
+
+        // phone => device rows. Two rows CAN carry the same digits (a re-paired
+        // number), so map to a list and apply the verdict to each.
+        $byPhone = [];
         foreach ($devices as $d) {
             $phone = $this->normalisePhone($d->country_code . $d->phone_number);
             if ($phone === '') continue;
-            try {
-                $r = Http::timeout(4)->acceptJson()->withHeaders(['X-Node-Token' => node_token()])->get(rtrim($base, '/') . '/api/client-status/' . urlencode($phone));
-                if (!$r->successful()) continue;
-                $body    = $r->json() ?: [];
-                $status  = (string) ($body['status']  ?? '');
-                $isReady = (bool)   ($body['isReady'] ?? false);
-                $live    = ($status === 'connected' && $isReady);
-                // Remember the row's state BEFORE we mutate it, so we can fire a
-                // notification only on a real transition (never on every poll).
-                $wasConnected = ($d->status === 'connected');
+            $byPhone[$phone][] = $d;
+        }
+        if (empty($byPhone)) {
+            return response()->json(['ok' => true, 'reset' => 0, 'checked' => 0, 'total' => 0]);
+        }
 
-                if ($live) {
-                    // Live now — refresh the heartbeat EVERY poll (this drives
-                    // the grace clock) and promote the row if it had drifted.
-                    $d->forceFill([
-                        'status'       => 'connected',
-                        'active'       => $d->activate_after_pairing ? true : $d->active,
-                        'last_seen_at' => now(),
-                    ])->save();
-                    // Reconnected after being offline → "Device connected" alert.
-                    if (!$wasConnected) {
-                        $this->notifyDeviceState($d, true);
+        $statuses = $this->fetchBulkClientStatus($base, array_keys($byPhone));
+
+        // The bulk endpoint is unavailable (older Node build that predates it).
+        // Fall back to the per-device probe, but NEVER walk the whole list in
+        // one request again — take the oldest-checked slice so every device is
+        // still covered within a few cycles instead of the same prefix forever.
+        $degraded = false;
+        if ($statuses === null) {
+            $degraded = true;
+            $slice = collect($byPhone)
+                ->sortBy(fn ($rows) => optional($rows[0]->last_seen_at)->getTimestamp() ?? 0)
+                ->take(self::STATUS_FALLBACK_BATCH)
+                ->keys()
+                ->all();
+            $statuses = [];
+            foreach ($slice as $phone) {
+                try {
+                    $r = Http::timeout(4)->acceptJson()
+                        ->withHeaders(['X-Node-Token' => node_token()])
+                        ->get(rtrim($base, '/') . '/api/client-status/' . urlencode($phone));
+                    if ($r->successful()) {
+                        $b = $r->json() ?: [];
+                        $statuses[$phone] = [
+                            'status'  => (string) ($b['status'] ?? ''),
+                            'isReady' => (bool) ($b['isReady'] ?? false),
+                        ];
                     }
-                } elseif ($d->status === 'connected' || $d->active) {
-                    // Node reports not-ready. Only flip OFFLINE if the device
-                    // has had no live heartbeat for the whole grace window —
-                    // otherwise it's a transient blip the Node layer is already
-                    // recovering from; leave it connected.
-                    $lastSeen = $d->last_seen_at;
-                    if (!$lastSeen) {
-                        // No heartbeat recorded yet (legacy / just-paired row):
-                        // seed the grace clock now instead of flipping on the
-                        // first transient miss.
-                        $d->forceFill(['last_seen_at' => now()])->save();
-                    } elseif ($lastSeen->lt($cutoff)) {
-                        $d->forceFill([
-                            'status' => 'disconnected',
-                            'active' => false,
-                        ])->save();
-                        $reset++;
-                        // Went offline past the grace window → "Device
-                        // disconnected" alert (in-app + email if opted in).
-                        $this->notifyDeviceState($d, false);
-                    }
-                    // else: within grace — transient blip, do nothing.
+                } catch (\Throwable $e) {
+                    // Skip this device; don't punish the others.
                 }
-            } catch (\Throwable $e) {
-                // Skip this device; don't punish the others.
             }
         }
-        return response()->json(['ok' => true, 'reset' => $reset]);
+
+        // Reconcile in memory. A phone the response says nothing about was not
+        // asked about (degraded slice) — leave it alone rather than guess.
+        foreach ($statuses as $phone => $state) {
+            foreach ($byPhone[$phone] ?? [] as $d) {
+                $live = (($state['status'] ?? '') === 'connected') && ($state['isReady'] ?? false);
+                if ($this->applyDeviceState($d, $live, $cutoff)) {
+                    $reset++;
+                }
+            }
+        }
+
+        return response()->json([
+            'ok'      => true,
+            'reset'   => $reset,
+            'checked' => count($statuses),
+            'total'   => count($byPhone),
+            // Surfaced so the client can widen its interval when the bridge has
+            // no bulk endpoint and we are only sampling a slice per cycle.
+            'degraded' => $degraded,
+        ]);
+    }
+
+    /**
+     * "Check status" button — CHUNKED sweep of the whole device list.
+     *
+     * The all-at-once /check crashed a 300-number workspace (one bulk call that
+     * timed out, or one giant round-trip Node couldn't answer in time). This
+     * walks the list a small batch at a time, cursored by device id: the button
+     * calls it repeatedly (after = last id seen) until `next` is null, so each
+     * HTTP request stays small and fast and one slow device can't kill the run.
+     * Each device is asked for its REAL Baileys state and its row is updated via
+     * the same grace-window rules as /check (a fresh heartbeat is never flipped
+     * offline on a single transient miss).
+     */
+    public function statusSweep(Request $request): JsonResponse
+    {
+        $base = $this->resolveNodeUrl();
+        if ($base === '') {
+            return response()->json(['ok' => false, 'reason' => 'SERVER_URL not configured', 'next' => null, 'total' => 0]);
+        }
+
+        $after = max(0, (int) $request->input('after', 0));
+        $limit = min(25, max(1, (int) $request->input('limit', 12)));
+        $cutoff = now()->subSeconds(120);
+
+        $wsId  = (int) (Auth::user()->current_workspace_id ?? 0);
+        $total = Device::query()->forCurrentWorkspace()->count();
+
+        $devices = Device::query()->forCurrentWorkspace()
+            ->where('id', '>', $after)->orderBy('id')->limit($limit)->get();
+
+        \Illuminate\Support\Facades\Log::info('[STATUS-SWEEP] batch start', [
+            'ws' => $wsId, 'after' => $after, 'limit' => $limit,
+            'base' => $base, 'total_devices' => $total, 'batch_count' => $devices->count(),
+        ]);
+
+        $results   = [];
+        $connected = 0;
+        foreach ($devices as $d) {
+            $phone = $this->normalisePhone($d->country_code . $d->phone_number);
+            $live  = false;
+            $httpStatus = null;
+            $bodyStatus = null;
+            $bodyReady  = null;
+            $err = null;
+            if ($phone !== '') {
+                try {
+                    $r = Http::timeout(5)->acceptJson()
+                        ->withHeaders(['X-Node-Token' => node_token()])
+                        ->get(rtrim($base, '/') . '/api/client-status/' . urlencode($phone));
+                    $httpStatus = $r->status();
+                    if ($r->successful()) {
+                        $b = $r->json() ?: [];
+                        $bodyStatus = $b['status'] ?? null;
+                        $bodyReady  = $b['isReady'] ?? null;
+                        $live = (($b['status'] ?? '') === 'connected') && ($b['isReady'] ?? false);
+                    }
+                } catch (\Throwable $e) {
+                    $err = $e->getMessage();
+                    // Leave $live=false; the grace window protects a recent heartbeat.
+                }
+            }
+            \Illuminate\Support\Facades\Log::info('[STATUS-SWEEP] device', [
+                'id' => $d->id, 'phone' => $phone, 'http' => $httpStatus,
+                'node_status' => $bodyStatus, 'node_ready' => $bodyReady,
+                'live' => $live, 'was' => (string) $d->status, 'err' => $err,
+            ]);
+            $this->applyDeviceState($d, $live, $cutoff);
+            if ($live) {
+                $connected++;
+            }
+            $results[] = [
+                'id'     => $d->id,
+                'live'   => $live,
+                'status' => (string) $d->fresh()->status,
+            ];
+        }
+
+        // More to do only if this batch filled the window; the cursor is the
+        // last id we just processed.
+        $next = ($devices->count() === $limit) ? (int) $devices->last()->id : null;
+
+        \Illuminate\Support\Facades\Log::info('[STATUS-SWEEP] batch done', [
+            'ws' => $wsId, 'checked' => $devices->count(),
+            'connected' => $connected, 'next' => $next, 'total' => $total,
+        ]);
+
+        return response()->json([
+            'ok'        => true,
+            'results'   => $results,
+            'connected' => $connected,
+            'checked'   => $devices->count(),
+            'next'      => $next,
+            'total'     => $total,
+        ]);
+    }
+
+    /**
+     * Bulk device check — GET variant (no CSRF, so a stale token can't silently
+     * 419 it before the controller runs). Chunked by id cursor exactly like the
+     * sweep. Logs on the FIRST line so the hit is always visible in laravel.log.
+     */
+    public function bulkCheck(Request $request): JsonResponse
+    {
+        $wsId = (int) (Auth::user()->current_workspace_id ?? 0);
+        $after = max(0, (int) $request->query('after', 0));
+        $limit = min(25, max(1, (int) $request->query('limit', 12)));
+
+        \Illuminate\Support\Facades\Log::info('[BULK-CHECK] hit', [
+            'ws' => $wsId, 'after' => $after, 'limit' => $limit, 'method' => $request->method(),
+        ]);
+
+        $base = $this->resolveNodeUrl();
+        if ($base === '') {
+            \Illuminate\Support\Facades\Log::warning('[BULK-CHECK] no SERVER_URL configured');
+            return response()->json(['ok' => false, 'reason' => 'SERVER_URL not configured', 'next' => null, 'total' => 0]);
+        }
+
+        // Probe the bridge FIRST. If Node itself isn't answering, don't grind
+        // through 200 per-device timeouts — report it so the operator restarts
+        // the WhatsApp server (which is the actual fix, e.g. after a crash).
+        $bridgeUp = false;
+        try {
+            $bridgeUp = Http::timeout(4)->get($base)->successful();
+        } catch (\Throwable $e) {
+            $bridgeUp = false;
+        }
+        if (! $bridgeUp) {
+            \Illuminate\Support\Facades\Log::warning('[BULK-CHECK] bridge DOWN — Node not responding', ['base' => $base]);
+            return response()->json([
+                'ok'     => false,
+                'reason' => 'The WhatsApp server (Node bridge) is not responding — restart it, then run this again.',
+                'next'   => null,
+                'total'  => Device::query()->forCurrentWorkspace()->count(),
+            ]);
+        }
+
+        $total   = Device::query()->forCurrentWorkspace()->count();
+        $cutoff  = now()->subSeconds(120);
+        $devices = Device::query()->forCurrentWorkspace()
+            ->where('id', '>', $after)->orderBy('id')->limit($limit)->get();
+
+        \Illuminate\Support\Facades\Log::info('[BULK-CHECK] batch', [
+            'ws' => $wsId, 'base' => $base, 'total_devices' => $total, 'batch_count' => $devices->count(),
+        ]);
+
+        $results   = [];
+        $connected = 0;
+        foreach ($devices as $d) {
+            $phone = $this->normalisePhone($d->country_code . $d->phone_number);
+            $live  = false;
+            $http  = null; $ns = null; $nr = null; $err = null;
+            if ($phone !== '') {
+                try {
+                    $r = Http::timeout(5)->acceptJson()
+                        ->withHeaders(['X-Node-Token' => node_token()])
+                        ->get(rtrim($base, '/') . '/api/client-status/' . urlencode($phone));
+                    $http = $r->status();
+                    if ($r->successful()) {
+                        $b = $r->json() ?: [];
+                        $ns = $b['status'] ?? null;
+                        $nr = $b['isReady'] ?? null;
+                        $live = (($b['status'] ?? '') === 'connected') && ($b['isReady'] ?? false);
+                    }
+                } catch (\Throwable $e) {
+                    $err = $e->getMessage();
+                }
+            }
+            \Illuminate\Support\Facades\Log::info('[BULK-CHECK] device', [
+                'id' => $d->id, 'phone' => $phone, 'http' => $http,
+                'node_status' => $ns, 'node_ready' => $nr, 'live' => $live, 'err' => $err,
+            ]);
+            $this->applyDeviceState($d, $live, $cutoff);
+            if ($live) {
+                $connected++;
+            }
+            $results[] = ['id' => $d->id, 'live' => $live, 'status' => (string) $d->fresh()->status];
+        }
+
+        $next = ($devices->count() === $limit) ? (int) $devices->last()->id : null;
+        \Illuminate\Support\Facades\Log::info('[BULK-CHECK] done', [
+            'ws' => $wsId, 'checked' => $devices->count(), 'connected' => $connected, 'next' => $next, 'total' => $total,
+        ]);
+
+        return response()->json([
+            'ok' => true, 'results' => $results, 'connected' => $connected,
+            'checked' => $devices->count(), 'next' => $next, 'total' => $total,
+        ]);
+    }
+
+    /**
+     * Cheap fingerprint of everything the devices partial renders.
+     *
+     * ONE aggregate query, no decryption, no Blade. If it matches what the
+     * client already holds, the whole partial is skipped. Deliberately built
+     * from columns that move on any visible change:
+     *   count       — a device added or deleted
+     *   updated_at  — rename, activate, region change, any save
+     *   last_seen_at— a heartbeat (this is what /devices/check writes)
+     *   connected   — the header badge and every status pill
+     *   max(id)     — a brand-new row even if counts coincidentally match
+     * The request's own filters are hashed in so a different view is never
+     * mistaken for an unchanged one. Returns '' when it cannot be computed,
+     * which makes the caller fall through to the normal full render.
+     */
+    private function devicesFingerprint(Request $request, string $status, string $region, string $search): string
+    {
+        try {
+            $row = Device::query()->forCurrentWorkspace()->selectRaw(
+                'COUNT(*) c, '
+                . 'COALESCE(MAX(updated_at), 0) mu, '
+                . 'COALESCE(MAX(last_seen_at), 0) ml, '
+                . "SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END) live, "
+                . 'COALESCE(MAX(id), 0) x'
+            )->first();
+            if (!$row) return '';
+
+            $params = md5(implode('|', [
+                $status, $region, $search,
+                (string) $request->query('page', '1'),
+                (string) $request->query('per_page', ''),
+            ]));
+
+            return $params . ':' . (int) $row->c . ':' . (string) $row->mu . ':'
+                . (string) $row->ml . ':' . (int) $row->live . ':' . (int) $row->x;
+        } catch (\Throwable $e) {
+            // Never let the optimisation break the page — fall back to a full render.
+            Log::warning('[DEVICES] fingerprint failed: ' . $e->getMessage());
+
+            return '';
+        }
+    }
+
+    /**
+     * Ask Node for many numbers in ONE request.
+     *
+     * Returns phone => ['status' => …, 'isReady' => …], or NULL when the bridge
+     * has no bulk endpoint (404/501) so the caller can degrade to sampling. A
+     * network error also returns null — same handling, and the grace window
+     * means a missed cycle never flips a live device offline.
+     */
+    private function fetchBulkClientStatus(string $base, array $phones): ?array
+    {
+        try {
+            $r = Http::timeout(self::STATUS_BULK_TIMEOUT)->acceptJson()->asJson()
+                ->withHeaders(['X-Node-Token' => node_token()])
+                ->post(rtrim($base, '/') . '/api/clients-status', ['phones' => array_values($phones)]);
+
+            if (in_array($r->status(), [404, 501], true)) {
+                return null;   // older bridge — caller falls back to sampling
+            }
+            if (!$r->successful()) {
+                return null;
+            }
+            $out = ($r->json() ?: [])['statuses'] ?? null;
+
+            return is_array($out) ? $out : null;
+        } catch (\Throwable $e) {
+            Log::warning('[DEVICES-CHECK] bulk status failed: ' . $e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Apply one device's verdict, honouring the grace window. Returns true when
+     * the row was demoted to disconnected (so the caller can count resets).
+     *
+     * Extracted verbatim from the old inline loop so the bulk and fallback paths
+     * share ONE copy — the grace-window rules are subtle, and two drifting
+     * copies is how "connected device shows offline" regressions come back.
+     */
+    private function applyDeviceState(Device $d, bool $live, \Illuminate\Support\Carbon $cutoff): bool
+    {
+        // Remember the row's state BEFORE we mutate it, so we can fire a
+        // notification only on a real transition (never on every poll).
+        $wasConnected = ($d->status === 'connected');
+
+        if ($live) {
+            // Live now — refresh the heartbeat EVERY poll (this drives the grace
+            // clock) and promote the row if it had drifted.
+            $d->forceFill([
+                'status'       => 'connected',
+                'active'       => $d->activate_after_pairing ? true : $d->active,
+                'last_seen_at' => now(),
+            ])->save();
+            // Reconnected after being offline → "Device connected" alert.
+            if (!$wasConnected) {
+                $this->notifyDeviceState($d, true);
+            }
+
+            return false;
+        }
+
+        if ($d->status === 'connected' || $d->active) {
+            // Node reports not-ready. Only flip OFFLINE if the device has had no
+            // live heartbeat for the whole grace window — otherwise it's a
+            // transient blip the Node layer is already recovering from.
+            $lastSeen = $d->last_seen_at;
+            if (!$lastSeen) {
+                // No heartbeat recorded yet (legacy / just-paired row): seed the
+                // grace clock instead of flipping on the first transient miss.
+                $d->forceFill(['last_seen_at' => now()])->save();
+
+                return false;
+            }
+            if ($lastSeen->lt($cutoff)) {
+                $d->forceFill(['status' => 'disconnected', 'active' => false])->save();
+                // Went offline past the grace window → "Device disconnected"
+                // alert (in-app + email if opted in).
+                $this->notifyDeviceState($d, false);
+
+                return true;
+            }
+            // else: within grace — transient blip, do nothing.
+        }
+
+        return false;
     }
 
     // -----------------------------------------------------------------
@@ -3303,4 +4160,5 @@ class DevicesController extends Controller
             default => 'XX',
         };
     }
+
 }

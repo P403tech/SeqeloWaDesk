@@ -22,7 +22,7 @@ class GoogleCalendarOAuthController extends Controller
         // here surfaces a clear "ask your admin" message before Google
         // ever sees the user.
         if (!$this->gcal->isEnabled() || $this->gcal->clientId() === '' || $this->gcal->clientSecret() === '') {
-            return back()->with('error', 'Google integration isn\'t configured. Ask your admin to set the OAuth Client ID + Client secret at /admin/settings/google-calendar.');
+            return back()->with('error', __('Add your Google app first — enter your OAuth Client ID and Client secret in the "Use your own Google app" panel, then click Connect Google.'));
         }
         $state = Str::random(40);
         // Remember which page the connect button was clicked from so the
@@ -56,16 +56,20 @@ class GoogleCalendarOAuthController extends Controller
             return redirect('/appointments/settings')->with('error', 'Google authorization was cancelled.');
         }
 
-        $code = (string) $request->query('code', '');
-        $exchange = $this->gcal->exchangeCode($code);
-        if (!($exchange['success'] ?? false)) {
-            return redirect('/appointments/settings')->with('error', 'Google OAuth failed: ' . ($exchange['error'] ?? 'unknown'));
-        }
-
+        // Resolve the workspace that STARTED this OAuth (from the session)
+        // BEFORE exchanging, so the code exchange uses that workspace's own
+        // Google app secret — not the auth user's current workspace, which
+        // could have been switched in another tab mid-flow.
         $wsId = (int) (session('gcal_oauth_ws') ?: Auth::user()?->current_workspace_id);
         $workspace = $wsId ? Workspace::find($wsId) : null;
         if (!$workspace) {
             return redirect('/appointments/settings')->with('error', 'No workspace context for callback.');
+        }
+
+        $code = (string) $request->query('code', '');
+        $exchange = $this->gcal->exchangeCode($code, $workspace);
+        if (!($exchange['success'] ?? false)) {
+            return redirect('/appointments/settings')->with('error', 'Google OAuth failed: ' . ($exchange['error'] ?? 'unknown'));
         }
 
         // Fetch the user's Google profile so the /google-account page

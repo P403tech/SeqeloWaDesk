@@ -796,10 +796,18 @@ class MetaGraphClient
         return $ok;
     }
 
-    public function fetchInsights(string $campaignId): array
+    /**
+     * Lifetime insights by default (date_preset=maximum) — the list cards
+     * default to the "All time" tab, and most synced campaigns are OLD ones
+     * whose spend happened weeks/months ago. The previous fixed `last_7d`
+     * window made every not-recently-active campaign read 0 even though it had
+     * really spent. Pass a UI range ('all'|'7d'|'30d') to scope it.
+     */
+    public function fetchInsights(string $campaignId, string $range = 'all'): array
     {
         if (!$this->isConfigured() || $campaignId === '') return [];
 
+        $preset = $this->rangeToDatePreset($range);
         try {
             $resp = Http::withToken($this->token)
                 ->acceptJson()
@@ -809,12 +817,33 @@ class MetaGraphClient
                     // currency (e.g. IDR) instead of a hardcoded $ — spend/cpc
                     // are already returned IN that currency by Meta.
                     'fields'      => 'impressions,clicks,spend,reach,cpc,cpm,ctr,frequency,actions,account_currency',
-                    'date_preset' => 'last_7d',
+                    'date_preset' => $preset,
                 ]);
             $this->stash($resp, 'fetchInsights', ['id' => $campaignId]);
             if (!$resp->successful()) return [];
 
             $row = $resp->json('data.0') ?? [];
+            if (empty($row)) {
+                // 200 OK but no rows = Meta has NO delivery for this window. The
+                // usual cause of "everything 0": the ad is PAUSED / in review /
+                // never activated, or nothing spent in the last 7 days.
+                Log::info('[META-API] fetchInsights EMPTY — no delivery (why 0)', [
+                    'campaign'    => $campaignId,
+                    'date_preset' => $preset,
+                    'raw'         => $resp->json('data'),   // [] straight from Meta
+                ]);
+            } else {
+                // Real numbers came back — log them so a "still 0" is traceable to
+                // Meta's own figures vs our parsing/mapping.
+                Log::info('[META-API] fetchInsights data', [
+                    'campaign'     => $campaignId,
+                    'spend'        => $row['spend']       ?? null,
+                    'impressions'  => $row['impressions'] ?? null,
+                    'clicks'       => $row['clicks']      ?? null,
+                    'reach'        => $row['reach']       ?? null,
+                    'currency'     => $row['account_currency'] ?? null,
+                ]);
+            }
             return [
                 'spend'            => (float) ($row['spend']       ?? 0),
                 'impressions'      => (int)   ($row['impressions'] ?? 0),
@@ -835,6 +864,17 @@ class MetaGraphClient
             Log::warning('Meta fetchInsights threw', ['error' => $e->getMessage()]);
             return [];
         }
+    }
+
+    /** UI range → Meta date_preset. 'all' = lifetime (maximum, up to 37 months). */
+    private function rangeToDatePreset(string $range): string
+    {
+        return match ($range) {
+            '7d'    => 'last_7d',
+            '30d'   => 'last_30d',
+            '90d'   => 'last_90d',
+            default => 'maximum',   // 'all' and anything else → lifetime
+        };
     }
 
     /**
@@ -1217,12 +1257,30 @@ class MetaGraphClient
 
     private function stash(Response $resp, string $op, array $context): void
     {
+        $this->recordUsage($resp);
         $this->lastError = [
             'op'      => $op,
             'status'  => $resp->status(),
             'body'    => $resp->json() ?? $resp->body(),
             'context' => $context,
         ];
+
+        // Full trail of EVERY Marketing-API call so "why is it 0 / why isn't it
+        // on Meta" is answerable straight from the log. Success logs the id it
+        // returned; failure logs Meta's real error object (code/subcode/message).
+        if ($resp->successful()) {
+            Log::info('[META-API] ' . $op . ' ok', [
+                'status'  => $resp->status(),
+                'id'      => $resp->json('id'),
+                'context' => $context,
+            ]);
+        } else {
+            Log::warning('[META-API] ' . $op . ' FAILED', [
+                'status'  => $resp->status(),
+                'error'   => $resp->json('error') ?? mb_substr((string) $resp->body(), 0, 400),
+                'context' => $context,
+            ]);
+        }
     }
 
     /**
@@ -1456,6 +1514,50 @@ class MetaGraphClient
     /** Last error from listCampaigns() (Meta permission/API message) — surfaced inline to the user. */
     public ?string $lastListError = null;
 
+    // ── Rate-limit awareness (Meta Business-Use-Case throttling) ──────────
+    // Standard tier allows ~300 + 40×(active ads) calls/hour PER AD ACCOUNT,
+    // and Meta reports live usage in the X-Business-Use-Case-Usage header
+    // (call_count / total_cputime / total_time as % of the allowance, plus
+    // estimated_time_to_regain_access in minutes). We read those after every
+    // call so the importer can slow down BEFORE 100% and stop cleanly on a
+    // throttle error (80004 "too many calls to this ad-account", etc.).
+    public bool $lastRateLimited = false;
+    public int $lastUsagePct = 0;        // max(call_count,total_cputime,total_time)
+    public int $retryAfterMinutes = 0;   // estimated_time_to_regain_access
+
+    /** Parse Meta's usage headers + throttle error codes off any response. */
+    private function recordUsage(Response $resp): void
+    {
+        try {
+            $hdr = $resp->header('X-Business-Use-Case-Usage');
+            if ($hdr) {
+                $j = json_decode($hdr, true) ?: [];
+                foreach ($j as $entries) {
+                    foreach ((array) $entries as $e) {
+                        if (($e['type'] ?? 'ads_management') !== 'ads_management') continue;
+                        $pct = max(
+                            (int) ($e['call_count'] ?? 0),
+                            (int) ($e['total_cputime'] ?? 0),
+                            (int) ($e['total_time'] ?? 0),
+                        );
+                        $this->lastUsagePct = max($this->lastUsagePct, $pct);
+                        if (!empty($e['estimated_time_to_regain_access'])) {
+                            $this->retryAfterMinutes = max($this->retryAfterMinutes, (int) $e['estimated_time_to_regain_access']);
+                        }
+                    }
+                }
+            }
+            // Throttle signals: HTTP 429, or Meta's rate-limit error codes.
+            $code = (int) ($resp->json('error.code') ?? 0);
+            if ($resp->status() === 429
+                || in_array($code, [4, 17, 32, 613, 80000, 80001, 80003, 80004, 80005, 80006, 80008, 80009, 80014], true)) {
+                $this->lastRateLimited = true;
+            }
+        } catch (\Throwable $e) {
+            // Never let usage parsing break a call.
+        }
+    }
+
     public function listCampaigns(int $limit = 100): array
     {
         $this->lastListError = null;
@@ -1469,15 +1571,31 @@ class MetaGraphClient
             // WHOLE request (returning zero campaigns); insights are pulled
             // per-campaign by the caller instead. effective_status widens the
             // result to include paused/archived/issue campaigns too.
-            $resp = Http::withToken($this->token)->acceptJson()->timeout(25)
+            $effStatus  = json_encode([
+                'ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'ARCHIVED',
+                'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'DISAPPROVED',
+            ]);
+            $baseFields = 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,created_time';
+            // Ad-set + ad COUNTS via summary in the SAME list call — this removes
+            // TWO extra Graph calls per campaign (fetchAdSets + fetchAds), the #1
+            // driver of the ad-account rate limit. summary(true) returns only the
+            // total_count, not the objects, so it's cheap.
+            $richFields = $baseFields
+                . ',adsets.limit(0).summary(true){id},ads.limit(0).summary(true){id}';
+
+            $make = fn (string $fields) => Http::withToken($this->token)->acceptJson()->timeout(25)
                 ->get($this->endpoint("{$this->account}/campaigns"), [
-                    'fields'           => 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,created_time',
-                    'effective_status' => json_encode([
-                        'ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'ARCHIVED',
-                        'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'DISAPPROVED',
-                    ]),
-                    'limit'            => max(1, min(500, $limit)),
+                    'fields' => $fields, 'effective_status' => $effStatus, 'limit' => max(1, min(500, $limit)),
                 ]);
+
+            $resp = $make($richFields);
+            $this->recordUsage($resp);
+            // If the nested expansion errored the whole request, fall back to the
+            // basic fields so the import still works (counts then default to 1).
+            if (!$resp->successful()) {
+                $resp = $make($baseFields);
+                $this->recordUsage($resp);
+            }
             $data = (array) $resp->json('data', []);
             Log::info('[META-IMPORT] list campaigns', [
                 'account' => $this->account,

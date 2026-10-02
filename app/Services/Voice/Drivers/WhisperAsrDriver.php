@@ -47,7 +47,7 @@ class WhisperAsrDriver implements AsrDriver
 
         $apiKey = AiKeyResolver::keyFor($this->workspace, 'openai');
         if (!$apiKey) {
-            throw new RuntimeException('No OpenAI key configured — set one in Admin → AI Keys.');
+            throw new RuntimeException(setup_hint('No OpenAI key configured — set one in Admin → AI Keys.', 'Voice transcription is temporarily unavailable. Please contact support.'));
         }
 
         $req = $this->buildRequest($apiKey)

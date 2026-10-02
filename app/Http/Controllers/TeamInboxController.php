@@ -210,7 +210,18 @@ class TeamInboxController extends Controller
         // WABA/Twilio thread stores its wa_provider_configs id in
         // Conversation.device_id (device-unification), so the same
         // ?device_id= filter narrows them with no extra query param.
-        $baileysOptions = \App\Models\Device::query()
+        // Unofficial devices appear in the filter ONLY when the Unofficial engine
+        // is enabled (addon on). Otherwise this raw Device query would still list
+        // paired baileys numbers even though the engine is gated off everywhere else.
+        // Version-tolerant: some deployed client installs still run an older
+        // WorkspaceEngine that lacks unofficialEnabled(). Fall back to TRUE (the
+        // pre-gate behaviour — list the paired numbers) when the method is
+        // absent, so replacing ONLY this file never 500s with "undefined method".
+        $unofficialOn = method_exists(\App\Services\WorkspaceEngine::class, 'unofficialEnabled')
+            ? \App\Services\WorkspaceEngine::unofficialEnabled()
+            : true;
+        $baileysOptions = $unofficialOn
+            ? \App\Models\Device::query()
             ->whereIn('user_id', $userIds->isEmpty() ? [$user?->id] : $userIds->all())
             ->orderByDesc('active')
             ->orderByDesc('id')
@@ -230,7 +241,8 @@ class TeamInboxController extends Controller
                 // so this can't be inferred from presence in the list.
                 'live'   => (bool) $d->active,
             ])
-            ->values();
+            ->values()
+            : collect();
 
         // Connected WABA / Twilio accounts — one option each (a workspace
         // can pair several WABA numbers). Their id is the wa_provider_configs
@@ -310,7 +322,31 @@ class TeamInboxController extends Controller
             }
         }
 
-        $deviceFilterOptions = $baileysOptions->concat($providerOptions)->concat($igOptions)->values();
+        // Connected email mailboxes (MailTrixy bridge). Email threads have no
+        // device_id; the value carries the mirror id and the queue filters by
+        // channel='email' (see applyDeviceFilter()). Engine-agnostic — always
+        // available when a mailbox is linked, regardless of the WhatsApp engine.
+        $emailOptions = collect();
+        if ($wsId && \Illuminate\Support\Facades\Schema::hasTable('workspace_email_accounts')) {
+            try {
+                $emailOptions = \App\Models\WorkspaceEmailAccount::query()
+                    ->forWorkspace($wsId)->connected()
+                    ->get(['id', 'email', 'name'])
+                    ->map(fn ($a) => [
+                        'id'         => $a->id,
+                        'label'      => $a->name ?: ($a->email ?: ('email' . $a->id)),
+                        'phone'      => (string) $a->email,
+                        'engine'     => __('Email'),
+                        'engine_key' => 'email',
+                        'live'       => true,
+                    ])
+                    ->values();
+            } catch (\Throwable $e) {
+                \Log::warning('[team-inbox] Email options skipped: ' . $e->getMessage());
+            }
+        }
+
+        $deviceFilterOptions = $baileysOptions->concat($providerOptions)->concat($igOptions)->concat($emailOptions)->values();
 
         // Coexistence history-sync target: the workspace's connected WABA number
         // that was onboarded in Coexistence mode. Only those can pull the last
@@ -659,6 +695,96 @@ class TeamInboxController extends Controller
             });
         }
 
+        // Email PULL from MailTrixy — the channel has no reliable provider
+        // webhook (its push is fire-and-forget, 8s, no retry), so we pull here
+        // exactly like the Instagram/Instaflow pull above: existing history +
+        // any pushes that were dropped keep flowing in while an operator is on
+        // the inbox. No-ops without a connected email mirror. Owner-scoped to
+        // this operator so MailTrixy returns only their mailboxes.
+        // Diagnostic: exactly why the email pull does / doesn't run for this ws.
+        $emailHasConnected = \App\Models\WorkspaceEmailAccount::hasConnected($wsId);
+        \Illuminate\Support\Facades\Log::info('[MAILTRIXY-SYNC] queue gate', [
+            'ws'                    => $wsId,
+            'has_connected'         => $emailHasConnected,
+            'mtx_configured'        => \App\Services\Mailtrixy\MailtrixyClient::fromSettings()->isConfigured(),
+            'mtx_connected_flag'    => (bool) \App\Models\SystemSetting::get('mailtrixy_connected', false),
+            'connected_mirror_rows' => \App\Models\WorkspaceEmailAccount::query()->forWorkspace($wsId)->connected()->count(),
+            'pull_gate_open'        => ! cache()->has("inbox:email-pull:{$wsId}"),
+        ]);
+        if ($emailHasConnected) {
+            $ownerEmail = (string) ($user->email ?? '');
+
+            // Email PULL from MailTrixy — the channel has no reliable provider
+            // webhook (its push is fire-and-forget, 8s, no retry), so we pull
+            // here like the Instaflow pull above.
+            //
+            // ONE forward cursor that only advances: syncWorkspace walks the
+            // mailbox oldest-first in SMALL chunks (maxPages=6 ≈ 300 messages)
+            // and persists the cursor, so even a 50,000-message mailbox
+            // backfills gradually across polls in the background — never in one
+            // shot, never tying up a php-fpm worker for long — and then just
+            // tails new mail. New mail also arrives instantly via the live
+            // push, so this backfill is never on the critical path.
+            //
+            // Cadence gate (20s) + an atomic lock so a slow chunk can never
+            // stack a second concurrent pull on the same workspace.
+            $emailPullKey = "inbox:email-pull:{$wsId}";
+            if (!cache()->has($emailPullKey)) {
+                cache()->put($emailPullKey, 1, now()->addSeconds(20));
+                $defer(function () use ($wsId, $ownerEmail) {
+                    // Best-effort single-flight. If the cache store has no lock
+                    // support, don't let that abort the sweep — the 20s gate
+                    // above already prevents most overlap.
+                    $lock = null;
+                    try {
+                        $lock = cache()->lock("inbox:email-pull-lock:{$wsId}", 120);
+                        if (! $lock->get()) {
+                            return; // a previous chunk is still running
+                        }
+                    } catch (\Throwable $e) {
+                        $lock = null;
+                    }
+                    try {
+                        \Illuminate\Support\Facades\Log::info('[MAILTRIXY-SYNC] pull chunk start', ['ws' => $wsId, 'owner' => $ownerEmail]);
+
+                        // One-time re-walk after deploy: an existing cursor can
+                        // sit ABOVE history that was never actually imported
+                        // (a prior narrow/inbound-only bridge, or a cursor that
+                        // advanced without ingesting). Reset it once per mirror
+                        // so the chunked forward pull re-fetches the WHOLE
+                        // mailbox from the start. Dedupes on the MailTrixy
+                        // message id, and stays scale-safe at ~300/run.
+                        foreach (\App\Models\WorkspaceEmailAccount::forWorkspace($wsId)->connected()->get() as $__m) {
+                            $__k = "mtx:rewalk:{$__m->id}";
+                            if (! cache()->has($__k)) {
+                                cache()->put($__k, 1, now()->addDays(30));
+                                $__m->forceFill(['mtx_last_message_id' => null])->save();
+                                \Illuminate\Support\Facades\Log::info('[MAILTRIXY-SYNC] cursor reset for re-walk', ['mirror' => $__m->id]);
+                            }
+                        }
+
+                        $r = \App\Services\Mailtrixy\MailtrixySyncService::syncWorkspace($wsId, false, $ownerEmail ?: null, 6);
+                        \Illuminate\Support\Facades\Log::info('[MAILTRIXY-SYNC] pull chunk done', ['ws' => $wsId] + $r);
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning('[MAILTRIXY-SYNC] queue-trigger failed: ' . $e->getMessage());
+                    } finally {
+                        try { optional($lock)->release(); } catch (\Throwable $e) {}
+                    }
+                });
+            }
+        }
+
+        // Email status/id reconcile — GLOBAL key, once/5min. Heals a mirror that
+        // MailTrixy re-registered under a new id and makes the "Connected" badge
+        // reflect MailTrixy's real per-account status.
+        if (!cache()->has('inbox:email-reconcile')) {
+            cache()->put('inbox:email-reconcile', 1, now()->addSeconds(300));
+            $defer(function () {
+                try { \App\Services\Mailtrixy\MailtrixySyncService::reconcile(); }
+                catch (\Throwable $e) { \Illuminate\Support\Facades\Log::warning('[MAILTRIXY] reconcile sweep failed: ' . $e->getMessage()); }
+            });
+        }
+
         // SLA breach sweep — GLOBAL key (SlaTracker walks every workspace once).
         if (!cache()->has('inbox:sla-sweep')) {
             cache()->put('inbox:sla-sweep', 1, now()->addSeconds(60));
@@ -714,6 +840,21 @@ class TeamInboxController extends Controller
             });
         }
 
+        // No-activity trigger: enrol deals that have gone quiet for their
+        // configured window. Nothing HAPPENS when a deal is neglected, so it has
+        // to be swept for. Every 5 minutes rather than 60s — the shortest window
+        // an operator can configure is an hour, so a tighter cadence would only
+        // re-scan the same deals. The service no-ops entirely for a workspace
+        // with no no_activity flow.
+        $idleKey = "crm:idle-sweep:{$wsId}";
+        if (!cache()->has($idleKey)) {
+            cache()->put($idleKey, 1, now()->addSeconds(300));
+            $defer(function () use ($wsId) {
+                try { app(\App\Services\Crm\DealIdleSweepService::class)->sweep($wsId, 100); }
+                catch (\Throwable $e) { \Illuminate\Support\Facades\Log::warning('[CRM] idle sweep failed: ' . $e->getMessage()); }
+            });
+        }
+
         // Campaign schedule sweep — GLOBAL redundant trigger (fires due scheduled
         // campaigns + rescues stalled 'running' ones, independent of the Node
         // heartbeat). Its own internal lock prevents double-fire.
@@ -747,7 +888,13 @@ class TeamInboxController extends Controller
             if (str_contains($deviceRaw, ':')) {
                 [$eng, $idPart] = explode(':', $deviceRaw, 2);
                 $deviceId     = (int) $idPart ?: null;
-                $deviceEngine = in_array($eng, ['baileys', 'waba', 'twilio', 'instagram'], true) ? $eng : null;
+                // Engines applyDeviceFilter() understands. 'instagram'/'sms'/'email'
+                // are engine-agnostic channels it filters by channel (their threads
+                // carry no device_id); the rest pin device_id + provider. Omitting
+                // 'email'/'sms' here made their option fall through to a device_id
+                // match — which their channel's threads never have — so the list
+                // came back EMPTY. Keep this list in sync with applyDeviceFilter().
+                $deviceEngine = in_array($eng, ['baileys', 'waba', 'twilio', 'instagram', 'sms', 'email'], true) ? $eng : null;
             } else {
                 $deviceId = (int) $deviceRaw ?: null;
             }
@@ -768,6 +915,39 @@ class TeamInboxController extends Controller
         // archived chat the operator may see (WhatsApp groups them together).
         if ($archived) { $tab = 'all'; $status = 'all'; }
 
+        // ---- Idle-poll short-circuit ------------------------------------------
+        // The list re-polls every ~5s. Re-running the window query and DECRYPTING
+        // + serialising every row each time is the bulk of the "inbox feels heavy"
+        // cost — and it grows as the operator scrolls (per_page climbs to 1000).
+        // Yet on an idle inbox nothing changed. Fingerprint the workspace's live
+        // conversation set (the superset the list AND every badge derive from):
+        // row count + newest updated_at + newest last_message_at + total unread +
+        // newest id. Any real change moves it — a new inbound bumps last_message_at
+        // and unread; a read clears unread; a reassign/tag/status/archive bumps
+        // updated_at (Eloquent save); a brand-new thread bumps count + max id. The
+        // request's own filter params are folded into the signature, so switching
+        // tab/device/search/window never yields a false "unchanged". If the sig the
+        // client echoes back matches, return immediately — no window query, no
+        // per-row decrypt, no count aggregate. Worst case is exactly today's path.
+        $paramSig = md5(implode('|', [
+            $tab, $status, (string) $teamId, $deviceRaw,
+            (string) $tagId, $archived ? '1' : '0', $search, (string) $perPage,
+            (string) $request->query('channel', ''),
+        ]));
+        $fp = Conversation::query()->forWorkspace($wsId)->forCurrentEngine()->deviceAlive()
+            ->selectRaw(
+                'COUNT(*) c, '
+                . 'COALESCE(UNIX_TIMESTAMP(MAX(updated_at)), 0) mu, '
+                . 'COALESCE(UNIX_TIMESTAMP(MAX(last_message_at)), 0) ml, '
+                . 'COALESCE(SUM(unread_count), 0) u, '
+                . 'COALESCE(MAX(id), 0) x'
+            )->first();
+        $sig = $paramSig . ':' . (int) $fp->c . ':' . (int) $fp->mu . ':'
+            . (int) $fp->ml . ':' . (int) $fp->u . ':' . (int) $fp->x;
+        if ((string) $request->query('sig', '') === $sig) {
+            return response()->json(['unchanged' => true, 'sig' => $sig]);
+        }
+
         // Engine-aware: WABA workspace only sees WABA conversations,
         // Baileys only sees Baileys, etc. Without this, switching the
         // workspace's primary engine leaves stale conversations from
@@ -776,6 +956,12 @@ class TeamInboxController extends Controller
         $q = Conversation::query()->forWorkspace($wsId)->forCurrentEngine()->deviceAlive();
 
         $this->applyDeviceFilter($q, $deviceId, $deviceEngine);
+        // Dark-rail channel tabs (All / WhatsApp / Instagram / Email / …). This
+        // is SERVER-SIDE so a channel with only OLD threads (e.g. email that
+        // sorts below the recency window) loads fully the moment its tab is
+        // clicked — it used to filter the already-loaded window client-side, so
+        // those threads never appeared until the operator scrolled the All list.
+        $this->applyChannelFilter($q, (string) $request->query('channel', ''));
 
         $q = match ($status) {
             'all'      => $q,
@@ -867,6 +1053,10 @@ class TeamInboxController extends Controller
             // 30 and re-requests while this is true.
             'has_more' => $hasMore,
             'per_page' => $perPage,
+            // Fingerprint of the workspace's live set — the client echoes this back
+            // as `sig` on the next poll; an unchanged inbox then short-circuits at
+            // the top of queue() without re-decrypting/serialising the window.
+            'sig' => $sig,
             'counts' => $this->queueCounts($user, $wsId, $teamId, $deviceId, $deviceEngine),
             // Badge for the "Archived" row (engine-scoped, workspace-wide).
             'archived_count' => Conversation::query()->forWorkspace($wsId)
@@ -900,10 +1090,52 @@ class TeamInboxController extends Controller
             return;
         }
 
+        // Email threads carry no device_id (channel='email', raw_jid
+        // 'email:<mirror>:<mtxConv>'); filter by channel so the Email option
+        // narrows the queue to the mailbox's threads.
+        if ($deviceEngine === 'email') {
+            $q->where('channel', 'email');
+            return;
+        }
+
         $q->where('device_id', $deviceId);
         // Pin the engine too so a Baileys device #N and a WABA config #N
         // (same number, different tables) never bleed into each other.
         if ($deviceEngine) $q->where('provider', $deviceEngine);
+    }
+
+    /**
+     * Narrow the queue to one dark-rail channel tab. The rail keys mirror
+     * channelKey() in the inbox JS (wa/ig/ms/tt/tg/ln/wc/vb/sms/em/widget).
+     * 'wa' means WhatsApp = every conversation that is NOT an engine-agnostic
+     * channel; the rest map to explicit channel values.
+     */
+    private function applyChannelFilter($q, string $railChannel): void
+    {
+        $railChannel = trim($railChannel);
+        if ($railChannel === '' || $railChannel === 'all') {
+            return;
+        }
+        if ($railChannel === 'wa') {
+            $q->where(fn ($w) => $w->whereNull('channel')
+                ->orWhereNotIn('channel', \App\Models\Conversation::ENGINE_AGNOSTIC_CHANNELS));
+            return;
+        }
+        $map = [
+            'ig'  => ['instagram'],
+            'ms'  => ['facebook', 'messenger'],
+            'tt'  => ['tiktok'],
+            'tg'  => ['telegram'],
+            'ln'  => ['line'],
+            'wc'  => ['wechat'],
+            'vb'  => ['viber'],
+            'sms' => ['sms'],
+            'em'  => ['email'],
+            'widget' => ['chatbot_widget', 'widget'],
+        ];
+        if (isset($map[$railChannel])) {
+            $q->whereIn('channel', $map[$railChannel]);
+        }
     }
 
     private function queueCounts(User $user, int $wsId, ?int $teamId = null, ?int $deviceId = null, ?string $deviceEngine = null): array
@@ -934,26 +1166,64 @@ class TeamInboxController extends Controller
             $allBind = [$user->id];
         }
 
-        // One pass over the same filtered set. Bindings run in SELECT order: the
-        // 'mine' placeholder first, then the 'all' CASE placeholders.
-        $row = (clone $base)->selectRaw(
-            'SUM(CASE WHEN conversations.assignee_user_id = ? THEN 1 ELSE 0 END) AS mine, '
+        // ONE pass over the filtered set, grouped by channel — this single query
+        // yields BOTH the five badge totals (summed across groups) AND the
+        // per-channel breakdown (one row per channel), so we never scan the table
+        // twice. Bindings run in SELECT order: the 'mine' placeholder first, then
+        // the 'all' CASE placeholders. per-channel uses the SAME 'all' visibility
+        // predicate, so sum(by_channel) == all and each badge matches the number
+        // of chats you see when you click that channel's tab.
+        $rows = (clone $base)->selectRaw(
+            'conversations.channel AS ch, '
+            . 'SUM(CASE WHEN conversations.assignee_user_id = ? THEN 1 ELSE 0 END) AS mine, '
             . 'SUM(CASE WHEN conversations.assignee_user_id IS NULL THEN 1 ELSE 0 END) AS unassigned, '
             . 'SUM(CASE WHEN conversations.unread_count > 0 THEN 1 ELSE 0 END) AS unread, '
             . 'SUM(CASE WHEN conversations.sla_breached = 1 THEN 1 ELSE 0 END) AS sla_breach, '
             . "SUM(CASE WHEN $allCase THEN 1 ELSE 0 END) AS all_count",
             array_merge([$user->id], $allBind)
-        )->first();
+        )->groupBy('conversations.channel')->get();
+
+        $agnostic = \App\Models\Conversation::ENGINE_AGNOSTIC_CHANNELS;
+        $map = [
+            'instagram' => 'ig', 'facebook' => 'ms', 'messenger' => 'ms',
+            'tiktok' => 'tt', 'telegram' => 'tg', 'line' => 'ln', 'wechat' => 'wc',
+            'viber' => 'vb', 'sms' => 'sms', 'email' => 'em',
+            'chatbot_widget' => 'widget', 'widget' => 'widget',
+        ];
+        // Per-channel TOTALS for the dark rail + channel-tab badges — authoritative
+        // counts over the whole visible set, NOT a tally of the loaded scroll
+        // window, so a badge never creeps up as the user scrolls, and WhatsApp's
+        // number never hides when the Instagram tab is active. Keys mirror
+        // channelKey() in the JS.
+        $byChannel = ['wa' => 0, 'ig' => 0, 'ms' => 0, 'tt' => 0, 'tg' => 0, 'ln' => 0,
+            'wc' => 0, 'vb' => 0, 'sms' => 0, 'em' => 0, 'widget' => 0];
+        $mine = $unassigned = $unread = $slaBreach = $all = 0;
+        foreach ($rows as $r) {
+            $mine       += (int) $r->mine;
+            $unassigned += (int) $r->unassigned;
+            $unread     += (int) $r->unread;
+            $slaBreach  += (int) $r->sla_breach;
+            $all        += (int) $r->all_count;
+            $ch = $r->ch;
+            // 'wa' = every conversation that is NOT an engine-agnostic channel
+            // (null channel included), mirroring applyChannelFilter('wa').
+            if ($ch === null || ! in_array($ch, $agnostic, true)) {
+                $byChannel['wa'] += (int) $r->all_count;
+            } elseif (isset($map[$ch])) {
+                $byChannel[$map[$ch]] += (int) $r->all_count;
+            }
+        }
 
         return [
-            'mine'        => (int) ($row->mine ?? 0),
-            'unassigned'  => (int) ($row->unassigned ?? 0),
-            'unread'      => (int) ($row->unread ?? 0),
+            'mine'        => $mine,
+            'unassigned'  => $unassigned,
+            'unread'      => $unread,
             'mentions'    => ConversationParticipant::where('user_id', $user->id)
                 ->where('workspace_id', $wsId)
                 ->where('unread_mentions', '>', 0)->count(),
-            'sla_breach'  => (int) ($row->sla_breach ?? 0),
-            'all'         => (int) ($row->all_count ?? 0),
+            'sla_breach'  => $slaBreach,
+            'all'         => $all,
+            'by_channel'  => $byChannel,
         ];
     }
 
@@ -1498,9 +1768,29 @@ class TeamInboxController extends Controller
             $dAgentIds = $delta->pluck('agent_id')->filter()->unique()->values()->all();
             $dAgentMap = $dAgentIds ? AiAgent::whereIn('id', $dAgentIds)->get()->keyBy('id')->all() : [];
 
+            // Delivery-tick deltas for rows the client ALREADY holds. The
+            // id-greater-than delta above can only carry NEW messages, so a
+            // delivered/read receipt landing on an existing outbound row (Meta /
+            // Twilio confirm seconds after the send) was invisible until the
+            // client's 60s full re-sync — the tick never moved. Newest 40
+            // outbound rows, four columns, no media and no relations.
+            $statuses = $conv->inboxMessages()->reorder()
+                ->where('direction', 'out')
+                ->orderByDesc('id')
+                ->limit(40)
+                ->get(['id', 'status', 'failure_reason', 'delivered_at', 'read_at'])
+                ->map(fn (InboxMessage $m) => [
+                    'id'             => $m->id,
+                    'status'         => $m->status,
+                    'failure_reason' => $m->status === 'failed' ? ($m->failure_reason ?: null) : null,
+                    'delivered_at'   => $m->delivered_at,
+                    'read_at'        => $m->read_at,
+                ])->values();
+
             return response()->json([
                 'poll'     => true,
                 'messages' => $delta->map(fn (InboxMessage $m) => $this->serializeMessage($m, $dAgentMap)),
+                'statuses' => $statuses,
             ]);
         }
 
@@ -1695,6 +1985,9 @@ class TeamInboxController extends Controller
                         ? (\Illuminate\Support\Str::startsWith($profile->image, ['http://', 'https://']) ? $profile->image : media_url($profile->image))
                         : null,
                     'custom_attributes' => is_array($profile->custom_attributes) ? $profile->custom_attributes : [],
+                    // Ad source that first brought this person in — survives the
+                    // thread being archived or re-opened, unlike conversation.ctwa.
+                    'attribution'       => is_array($profile->attribution) ? $profile->attribution : null,
                     'is_unsubscribed'   => (bool) $profile->is_unsubscribed,
                 ];
             }
@@ -1743,33 +2036,61 @@ class TeamInboxController extends Controller
     public function assign(Request $request, int $id): JsonResponse
     {
         $conv = $this->findConvInCurrentWorkspace($id);
-        $this->authorize('assign', $conv);
 
+        // Tenancy: the assign TARGET has to belong to this workspace. Bare
+        // `integer` let a crafted user_id/team_id park the thread on a member
+        // or team of ANOTHER workspace — it dropped out of this workspace's
+        // unassigned queue and the foreign user still got an assignment
+        // notification. Same Rule::exists shape the AI-assistant picker uses.
+        // (AssignmentService re-checks; this is the friendly 422 layer.)
+        $wsId = (int) $conv->workspace_id;
         $data = $request->validate([
-            'user_id'  => 'nullable|integer',
-            'team_id'  => 'nullable|integer',
+            'user_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $wsId)],
+            'team_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('teams', 'id')->where('workspace_id', $wsId)->whereNull('deleted_at')],
             'strategy' => 'nullable|in:manual,round_robin,least_loaded,sticky',
+        ], [
+            'user_id.exists' => __('That member is not part of this workspace.'),
+            'team_id.exists' => __('That team is not part of this workspace.'),
         ]);
 
+        $userId   = isset($data['user_id']) ? (int) $data['user_id'] : null;
+        $teamId   = isset($data['team_id']) ? (int) $data['team_id'] : null;
+        // Team picked with no explicit strategy → honour the team's configured
+        // assignment_strategy (it was stored and edited but never read; every
+        // caller hardcoded least_loaded, making round_robin / sticky dead).
+        $strategy = $data['strategy'] ?? ($teamId && !$userId ? $this->teamStrategy($teamId) : 'manual');
+
+        // Authorize AFTER validation because the gate depends on the target:
+        // `inbox.assign` covers any target, `inbox.assign_self` only lets an
+        // agent CLAIM the chat for themselves. Ordering is safe — the
+        // conversation is already proven to be in the actor's own workspace.
+        $this->authorize('assign', [$conv, $userId, $teamId, $strategy]);
+
         $previousUserId = $conv->assignee_user_id;
-        $strategy = $data['strategy'] ?? 'manual';
-        $resolved = $this->assignment->assign($conv, $data['user_id'] ?? null, $data['team_id'] ?? null, $strategy, $request->user()->id);
+        try {
+            $resolved = $this->assignment->assign($conv, $userId, $teamId, $strategy, $request->user()->id);
+        } catch (\App\Exceptions\AssignmentTargetException $e) {
+            // e.g. the member passed validation on the workspace_user pivot
+            // (which has no FK and survives user deletion) but the account is
+            // soft-deleted. Refuse rather than write null and answer ok.
+            return response()->json(['ok' => false, 'message' => $e->humanMessage()], 422);
+        }
 
         if ($resolved) {
             $this->notify->notifyAssignment($conv->fresh(), $resolved->id, $request->user()->id);
         }
         AuditLogger::workspace('conversation.assigned', $request->user()->id, $conv->workspace_id, 'conversation', $conv->id, [
-            'to_user_id' => $resolved?->id, 'team_id' => $data['team_id'] ?? null, 'strategy' => $strategy,
+            'to_user_id' => $resolved?->id, 'team_id' => $teamId, 'strategy' => $strategy,
         ]);
         broadcast(ConversationAssigned::fromModel($conv->fresh(), $previousUserId, $request->user()->id))->toOthers();
         app(\App\Services\Inbox\OutboundWebhookDispatcher::class)->fire('conversation.assigned', $conv->fresh(), [
             'to_user_id' => $resolved?->id,
-            'team_id'    => $data['team_id'] ?? null,
+            'team_id'    => $teamId,
             'strategy'   => $strategy,
             'by_user_id' => $request->user()->id,
         ]);
 
-        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($conv->fresh())]);
+        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($this->freshListItem($conv))]);
     }
 
     public function unassign(Request $request, int $id): JsonResponse
@@ -1782,7 +2103,7 @@ class TeamInboxController extends Controller
         broadcast(ConversationAssigned::fromModel($conv->fresh(), $previousUserId, $request->user()->id))->toOthers();
         AuditLogger::workspace('conversation.unassigned', $request->user()->id, $conv->workspace_id, 'conversation', $conv->id);
 
-        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($conv->fresh())]);
+        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($this->freshListItem($conv))]);
     }
 
     /**
@@ -1949,7 +2270,7 @@ class TeamInboxController extends Controller
             'resolved_at'          => now()->toIso8601String(),
         ]);
 
-        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($conv->fresh())]);
+        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($this->freshListItem($conv))]);
     }
 
     public function reopen(Request $request, int $id): JsonResponse
@@ -1962,7 +2283,7 @@ class TeamInboxController extends Controller
         AuditLogger::workspace('conversation.reopened', $request->user()->id, $conv->workspace_id, 'conversation', $conv->id);
         broadcast(ConversationUpdated::fromModel($conv->fresh(), 'reopened'))->toOthers();
 
-        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($conv->fresh())]);
+        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($this->freshListItem($conv))]);
     }
 
     public function snooze(Request $request, int $id): JsonResponse
@@ -1977,7 +2298,7 @@ class TeamInboxController extends Controller
         AuditLogger::workspace('conversation.snoozed', $request->user()->id, $conv->workspace_id, 'conversation', $conv->id, ['until' => $data['until']]);
         broadcast(ConversationUpdated::fromModel($conv->fresh(), 'snoozed', ['until' => $data['until']]))->toOthers();
 
-        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($conv->fresh())]);
+        return response()->json(['ok' => true, 'conversation' => $this->serializeListItem($this->freshListItem($conv))]);
     }
 
     /**
@@ -2040,6 +2361,11 @@ class TeamInboxController extends Controller
             'owner_user_id'   => (int) $request->user()->id,
             'source'          => 'inbox',
             'sort_order'      => 0,
+            // Carry the ad attribution onto the deal, so pipeline revenue can be
+            // traced back to the ad that produced the conversation — the same
+            // `meta_ad` shape MetaLeadIngestService stamps on a lead-ad deal.
+            'meta'            => array_filter(['ctwa' => is_array($conv->routing_meta ?? null)
+                ? ($conv->routing_meta['ctwa'] ?? null) : null]),
         ]);
 
         ConversationEvent::record($conv->id, $wsId, $request->user()->id, 'note_added', [
@@ -2258,6 +2584,34 @@ class TeamInboxController extends Controller
         // workspace boundaries. Legacy NULL-workspace rows fall back
         // to the original opener via the scope.
         return Conversation::query()->forCurrentWorkspace()->findOrFail($id);
+    }
+
+    /**
+     * Re-read a conversation WITH the relations serializeListItem() reads.
+     *
+     * The mutation endpoints used to serialize `$conv->fresh()`, and fresh()
+     * loads no relations — so `assignee_name` / `team_name` / `team_color` /
+     * `tags` came back null on the very response that had just changed them
+     * (serializeListItem only emits those when the relation is loaded). The
+     * client papered over it by immediately refetching. Same eager-load set
+     * as queue() so a mutation response is correct on its own.
+     */
+    /**
+     * teams.assignment_strategy, honoured. The column was validated, stored,
+     * shipped to the client and editable in the UI, but nothing ever read it —
+     * every caller hardcoded 'least_loaded', so round_robin / sticky could
+     * never run. Falls back to least_loaded for teams that never set one.
+     */
+    private function teamStrategy(int $teamId): string
+    {
+        $strategy = Team::forWorkspace((int) Auth::user()->current_workspace_id)
+            ->whereKey($teamId)->value('assignment_strategy');
+        return in_array($strategy, Team::STRATEGIES, true) ? $strategy : 'least_loaded';
+    }
+
+    private function freshListItem(Conversation $conv): Conversation
+    {
+        return $conv->fresh(['assignee:id,name', 'team:id,name,color', 'tags:id,name,color']) ?? $conv;
     }
 
     private function findConvMessage(int $convId, int $msgId): InboxMessage
@@ -2768,10 +3122,64 @@ class TeamInboxController extends Controller
         return response()->json(['ok' => $ok, 'error' => $ok ? null : ($res['error'] ?? 'run_failed')], $ok ? 200 : 502);
     }
 
+    /**
+     * Stand the AI down because a human just took the conversation.
+     *
+     * Two things happen, and both are needed:
+     *   1. `assignee_agent_id` is cleared — that is the only gate
+     *      AiAgentService::respondIfAssigned checks, so this stops the current
+     *      agent immediately.
+     *   2. `routing_meta.ai_paused_by_human_at` is stamped, recording that a
+     *      human took over and when — so the handoff is auditable and a future
+     *      auto-assign path cannot silently re-arm the thread.
+     *
+     * Re-attaching an agent from the inbox clears the marker, which is the
+     * deliberate "AI, take it back" action.
+     */
+    private function pauseAiForHumanTakeover($conv, ?int $userId): void
+    {
+        if (! $conv) {
+            return;
+        }
+
+        $meta = is_array($conv->routing_meta) ? $conv->routing_meta : [];
+
+        // Already paused — don't rewrite the timestamp on every reply.
+        if (! empty($meta['ai_paused_by_human_at']) && ! $conv->assignee_agent_id) {
+            return;
+        }
+
+        $hadAgent = (bool) $conv->assignee_agent_id;
+        $meta['ai_paused_by_human_at'] = now()->toIso8601String();
+        $meta['ai_paused_by_user_id']  = $userId;
+        // A voice assistant answers on the same thread and would clash the same
+        // way, so it stops too.
+        unset($meta['voice_assistant_id'], $meta['voice_assistant_name'], $meta['voice_assistant_at']);
+
+        $conv->forceFill([
+            'routing_meta'      => $meta,
+            'assignee_agent_id' => null,
+        ])->save();
+
+        if ($hadAgent) {
+            \Log::info('[AI-TAKEOVER] human replied — AI paused', [
+                'conversation' => $conv->id, 'user' => $userId,
+            ]);
+        }
+    }
+
     public function reply(Request $request, int $id): JsonResponse
     {
         $conv = $this->findConvInCurrentWorkspace($id);
         $this->authorize('reply', $conv);
+
+        // HUMAN TAKEOVER. The moment an operator types into a thread, the AI
+        // stands down — otherwise both answer the same customer and the replies
+        // clash. Only "Detach AI" and assignment used to do this, so a manual
+        // reply left the agent live and it kept answering alongside the human.
+        // Re-attaching an agent from the inbox is the deliberate "AI, take it
+        // back" action and lifts the pause.
+        $this->pauseAiForHumanTakeover($conv, $request->user()?->id);
 
         $data = $request->validate([
             'body'         => 'nullable|string|max:4096',
@@ -2910,13 +3318,28 @@ class TeamInboxController extends Controller
             return response()->json(['ok' => false, 'error' => 'empty_body'], 422);
         }
 
-        // Resolve {{N}} → workspace attribute values BEFORE the wallet
-        // charge / dispatch — so the customer receives the substituted
-        // text, not the placeholder.
+        // Resolve the recipient Contact so {{name}} and per-contact attributes
+        // personalize THIS send, instead of resolving to a workspace-wide value
+        // (or blank) for everyone. contact_id first; fall back to a phone match.
+        $recipientContact = $conv->contact_id
+            ? \App\Models\Contact::where('workspace_id', $conv->workspace_id)->find($conv->contact_id)
+            : null;
+        if (!$recipientContact) {
+            $recipientContact = \App\Models\Contact::where('workspace_id', $conv->workspace_id)->get()
+                ->first(function ($c) use ($conv) {
+                    $digits = preg_replace('/\D+/', '', (string) ($c->mobile ?: ''));
+                    return $digits !== '' && ($digits === $conv->raw_jid || $digits === $conv->alt_jid);
+                });
+        }
+
+        // Resolve {{N}} / {{name}} → per-contact value (falling back to the
+        // workspace attribute) BEFORE the wallet charge / dispatch — so the
+        // customer receives the substituted text, not the placeholder.
         $data['body'] = app(\App\Services\AttributeResolver::class)->resolve(
             $data['body'],
             $data['variable_map'] ?? [],
             (int) $conv->workspace_id,
+            $recipientContact,
         );
 
         // Resolve recipient phone — pull from the most recent inbound
@@ -3649,7 +4072,7 @@ class TeamInboxController extends Controller
             ]);
             return response()->json([
                 'ok'    => false,
-                'error' => 'Voice upload failed — media storage is not writable. If Cloud Storage is enabled (Admin → Storage), verify its credentials or switch it off to use local; otherwise make storage/app/public writable and run "php artisan storage:link".',
+                'error' => setup_hint('Voice upload failed — media storage is not writable. If Cloud Storage is enabled (Admin → Storage), verify its credentials or switch it off to use local; otherwise make storage/app/public writable and run "php artisan storage:link".', 'Voice upload failed — media storage is unavailable. Please contact support.'),
             ], 422);
         }
 
@@ -3780,15 +4203,24 @@ class TeamInboxController extends Controller
 
     public function bulk(Request $request): JsonResponse
     {
+        // Same tenancy rule as assign() — the bulk path writes the SAME
+        // assignee columns, so a bare `integer` here reopened the exact hole
+        // one endpoint over. tag_id rides along: syncWithoutDetaching() below
+        // would otherwise pin another workspace's tag onto these threads.
+        $bulkWsId = (int) $request->user()->current_workspace_id;
         $data = $request->validate([
             'ids'    => 'required|array|min:1',
             'ids.*'  => 'integer',
             'action' => 'required|in:assign,resolve,reopen,snooze,priority,tag,spam,archive,unarchive,pin,unpin,mute,unmute,delete',
-            'user_id'  => 'nullable|integer',
-            'team_id'  => 'nullable|integer',
-            'tag_id'   => 'nullable|integer',
+            'user_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $bulkWsId)],
+            'team_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('teams', 'id')->where('workspace_id', $bulkWsId)],
+            'tag_id'   => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('tags', 'id')->where('workspace_id', $bulkWsId)],
             'priority' => 'nullable|in:' . implode(',', Conversation::PRIORITIES),
             'until'    => 'nullable|date',
+        ], [
+            'user_id.exists' => __('That member is not part of this workspace.'),
+            'team_id.exists' => __('That team is not part of this workspace.'),
+            'tag_id.exists'  => __('That label is not part of this workspace.'),
         ]);
 
         $convs = Conversation::forWorkspace($request->user()->current_workspace_id)
@@ -3805,7 +4237,14 @@ class TeamInboxController extends Controller
 
             switch ($data['action']) {
                 case 'assign':
-                    $this->assignment->assign($conv, $data['user_id'] ?? null, $data['team_id'] ?? null, 'manual', $request->user()->id);
+                    try {
+                        $this->assignment->assign($conv, $data['user_id'] ?? null, $data['team_id'] ?? null, 'manual', $request->user()->id);
+                    } catch (\App\Exceptions\AssignmentTargetException $e) {
+                        // Target no longer assignable — skip this row rather
+                        // than wipe its current assignee. `continue 2` because
+                        // we're inside a switch inside the foreach.
+                        continue 2;
+                    }
                     break;
                 case 'resolve':
                     $bAgentId = $conv->assignee_agent_id;
@@ -4108,15 +4547,28 @@ class TeamInboxController extends Controller
             RoutingRule::where('workspace_id', $ws->id)->count(),
         );
 
+        // A fallback rule IS "if nothing else matched", so it legitimately
+        // carries no conditions — `required` (which rejects an empty array)
+        // made a true catch-all impossible to author. Only non-fallback rules
+        // must bring at least one condition. RoutingEngine::matches() treats a
+        // fallback with zero conditions as "always", so the rule actually fires.
         $data = $request->validate([
             'name'          => 'required|string|max:128',
-            'conditions'    => 'required|array',
-            'actions'       => 'required|array',
+            'conditions'    => $request->boolean('is_fallback') ? 'present|array' : 'required|array|min:1',
+            'actions'       => 'required|array|min:1',
             'stop_on_match' => 'nullable|boolean',
             'is_active'     => 'nullable|boolean',
             'is_fallback'   => 'nullable|boolean',
             'sort'          => 'nullable|integer',
-        ]);
+        ] + $this->routingActionRules($request), [
+            'conditions.required' => __('Add at least one condition, or mark this rule as the fallback.'),
+            'conditions.min'      => __('Add at least one condition, or mark this rule as the fallback.'),
+        ] + $this->routingActionMessages());
+        // Laravel drops array keys that carry no rule of their own, so the
+        // per-action rules below would strip every OTHER action key
+        // (set_priority.value, add_tag.name, auto_reply.body …). The payload is
+        // already validated at this point, so take the actions back verbatim.
+        $data['actions'] = $request->input('actions', []);
         $rule = RoutingRule::create(array_merge($data, [
             'workspace_id' => $request->user()->current_workspace_id,
         ]));
@@ -4127,8 +4579,57 @@ class TeamInboxController extends Controller
     {
         if (!WorkspacePermissions::userCan($request->user(), 'routing.manage')) abort(403);
         $rule = RoutingRule::forWorkspace($request->user()->current_workspace_id)->findOrFail($id);
-        $rule->update($request->only('name', 'conditions', 'actions', 'stop_on_match', 'is_active', 'is_fallback', 'sort'));
+        // `$request->only(...)` stored the actions array verbatim, so this
+        // endpoint re-opened the foreign-assignee hole that assign()/bulk()
+        // close: a PATCH with actions:[{type:'assign_user',user_id:<other
+        // workspace>}] parked every matching inbound on a foreign member.
+        // `sometimes` keeps the is_active-only toggle working.
+        $data = $request->validate([
+            'name'          => 'sometimes|required|string|max:128',
+            'conditions'    => 'sometimes|array',
+            'actions'       => 'sometimes|array|min:1',
+            'stop_on_match' => 'sometimes|boolean',
+            'is_active'     => 'sometimes|boolean',
+            'is_fallback'   => 'sometimes|boolean',
+            'sort'          => 'sometimes|integer',
+        ] + $this->routingActionRules($request), $this->routingActionMessages());
+        // Same as routingStore: keep the non-id action keys the rule set omits.
+        if ($request->has('actions')) $data['actions'] = $request->input('actions', []);
+        $rule->update($data);
         return response()->json(['ok' => true, 'rule' => $rule->fresh()]);
+    }
+
+    /**
+     * Per-action shape for routing rules. The engine hands `user_id` /
+     * `team_id` straight to AssignmentService, so an unvalidated actions blob
+     * is an assignment endpoint in disguise — it gets the same workspace
+     * scoping as assign()/bulk(). `set_escalation` nests its own follow-up
+     * action, so that team id is scoped too.
+     */
+    private function routingActionRules(Request $request): array
+    {
+        $wsId = (int) $request->user()->current_workspace_id;
+        $member = \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $wsId);
+        $team   = \Illuminate\Validation\Rule::exists('teams', 'id')->where('workspace_id', $wsId)->whereNull('deleted_at');
+
+        return [
+            'actions.*'                       => 'array',
+            'actions.*.type'                  => 'required|string|max:32',
+            'actions.*.user_id'               => ['nullable', 'integer', $member],
+            'actions.*.team_id'               => ['nullable', 'integer', $team],
+            'actions.*.then_action.team_id'   => ['nullable', 'integer', clone $team],
+            'actions.*.then_action.user_id'   => ['nullable', 'integer', clone $member],
+        ];
+    }
+
+    private function routingActionMessages(): array
+    {
+        return [
+            'actions.*.user_id.exists'             => __('That member is not part of this workspace.'),
+            'actions.*.team_id.exists'             => __('That team is not part of this workspace.'),
+            'actions.*.then_action.user_id.exists' => __('That member is not part of this workspace.'),
+            'actions.*.then_action.team_id.exists' => __('That team is not part of this workspace.'),
+        ];
     }
 
     public function routingDestroy(Request $request, int $id): JsonResponse
@@ -4897,6 +5398,9 @@ class TeamInboxController extends Controller
             && $this->workspaceCallingEnabled((int) $c->workspace_id)
             && ($c->provider === 'waba' || ! $this->workspaceHasBaileys((int) $c->workspace_id));
 
+        // Compute the 24h session window ONCE (was evaluated twice per row).
+        $win = $this->sessionWindow($c);
+
         return [
             'id'                => $c->id,
             // Customer phone numbers are masked everywhere they're displayed —
@@ -4911,8 +5415,8 @@ class TeamInboxController extends Controller
             // from Meta so it never expires / gets hotlink-blocked. null → the
             // UI falls back to initials.
             'avatar'            => $this->igAvatarUrl($c),
-            'windowed'          => $this->sessionWindow($c)['windowed'],
-            'window_at'         => $this->sessionWindow($c)['window_at'],
+            'windowed'          => $win['windowed'],
+            'window_at'         => $win['window_at'],
             'assignee_user_id'  => $c->assignee_user_id,
             'assignee_name'     => $c->relationLoaded('assignee') ? optional($c->assignee)->name : null,
             'assignee_team_id'  => $c->assignee_team_id,
@@ -5037,7 +5541,13 @@ class TeamInboxController extends Controller
             }
         }
 
+        // Click-to-WhatsApp attribution — which ad started this conversation.
+        // Captured by WaWebhookController::applyCtwaReferral from Meta's
+        // `referral` block on the first inbound after an ad tap.
+        $ctwa = is_array($c->routing_meta ?? null) ? ($c->routing_meta['ctwa'] ?? null) : null;
+
         return array_merge($this->serializeListItem($c), [
+            'ctwa'                   => is_array($ctwa) ? $ctwa : null,
             'tags'                   => $tags,
             'resolved_at'            => $c->resolved_at,
             'resolved_by'            => $c->resolved_by,
@@ -5119,6 +5629,16 @@ class TeamInboxController extends Controller
             ];
         }
 
+        // Email (bridge) message — subject + sender for the mail-style bubble.
+        // The body stays the plain-text part; HTML mail is not rendered inline.
+        $email = null;
+        if (is_array($meta['email'] ?? null)) {
+            $email = [
+                'subject' => (string) ($meta['email']['subject'] ?? ''),
+                'from'    => (string) (($meta['email']['from_name'] ?? '') ?: ($meta['email']['from_email'] ?? '')),
+            ];
+        }
+
         // Normalize any "unsupported / can't be displayed" placeholder to ONE
         // clear line so the operator always sees the same friendly message,
         // regardless of source — the WABA webhook's "[Unsupported message …]",
@@ -5161,6 +5681,7 @@ class TeamInboxController extends Controller
                         $wsId,
                         (string) $m->meta['waba_media_id'],
                         (string) ($m->meta['waba_mime_type'] ?? ''),
+                        (string) ($m->meta['waba_filename'] ?? ''),
                     );
                     if ($path) {
                         $m->forceFill(['media_path' => $path])->save();
@@ -5224,6 +5745,7 @@ class TeamInboxController extends Controller
             'frequently_forwarded'  => $frequentlyForwarded,
             'catalog'    => $catalog,
             'location'   => $location,
+            'email'      => $email,
             // Voice-call entry — renderer draws a WhatsApp-style call bubble
             // ("Voice call · 4 min" / "Missed voice call") from these fields.
             'call'       => $m->media_type === 'call' ? [
@@ -5377,6 +5899,11 @@ class TeamInboxController extends Controller
             'name'          => 'required|string|max:191',
             'provider'      => 'required|in:openai,anthropic,gemini,mistral,muse',
             'model'         => 'required|string|max:64',
+            'provider'      => 'required|in:openai,anthropic,gemini,mistral,deepseek,xai,perplexity,groq,qwen,moonshot,zai,cohere,nvidia,llama,huggingface,baidu,ai21,reka,yi,openrouter',
+            'model'         => 'required|string|max:64',
+            // Link to a trained /ai-training assistant so this inbox agent answers
+            // WITH that knowledge base. Workspace-scoped so a forged id can't link
+            // another tenant's assistant. Nullable = no knowledge base (as before).
             'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
             'tone'          => 'nullable|in:friendly,professional,concise,empathetic',
@@ -5445,6 +5972,7 @@ class TeamInboxController extends Controller
         $data = $request->validate([
             'name'          => 'sometimes|string|max:191',
             'provider'      => 'sometimes|in:openai,anthropic,gemini,mistral,muse',
+            'provider'      => 'sometimes|in:openai,anthropic,gemini,mistral,deepseek,xai,perplexity,groq,qwen,moonshot,zai,cohere,nvidia,llama,huggingface,baidu,ai21,reka,yi,openrouter',
             'model'         => 'sometimes|string|max:64',
             'knowledge_assistant_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('ai_chat_assistants', 'id')->where('workspace_id', $request->user()->current_workspace_id)],
             'system_prompt' => 'nullable|string|max:4000',
@@ -5576,6 +6104,11 @@ class TeamInboxController extends Controller
             // The AsrDriver/TtsDriver classes look the value up via
             // AiProviderKey::keyFor(workspace, 'elevenlabs').
             'provider' => 'required|in:openai,anthropic,gemini,muse,elevenlabs',
+            // All 20 LLM brands can hold a per-workspace BYOK key (same slugs the
+            // admin registry + agent picker use), plus the voice providers
+            // (`elevenlabs`, `deepgram`) so TTS/ASR keys register in the same modal.
+            // Keys are resolved generically by AiProviderKey::keyFor(workspace, slug).
+            'provider' => 'required|in:openai,anthropic,gemini,mistral,deepseek,xai,perplexity,groq,qwen,moonshot,zai,cohere,nvidia,llama,huggingface,baidu,ai21,reka,yi,openrouter,elevenlabs,deepgram',
             'api_key'  => 'required|string|min:8|max:512',
         ]);
         $wsId = $request->user()->current_workspace_id;
@@ -5621,7 +6154,13 @@ class TeamInboxController extends Controller
 
         $old = $convo->assignee_agent_id;
         if ($agentId) {
-            $convo->update(['assignee_agent_id' => $agentId]);
+            // Attaching an agent by hand is the deliberate "AI, take it back"
+            // action, so it lifts the human-takeover pause a manual reply set —
+            // otherwise the thread would read as armed while staying paused.
+            $meta = is_array($convo->routing_meta) ? $convo->routing_meta : [];
+            unset($meta['ai_paused_by_human_at'], $meta['ai_paused_by_user_id']);
+
+            $convo->update(['assignee_agent_id' => $agentId, 'routing_meta' => $meta]);
             // Stop any running flow session so the flow doesn't keep replying
             // over the AI agent that just took over (see endActiveFlowSession).
             $this->endActiveFlowSession($convo);
@@ -5687,7 +6226,8 @@ class TeamInboxController extends Controller
         $path = app(\App\Services\Waba\WabaMediaFetcher::class)->downloadToDisk(
             $wsId,
             $mediaId,
-            (string) ($msg->meta['waba_mime_type'] ?? '')
+            (string) ($msg->meta['waba_mime_type'] ?? ''),
+            (string) ($msg->meta['waba_filename'] ?? ''),
         );
         if (!$path) {
             // Media id may have expired (>30 days) or the token is invalid.

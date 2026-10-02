@@ -450,6 +450,39 @@ class AutoReplyController extends Controller
             $senders = $senders->concat($tgSenders)->values();
         }
 
+        // LINE channels are a first-class auto-reply channel too — appended exactly
+        // as Telegram is. senders() omits LINE from the default set, so request it
+        // explicitly and merge. A saved LINE rule fans out with provider='line' +
+        // device_id=<LineChannel row id> via store().
+        $lineSenders = \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_LINE]);
+        if ($lineSenders->isNotEmpty()) {
+            $senders = $senders->concat($lineSenders)->values();
+        }
+
+        // WeChat Official Accounts — appended exactly as LINE is. A saved WeChat
+        // rule fans out with provider='wechat' + device_id=<WeChatChannel row id>.
+        $wechatSenders = \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_WECHAT]);
+        if ($wechatSenders->isNotEmpty()) {
+            $senders = $senders->concat($wechatSenders)->values();
+        }
+
+        // Viber Public Accounts — appended exactly as WeChat is. A saved Viber rule
+        // fans out with provider='viber' + device_id=<ViberChannel row id>.
+        $viberSenders = \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_VIBER]);
+        if ($viberSenders->isNotEmpty()) {
+            $senders = $senders->concat($viberSenders)->values();
+        }
+
+        // Email mailboxes (MailTrixy mirror rows) — appended exactly as Viber is.
+        // senders() omits Email from the default set, so request it explicitly and
+        // merge. Empty when the workspace has no linked mailbox (or email_enabled
+        // is off / the bridge is disconnected). A saved Email rule fans out with
+        // provider='email' + device_id=<WorkspaceEmailAccount row id> via store().
+        $emailSenders = \App\Services\WorkspaceEngine::senders($wsId, [\App\Services\WorkspaceEngine::ENGINE_EMAIL]);
+        if ($emailSenders->isNotEmpty()) {
+            $senders = $senders->concat($emailSenders)->values();
+        }
+
         // Pre-tick EVERY sender this keyword already fires on (not just the one
         // row being edited), so an edit shows all its numbers ticked and saving
         // keeps them. Keyed engine:device to match the unified sender picker.
@@ -651,11 +684,11 @@ class AutoReplyController extends Controller
             'priority'             => 'nullable|integer|min:0|max:9999',
             // Step 2 — Resend (value + Minutes/Hours/Days) → stored as seconds in cooldown.
             'resend_value'         => 'nullable|integer|min:0|max:100000',
-            'resend_unit'          => ['nullable', Rule::in(['minutes', 'hours', 'days'])],
+            'resend_unit'          => ['nullable', Rule::in(['seconds', 'minutes', 'hours', 'days'])],
             // Step 2 — Agent override + Resume after.
             'stop_on_agent_reply'  => 'nullable|boolean',
             'resume_value'         => 'nullable|integer|min:0|max:100000',
-            'resume_unit'          => ['nullable', Rule::in(['minutes', 'hours', 'days'])],
+            'resume_unit'          => ['nullable', Rule::in(['seconds', 'minutes', 'hours', 'days'])],
             // Step 3 — Working hours + outside-hours behaviour.
             'wh_enabled'           => 'nullable|boolean',
             'wh_days'              => 'nullable|array',
@@ -894,10 +927,10 @@ class AutoReplyController extends Controller
             'ig_trigger'           => ['sometimes', 'nullable', Rule::in(KeywordReply::IG_TRIGGERS)],
             'priority'             => 'sometimes|nullable|integer|min:0|max:9999',
             'resend_value'         => 'sometimes|nullable|integer|min:0|max:100000',
-            'resend_unit'          => ['sometimes', 'nullable', Rule::in(['minutes', 'hours', 'days'])],
+            'resend_unit'          => ['sometimes', 'nullable', Rule::in(['seconds', 'minutes', 'hours', 'days'])],
             'stop_on_agent_reply'  => 'sometimes|boolean',
             'resume_value'         => 'sometimes|nullable|integer|min:0|max:100000',
-            'resume_unit'          => ['sometimes', 'nullable', Rule::in(['minutes', 'hours', 'days'])],
+            'resume_unit'          => ['sometimes', 'nullable', Rule::in(['seconds', 'minutes', 'hours', 'days'])],
             'wh_enabled'           => 'sometimes|boolean',
             'wh_days'              => 'sometimes|nullable|array',
             'wh_days.*'            => ['nullable', Rule::in(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])],
@@ -1179,6 +1212,24 @@ class AutoReplyController extends Controller
             // below. Fast-paths out when the workspace is in-hours and not away.
             try {
                 app(\App\Services\Flow\FlowEnrollmentService::class)->onInboundMessage($workspaceId, $phoneDigits);
+            } catch (\Throwable $e) { /* best-effort */ }
+
+            // The contact answered — halt any drip that asked to stop on reply.
+            // This is what keeps a follow-up sequence from talking over a live
+            // conversation, so it has to run on the SAME inbound path.
+            try {
+                // `mobile` is encrypted, so it cannot be matched in SQL — the
+                // phone_hash column exists precisely for this lookup.
+                $hash = \App\Models\Contact::hashPhone(null, $phoneDigits);
+                $c    = $hash
+                    ? \App\Models\Contact::where('workspace_id', $workspaceId)
+                        ->where('mobile_hash', $hash)
+                        ->value('id')
+                    : null;
+
+                if ($c) {
+                    app(\App\Services\Drip\DripRunner::class)->stopOnReply((int) $workspaceId, (int) $c);
+                }
             } catch (\Throwable $e) { /* best-effort */ }
 
             // Sender scoping shared by all three passes: a rule bound to a device
@@ -2364,6 +2415,15 @@ class AutoReplyController extends Controller
         $trigger   = in_array($data['trigger_type'] ?? 'keyword', KeywordReply::TRIGGER_TYPES, true)
             ? (string) ($data['trigger_type'] ?? 'keyword')
             : 'keyword';
+        // `cooldown` has TWO controls writing it and they used to fight:
+        //   - responder rules  → "Resend after" value + unit  (wl-resend-value)
+        //   - keyword rules    → the plain seconds box        (#cooldown)
+        // The form posts BOTH, and the old `$resendSec ?? $data['cooldown']`
+        // let the value+unit win unconditionally — so typing 30 in the seconds
+        // box while the hydrated welcome field still read "1 minutes" stored 60
+        // and the box redisplayed 60. Whichever control the rule's own trigger
+        // owns is now the only one consulted.
+        $isResponder = in_array($trigger, ['welcome', 'out_of_hours', 'away'], true);
         $resendSec = \App\Services\Inbox\AutoResponderEvaluator::toSeconds(
             $data['resend_value'] ?? null, $data['resend_unit'] ?? null
         );
@@ -2381,9 +2441,13 @@ class AutoReplyController extends Controller
             // Lower number = higher priority when several auto-responder rules
             // could fire on the same inbound (competitor parity). Default 0.
             'priority'            => max(0, (int) ($data['priority'] ?? 0)),
-            // Resend seconds → cooldown (canonical). Fall back to any explicit
-            // cooldown, else null (welcome then defaults to 24h at eval time).
-            'cooldown'            => $resendSec ?? ($data['cooldown'] ?? null),
+            // Canonical throttle. A responder rule is owned by its value+unit
+            // control; a keyword rule by the seconds box. Blank on the owning
+            // control → null → the eval-time default (24h responder / 0 keyword).
+            // An explicit 0 survives as 0 and means "greet once, never resend".
+            'cooldown'            => $isResponder
+                ? $resendSec
+                : (($data['cooldown'] ?? null) === '' ? null : ($data['cooldown'] ?? null)),
             'resend_unit'         => $data['resend_unit'] ?? null,
             'stop_on_agent_reply' => (bool) ($data['stop_on_agent_reply'] ?? false),
             'resume_after'        => \App\Services\Inbox\AutoResponderEvaluator::toSeconds(

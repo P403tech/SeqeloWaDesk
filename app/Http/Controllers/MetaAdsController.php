@@ -290,26 +290,15 @@ class MetaAdsController extends Controller
             ]);
         }
 
-        // P7 — Instagram ads. WaDesk's native Meta Ads already build IG-placement
-        // creatives (MetaGraphClient::object_story_spec.instagram_user_id) using
-        // the workspace's OWN Meta connection. When the workspace's IG is instead
-        // linked through Instaflow (which owns that IG ad identity), surface a
-        // deep-link into Instaflow's own ad manager so those ads run under the
-        // correct identity — matching the plan's "delegate IG to Instaflow" rule.
-        $instaflowAdsUrl = null;
-        try {
-            $wsId = (int) (\Illuminate\Support\Facades\Auth::user()?->current_workspace_id ?? 0);
-            if ($wsId && \App\Models\WorkspaceIgAccount::hasConnected($wsId)) {
-                $base = \App\Services\Instaflow\InstaflowClient::fromSettings()->baseUrl();
-                if ($base !== '') $instaflowAdsUrl = $base . '/instagram/ads';
-            }
-        } catch (\Throwable $e) { /* deep-link is best-effort */ }
+        // (Removed) $instaflowAdsUrl fed an "Instagram ads" button that deep-linked
+        // to <instaflow_base>/instagram/ads. The path was concatenated and never
+        // verified, so it opened a 404 in a new tab. Native Meta Ads already build
+        // IG-placement creatives (MetaGraphClient::object_story_spec.instagram_user_id)
+        // from the workspace's own Meta connection, so removing it loses nothing.
 
         // Merge Meta Ads key-entry data so the page can render the
         // connect modal (opened by the "Keys" button or ?connect=1).
-        return view('user.campaigns.index', array_merge($payload, $this->metaConnectData(), [
-            'instaflowAdsUrl' => $instaflowAdsUrl,
-        ]));
+        return view('user.campaigns.index', array_merge($payload, $this->metaConnectData()));
     }
 
     public function create(): View|RedirectResponse
@@ -642,14 +631,14 @@ class MetaAdsController extends Controller
             'insights'       => [],
         ]));
 
-        // Push to Meta via the FULL 5-step CTWA flow when:
-        //   (a) the admin has flipped meta_ads_enabled ON, AND
-        //   (b) the user picked ACTIVE or PAUSED (not DRAFT), AND
-        //   (c) the workspace's WaProviderConfig has the required IDs.
-        // Drafts stay local-only; the customer can edit + save again
-        // to publish later.
+        // Push to Meta via the FULL 5-step CTWA flow whenever the user picked
+        // ACTIVE or PAUSED (not DRAFT). Meta Ads is gated only by the plan
+        // feature access_ctwa (enforced on the route + nav) — there is no
+        // separate platform switch. syncToMeta() itself no-ops with a clear
+        // meta_last_error when the workspace hasn't finished the Meta/CTWA
+        // setup, so this is safe to always attempt. Drafts stay local-only.
         $synced = false;
-        if ($chosenStatus !== 'DRAFT' && \App\Models\SystemSetting::get('meta_ads_enabled', false)) {
+        if ($chosenStatus !== 'DRAFT') {
             $this->syncToMeta($campaign);
             $synced = (bool) $campaign->facebook_id;
 
@@ -839,6 +828,54 @@ class MetaAdsController extends Controller
 
         $c->update($patch);
         return true;
+    }
+
+    /**
+     * Lightweight per-card sync — ONE insights call for a single campaign, so
+     * a merchant can refresh just the campaign showing 0 without the full-list
+     * "Sync now" (74 Graph calls). Range follows the selected tab; defaults to
+     * lifetime. Keeps every other stored insight sub-blob (adsets/ads/daily).
+     */
+    public function syncOne(int $id, Request $request): JsonResponse
+    {
+        $c = MetaCampaign::query()->forCurrentWorkspace()->findOrFail($id);
+
+        if (!$c->facebook_id) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'This campaign is not on Meta yet — use "Push to Meta" first.',
+            ], 422);
+        }
+
+        $graph = $this->graphFor($c);
+        if (!$graph->isConfigured()) {
+            return response()->json(['ok' => false, 'error' => 'Meta Ads is not connected for this workspace.'], 422);
+        }
+
+        $range    = $request->string('range')->toString() ?: 'all';
+        $insights = $graph->fetchInsights($c->facebook_id, $range);
+
+        if (empty($insights)) {
+            // 200 from Meta but no rows = paused / no delivery in this range.
+            return response()->json([
+                'ok'      => true,
+                'empty'   => true,
+                'status'  => $c->status,
+                'message' => 'Meta has no delivery for this campaign in the selected range — it is paused or has not spent yet.',
+            ]);
+        }
+
+        // Merge KPIs onto the existing blob so adsets/ads/daily charts survive.
+        $ins = array_merge((array) ($c->insights ?? []), $insights);
+        $c->update(['insights' => $ins, 'meta_synced_at' => now(), 'meta_last_error' => null]);
+
+        return response()->json([
+            'ok'          => true,
+            'empty'       => false,
+            'spend'       => $insights['spend']       ?? 0,
+            'impressions' => $insights['impressions'] ?? 0,
+            'clicks'      => $insights['clicks']      ?? 0,
+        ]);
     }
 
     public function refresh(int $id): JsonResponse
@@ -1082,7 +1119,7 @@ class MetaAdsController extends Controller
         // patching individual entities since Meta's update endpoints
         // are inconsistent). Retry() already handles the
         // "tear-down + 5-step replay" pattern.
-        $alreadyOnMeta = $campaign->facebook_id && \App\Models\SystemSetting::get('meta_ads_enabled', false);
+        $alreadyOnMeta = (bool) $campaign->facebook_id;
         if ($alreadyOnMeta && $campaign->status !== 'DRAFT') {
             $graph = $this->graphFor($campaign);
             if ($graph->isConfigured()) {
@@ -1156,15 +1193,14 @@ class MetaAdsController extends Controller
         $c = MetaCampaign::query()->forCurrentWorkspace()->findOrFail($id);
         $next = $c->status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
 
-        $graph       = $this->graphFor($c);
-        $metaEnabled = (bool) \App\Models\SystemSetting::get('meta_ads_enabled', false);
+        $graph = $this->graphFor($c);
 
         // Activating an ad that was only saved LOCALLY (never pushed to Meta —
         // e.g. created before the Meta connection was ready) → publish the full
         // tree first. Without this, "activate" only flips a local flag and the
         // ad never appears in the customer's Ads Manager (the reported bug).
         if ($next === 'ACTIVE' && !$c->facebook_id && $c->status !== 'DRAFT'
-            && $metaEnabled && $graph->isConfigured()) {
+            && $graph->isConfigured()) {
             $this->syncToMeta($c);
             $c->refresh();
         }
@@ -1209,17 +1245,47 @@ class MetaAdsController extends Controller
                 : back()->with('error', $err);
         }
 
-        $remote = $graph->listCampaigns(100);
-        \Illuminate\Support\Facades\Log::info('[META-IMPORT] importFromMeta', [
-            'configured' => $graph->isConfigured(),
-            'account'    => $graph->adAccountId(),
-            'remote'     => count($remote),
-        ]);
         $userId = Auth::id();
         $wsId   = (int) (Auth::user()?->current_workspace_id ?? 0);
         $imported = 0; $updated = 0;
 
-        foreach ($remote as $r) {
+        // The campaign LIST is the heavy call (all campaigns + ad-set/ad count
+        // summaries). It used to run on EVERY chunk — with 70+ campaigns that is
+        // ~9 heavy calls per import, which saturated PHP-FPM and caused the 504
+        // on /meta-ads. Fetch it ONCE and cache for the import loop; later chunks
+        // reuse it. Cache is per-workspace and short-lived.
+        $cacheKey = "meta_import_list_ws{$wsId}";
+        $remote   = \Cache::get($cacheKey);
+        if (!is_array($remote)) {
+            $remote = $graph->listCampaigns(100);
+            if (!empty($remote)) {
+                \Cache::put($cacheKey, $remote, now()->addMinutes(5));
+            }
+        }
+        \Illuminate\Support\Facades\Log::info('[META-IMPORT] importFromMeta', [
+            'configured' => $graph->isConfigured(),
+            'account'    => $graph->adAccountId(),
+            'remote'     => count($remote),
+            'cached'     => \Cache::has($cacheKey),
+        ]);
+
+        // CHUNKED import — each campaign needs an insights Graph call, so
+        // importing 70+ in ONE request blew past nginx's 60s proxy timeout (504).
+        // Process a small slice per request; the button loops (after = last
+        // offset) until `next` is null. Kept SMALL (max 6) so even slower
+        // lifetime-insights calls keep every request well under the timeout.
+        $after  = max(0, (int) $request->input('after', 0));
+        $limit  = min(6, max(1, (int) $request->input('limit', 5)));
+        $total  = count($remote);
+        $slice  = array_slice($remote, $after, $limit);
+
+        $processed = 0;
+        foreach ($slice as $r) {
+            // Stop BEFORE making more calls once Meta signals throttling — the
+            // chunk resumes from here after the cooldown (cursor = after+processed).
+            if ($graph->lastRateLimited) break;
+            $processed++;
+
             $fbId = (string) ($r['id'] ?? '');
             if ($fbId === '') continue;
 
@@ -1228,7 +1294,20 @@ class MetaAdsController extends Controller
             $budgetMinor = (int) ($r['daily_budget'] ?? $r['lifetime_budget'] ?? 0);
             // Insights pulled per-campaign (the list call no longer nests them,
             // so an insights error can't blank the whole import).
-            $ins         = $graph->fetchInsights($fbId) ?: [];
+            $ins         = $graph->fetchInsights($fbId, $request->string('range')->toString() ?: 'all') ?: [];
+
+            // Per-campaign trail for "why is everything 0?". effective_status is
+            // Meta's OWN state: anything other than ACTIVE (PAUSED, IN_REVIEW,
+            // WITH_ISSUES, CAMPAIGN_PAUSED, ADSET_PAUSED, DISAPPROVED …) means it
+            // is not delivering, so spend/impressions are legitimately 0.
+            \Log::info('[META-IMPORT] campaign', [
+                'fb_id'            => $fbId,
+                'name'            => (string) ($r['name'] ?? ''),
+                'effective_status' => $eff,
+                'has_insights'     => !empty($ins),
+                'spend'            => $ins['spend'] ?? 0,
+                'impressions'      => $ins['impressions'] ?? 0,
+            ]);
 
             $existing = MetaCampaign::query()->forCurrentWorkspace()->where('facebook_id', $fbId)->first();
 
@@ -1239,12 +1318,11 @@ class MetaAdsController extends Controller
                 $ins['account_currency'] = $existing->insights['account_currency'];
             }
 
-            // Fetch the REAL ad-set / ad counts so the card shows the true 1→N
-            // structure immediately. Without this the columns keep their migration
-            // default of 1/1 until the campaign's analytics page is opened (which
-            // is why only some campaigns showed the correct 1→3/1→2 structure).
-            $adsets = $graph->fetchAdSets($fbId);
-            $ads    = $graph->fetchAds($fbId);
+            // Ad-set / ad counts now come from the summary(total_count) folded
+            // into the list call — NO extra Graph call per campaign. This is the
+            // main rate-limit saver (was 2 calls each × 74 campaigns).
+            $adsetCount = (int) ($r['adsets']['summary']['total_count'] ?? 0);
+            $adCount    = (int) ($r['ads']['summary']['total_count'] ?? 0);
 
             $attrs = [
                 'name'            => (string) ($r['name'] ?? 'Imported campaign'),
@@ -1252,8 +1330,8 @@ class MetaAdsController extends Controller
                 'objective'       => $r['objective'] ?? null,
                 'facebook_id'     => $fbId,
                 'insights'        => is_array($ins) ? $ins : [],
-                'ad_set_count'    => max(1, is_array($adsets) ? count($adsets) : 1),
-                'ad_count'        => max(1, is_array($ads) ? count($ads) : 1),
+                'ad_set_count'    => max(1, $adsetCount),
+                'ad_count'        => max(1, $adCount),
                 'meta_synced_at'  => now(),
                 'meta_last_error' => null,
             ];
@@ -1282,20 +1360,58 @@ class MetaAdsController extends Controller
                 ));
                 $imported++;
             }
+
+            // Spread requests evenly rather than in a burst (Meta's own guidance)
+            // so we approach the ad-account limit gently instead of tripping it.
+            usleep(120000); // 120ms
         }
 
-        // Surface Meta's real reason (e.g. the "ads_read not granted" 403) inline
-        // instead of a vague "no ads" — only when nothing came back.
-        $err = (!$imported && !$updated) ? $graph->lastListError : null;
-        $msg = ($imported || $updated)
-            ? "Fetched from Meta: {$imported} new, {$updated} updated."
-            : ($err ? ('Meta: ' . $err) : 'No campaigns found in your Meta ad account.');
+        $rateLimited = $graph->lastRateLimited;
+
+        if ($rateLimited) {
+            // Resume at the first UN-processed campaign after the cooldown.
+            $next = ($after + $processed < $total) ? $after + $processed : null;
+            // Meta reports minutes-to-regain; honour it but cap so the UI isn't
+            // frozen for an hour (usage decays continuously, so retrying sooner
+            // usually succeeds). Default 60s when Meta gives no estimate.
+            $retryAfter = min(max(60, $graph->retryAfterMinutes * 60), 300);
+        } else {
+            $next = ($after + $limit < $total) ? $after + $limit : null;
+            // Proactive pacing — near the ceiling, ask the client to wait a bit
+            // between chunks so we never actually reach 100%.
+            $retryAfter = $graph->lastUsagePct >= 90 ? 20 : 0;
+        }
+
+        // Import finished (or nothing to import) → drop the cached list so the
+        // next "Fetch from Meta" pulls a fresh one.
+        if ($next === null) {
+            \Cache::forget($cacheKey);
+        }
+
+        // Surface Meta's real reason (e.g. "ads_read not granted") only when the
+        // WHOLE account came back empty (never mid-chunk).
+        $err  = ($total === 0) ? $graph->lastListError : null;
+        $done = min($after + $processed, $total);
+        $msg  = $total === 0
+            ? ($err ? ('Meta: ' . $err) : 'No campaigns found in your Meta ad account.')
+            : ($rateLimited
+                ? "Meta rate limit reached at {$done}/{$total} — pausing, will resume automatically."
+                : "Fetched {$done}/{$total} — {$imported} new, {$updated} updated.");
 
         if ($request->wantsJson() || $request->ajax()) {
             return response()->json([
-                'ok' => !$err, 'imported' => $imported, 'updated' => $updated,
-                'total' => count($remote), 'message' => $msg, 'error' => $err,
-                'meta' => $this->statusCounts($userId),
+                'ok'           => !$err,
+                'imported'     => $imported,
+                'updated'      => $updated,
+                'checked'      => $processed,
+                'next'         => $next,
+                'total'        => $total,
+                'rate_limited' => $rateLimited,
+                'retry_after'  => $retryAfter,   // seconds to wait before next call
+                'usage_pct'    => $graph->lastUsagePct,
+                'message'      => $msg,
+                'error'        => $err,
+                'meta'         => $this->statusCounts($userId),
             ], $err ? 422 : 200);
         }
         return $err ? back()->with('error', $msg) : back()->with('status', $msg);
@@ -1306,10 +1422,13 @@ class MetaAdsController extends Controller
      * sample metrics deterministically. Real implementation hits
      * the Graph API and replaces the `insights` JSON column.
      */
-    public function sync(): JsonResponse
+    public function sync(Request $request): JsonResponse
     {
         $userId = Auth::id();
         $wsId   = (int) (\Illuminate\Support\Facades\Auth::user()?->current_workspace_id ?? 0);
+        // Insights window follows the selected tab; defaults to lifetime so old
+        // campaigns show their real spend instead of a last-7-days 0.
+        $range  = $request->string('range')->toString() ?: 'all';
 
         // Resolve the workspace's Meta config once for all campaigns in
         // this batch — avoids spinning up a new client per row.
@@ -1317,7 +1436,7 @@ class MetaAdsController extends Controller
         $useGraph  = $graph->isConfigured();
 
         $touched = 0;
-        MetaCampaign::query()->forCurrentWorkspace()->each(function (MetaCampaign $c) use ($graph, $useGraph, &$touched) {
+        MetaCampaign::query()->forCurrentWorkspace()->each(function (MetaCampaign $c) use ($graph, $useGraph, $range, &$touched) {
             // Real Graph insights when configured. When Meta returns NOTHING
             // (not configured, no facebook_id, no delivery in the window, or an
             // API error) we store ZEROS — never fabricated numbers. Inventing a
@@ -1325,7 +1444,7 @@ class MetaAdsController extends Controller
             // disagree with Meta Ads Manager and mislead the client; a 0 is
             // honest, a fake 360 is not.
             $insights = $useGraph && $c->facebook_id
-                ? $graph->fetchInsights($c->facebook_id)
+                ? $graph->fetchInsights($c->facebook_id, $range)
                 : [];
             $gotReal = !empty($insights);
             if (!$gotReal) {
@@ -1792,6 +1911,10 @@ class MetaAdsController extends Controller
         foreach ($rows as $r) {
             $label = $providerLabel[$r->provider] ?? ucfirst($r->provider);
             $default = (string) ($r->default_model ?? '');
+            // An active key with a blank default_model used to be dropped
+            // silently, so the provider disappeared from the picker with no
+            // hint why. Fall back to a current model id for that brand.
+            if ($default === '') $default = \App\Services\AiAgentService::fallbackModel($r->provider);
             if ($default === '') continue;
             $extra = json_decode((string) ($r->extra_config ?? '[]'), true) ?: [];
             $extraModels = is_array($extra['models'] ?? null) ? $extra['models'] : [];
@@ -1846,7 +1969,7 @@ class MetaAdsController extends Controller
     {
         $data = $request->validate([
             'model'              => 'required|string|max:120',
-            'provider'           => 'required|string|in:openai,anthropic,gemini,mistral,muse',
+            'provider'           => ['required', 'string', \Illuminate\Validation\Rule::in(\App\Services\AiAgentService::supportedProviders())],
             'business_name'      => 'required|string|max:191',
             'product'            => 'nullable|string|max:255',
             'objective'          => 'nullable|string|max:60',
@@ -1936,7 +2059,7 @@ SYS;
             return response()->json([
                 'ok'      => false,
                 'error'   => 'provider_failed',
-                'message' => 'AI provider returned no content — check API key + model id.',
+                'message' => $ai->lastProviderError() ?: 'AI provider returned no content — check API key + model id.',
             ], 502);
         }
 

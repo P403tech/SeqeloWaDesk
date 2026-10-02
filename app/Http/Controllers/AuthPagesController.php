@@ -132,7 +132,15 @@ class AuthPagesController extends Controller
         $data = $request->validate([
             'name'         => ['required', 'string', 'max:191'],
             'email'        => ['required', 'email', 'max:191', 'unique:users,email'],
-            'mobile'       => ['nullable', 'string', 'max:32'],
+            'mobile'       => ['nullable', 'string', 'max:32',
+                function ($attr, $value, $fail) use ($request) {
+                    // One number = one account. Checked on a digits-only canonical
+                    // (country_code + mobile) so formatting can't slip a duplicate past.
+                    if ($value !== null && $value !== ''
+                        && \App\Support\MobileNumber::isTaken($request->input('country_code'), $value)) {
+                        $fail(__('This mobile number is already registered.'));
+                    }
+                }],
             'country_code' => ['nullable', 'string', 'max:8'],
             'password'     => ['required', 'string', 'min:8', 'confirmed'],
             'agree'        => ['accepted'],
@@ -189,6 +197,16 @@ class AuthPagesController extends Controller
      */
     private function finalizeRegistration(array $data, Request $request, bool $mobileVerified = false): RedirectResponse
     {
+        // Final uniqueness guard, at the actual create point. The register()
+        // step already checked this, but an OTP round-trip leaves a window in
+        // which the same number could be claimed — re-check before creating so
+        // one number can never end up on two accounts.
+        if (!empty($data['mobile'])
+            && \App\Support\MobileNumber::isTaken($data['country_code'] ?? null, $data['mobile'])) {
+            return redirect()->route('register')
+                ->withErrors(['mobile' => __('This mobile number is already registered.')]);
+        }
+
         // Admin can flip auto-verify ON at /admin/settings/general to skip
         // the verify-email screen entirely.
         $autoVerify = (bool) \App\Models\SystemSetting::get('auto_verify_email', true);

@@ -7,6 +7,7 @@ import moment from "moment-timezone";
 import axios from "axios";
 import {
   formatPhoneNumber,
+  resolveRecipientJid,
   formatInteractiveButtonsForBaileys,
   downloadAndPrepareMediaBaileys,
   getWhatsAppSettings,
@@ -251,7 +252,12 @@ export async function executeCampaignSchedule(nodeScheduleId, app, appDomainName
 
         // FIXED: Use phone field directly (same as broadcast)
         const phoneNumber = contactData.phone;
-        const finalNumber = formatPhoneNumber(phoneNumber);
+        // Baileys: resolve to the SERVER's canonical JID (fixes Mexico +52↔+52 1,
+        // Argentina +54↔+54 9, LID — "sent but not delivered"). Provider
+        // (WABA/Twilio) sends keep the raw format; Meta/Twilio normalise.
+        const finalNumber = (!useWaba && !useTwilio)
+          ? await resolveRecipientJid(sock, phoneNumber)
+          : formatPhoneNumber(phoneNumber);
 
         console.log(`[CAMPAIGN-NODE] sendToContact #${globalIndex} | campaign=${campaign.campaignId} contact=${contactData.id} name=${contactData.name || ''} phone=${finalNumber} type=${campaign.campaignType} useFb=${!!settings.use_facebook_api}`);
 

@@ -124,9 +124,23 @@
                                         <span
                                             class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full {{ $cls }} text-[10.5px] font-mono">{{ $o->status }}</span>
                                     </td>
-                                    <td class="px-4 py-3 text-right"><a
-                                            href="{{ route('user.store.orders.show', $o->id) }}"
-                                            class="text-[11px] text-wa-deep font-semibold hover:underline">Open</a></td>
+                                    <td class="px-4 py-3 text-right">
+                                        <div class="inline-flex items-center gap-2 justify-end">
+                                            <a href="{{ route('user.store.orders.show', $o->id) }}"
+                                                class="text-[11px] text-wa-deep font-semibold hover:underline">Open</a>
+                                            <form method="POST" action="{{ route('user.store.orders.destroy', $o->id) }}"
+                                                onsubmit="return confirm('{{ __('Delete this order? This cannot be undone.') }}');" class="inline">
+                                                @csrf
+                                                @method('DELETE')
+                                                <button type="submit" title="{{ __('Delete order') }}"
+                                                    class="w-7 h-7 rounded-full border border-paper-200 hover:border-accent-coral/40 hover:bg-accent-coral/10 hover:text-accent-coral text-ink-500 grid place-items-center transition">
+                                                    <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.6">
+                                                        <path d="M3 4h10M6 4V2h4v2M5 6v7h6V6" />
+                                                    </svg>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </td>
                                 </tr>
                             @empty
                                 <tr>

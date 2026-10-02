@@ -85,6 +85,28 @@ class AffiliateHistoryController extends Controller
         $referralUrl = url('/register?ref=' . urlencode($user->referral_code ?? ''));
         $signupReward = max(0, (int) SystemSetting::get('referral_signup_credits', 100));
         $creditsPerMessage = max(1, (int) SystemSetting::get('credits_per_message', 1));
+        // `referral_signup_credits` is MONEY in minor units, not a credit
+        // count. Convert through the same helper the payout uses so the
+        // affiliate is shown what actually lands in their wallet.
+        $signupRewardCredits = app(\App\Services\WalletService::class)->creditsForMinor($signupReward);
+
+        // Refer & Earn pipeline (lifetime): joined → converted (paid) → pending,
+        // + the real money earned. Small per-user population, so a single hydrate.
+        $pipeRows = Referral::forReferrer($userId)->get(['status', 'award_transaction_id', 'reward_minor']);
+        $pipeline = [
+            'joined'      => $pipeRows->count(),
+            'converted'   => $pipeRows->filter(fn ($r) => $r->status === Referral::STATUS_PAID || $r->award_transaction_id)->count(),
+            'pending'     => $pipeRows->filter(fn ($r) => ($r->status ?: 'pending') === Referral::STATUS_PENDING && ! $r->award_transaction_id)->count(),
+            'earnedMinor' => (int) $pipeRows->sum('reward_minor'),
+        ];
+        $referrerRewardMinor = \App\Services\ReferralService::referrerRewardMinor();
+        $refereeRewardMinor  = \App\Services\ReferralService::refereeRewardMinor();
+        $referralEnabled     = \App\Services\ReferralService::enabled();
+        $referralWindowDays  = (int) SystemSetting::get('referral_window_days', 30);
+        $defaultCurrency     = (string) SystemSetting::get('default_currency', 'USD');
+        $waShareUrl = 'https://wa.me/?text=' . rawurlencode(
+            trim(__('Join me on this WhatsApp platform') . ($refereeRewardMinor > 0 ? ' — ' . __('we both get a bonus') : '') . ': ' . $referralUrl)
+        );
 
         $payload = [
             'rows'          => $rows->map(fn ($r) => $this->presentRow($r))->all(),
@@ -101,7 +123,19 @@ class AffiliateHistoryController extends Controller
             'referralCode'  => $user?->referral_code ?: '—',
             'referralUrl'   => $referralUrl,
             'signupReward'  => $signupReward,
+            // What the referrer actually receives. The view printed
+            // `signupReward` (money-minor) followed by the word "credits",
+            // which overstated the payout by 100 / credits_per_currency_unit.
+            'signupRewardCredits' => $signupRewardCredits,
             'creditsPerMessage' => $creditsPerMessage,
+            // Refer & Earn — pipeline + config for the summary + how-to cards.
+            'pipeline'             => $pipeline,
+            'referrerRewardMinor'  => $referrerRewardMinor,
+            'refereeRewardMinor'   => $refereeRewardMinor,
+            'referralEnabled'      => $referralEnabled,
+            'referralWindowDays'   => $referralWindowDays,
+            'defaultCurrency'      => $defaultCurrency,
+            'waShareUrl'           => $waShareUrl,
         ];
 
         if ($request->boolean('partial')) {
@@ -271,7 +305,11 @@ class AffiliateHistoryController extends Controller
         return WalletTransaction::query()
             ->where('user_id', $userId)
             ->where('kind', WalletTransaction::KIND_CREDIT)
-            ->where('source', 'referral.signup')
+            // BUGFIX: rewards are written with source 'referral.paid' (the reward
+            // fires on the referee's first paid top-up, not signup). The old
+            // 'referral.signup' filter never matched, so this widget was always
+            // empty. Match both so historical rows still show.
+            ->whereIn('source', ['referral.paid', 'referral.signup'])
             ->orderByDesc('created_at')
             ->limit($limit)
             ->get()
@@ -305,8 +343,10 @@ class AffiliateHistoryController extends Controller
             'gradient'       => $this->avatarGradient($r->referred_user_id ?? 0),
             'codeUsed'       => $r->code_used,
             'creditsAwarded' => (int) $r->credits_awarded,
+            'rewardMinor'    => (int) ($r->reward_minor ?? 0),
             'walletTxId'     => $r->award_transaction_id,
-            'status'         => $r->credits_awarded > 0 ? 'paid' : 'no-payout',
+            // Real pipeline status (pending / paid / expired), not a guess from credits.
+            'status'         => $r->status ?: ($r->award_transaction_id ? 'paid' : 'pending'),
         ];
     }
 

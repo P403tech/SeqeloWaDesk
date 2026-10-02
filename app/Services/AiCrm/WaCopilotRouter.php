@@ -81,7 +81,7 @@ class WaCopilotRouter
 
         $members = $ws->members()->wherePivotIn('role', self::ALLOWED_ROLES)->get();
         foreach ($members as $u) {
-            $stored = preg_replace('/\D+/', '', (string) ($u->country_code . $u->mobile));
+            $stored = \App\Models\Contact::canonicalizePhone($u->country_code, $u->mobile);
             if ($stored === '' || strlen($stored) < 8) continue;
             if ($this->phonesMatch($stored, $sender)) {
                 return $u;

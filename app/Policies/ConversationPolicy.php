@@ -54,10 +54,32 @@ class ConversationPolicy
         return $this->view($user, $conv);
     }
 
-    public function assign(User $user, Conversation $conv): bool
-    {
+    /**
+     * Two assignment models share this gate:
+     *   - `inbox.assign`      : hand the chat to anyone / any team / any strategy.
+     *   - `inbox.assign_self` : CLAIM only — take this chat for myself, keep the
+     *                           team as-is, no strategy that could resolve to
+     *                           somebody else. This is the agent role.
+     * The target is passed by the caller:
+     *   $this->authorize('assign', [$conv, $userId, $teamId, $strategy]);
+     * Callers that omit it (unassign, reassign-away) therefore require the
+     * full `inbox.assign` permission, which is the intent.
+     */
+    public function assign(
+        User $user,
+        Conversation $conv,
+        ?int $targetUserId = null,
+        ?int $targetTeamId = null,
+        string $strategy = 'manual',
+    ): bool {
         if (!$this->inWorkspace($user, $conv)) return false;
-        return WorkspacePermissions::userCan($user, 'inbox.assign', $conv->workspace_id);
+        if (WorkspacePermissions::userCan($user, 'inbox.assign', $conv->workspace_id)) return true;
+        if (!WorkspacePermissions::userCan($user, 'inbox.assign_self', $conv->workspace_id)) return false;
+
+        return $strategy === 'manual'
+            && $targetUserId !== null
+            && $targetUserId === $user->id
+            && ($targetTeamId === null || $targetTeamId === (int) $conv->assignee_team_id);
     }
 
     public function resolve(User $user, Conversation $conv): bool

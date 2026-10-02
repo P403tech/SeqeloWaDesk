@@ -39,7 +39,24 @@ const LIMITS = {
 };
 const MAX_BYTES = { image: 5e6, video: 16e6, document: 1e8, audio: 16e6 };
 
+// CSV/Excel column headers from the recipient file the operator uploaded on a
+// campaign. When present, every text header/body/footer variable slot gains a
+// dropdown to map it to a column (WA-Sender style). Picking one writes the
+// token {{Column}} into that slot; TemplateOverrideResolver fills it per
+// recipient from that contact's imported custom_attributes. The campaign
+// builder pushes these in via window.__tlmSetColumns().
+let csvColumns = [];
+const activeRoots = [];
+
+export function setColumns(list) {
+    csvColumns = Array.isArray(list) ? list.map((c) => String(c).trim()).filter(Boolean) : [];
+    activeRoots.forEach((fn) => { try { fn(); } catch (e) { /* a dead root must not block the rest */ } });
+}
+
 export default function initTemplateLiveMapping() {
+    // Global entry so the campaign create module (which does not import this
+    // file — the component self-inits from globals) can feed CSV columns in.
+    if (typeof window !== 'undefined') window.__tlmSetColumns = setColumns;
     document.querySelectorAll('[data-tlm-root]').forEach(setupRoot);
 }
 
@@ -61,6 +78,9 @@ function setupRoot(root) {
             store.value = Object.keys(next).length ? JSON.stringify(next) : '';
         });
     };
+    // Re-render this root when the uploaded CSV columns change, so the
+    // per-slot "map to a column" dropdowns appear/refresh.
+    activeRoots.push(rerender);
 
     select.addEventListener('change', () => {
         // A different template has different slots — carrying the old
@@ -258,6 +278,11 @@ function slotRows(sectionKey, count, defaults, state, sourceText, tokens, attrib
                 ${tok ? `<code class="text-[10px] font-mono text-ink-400 truncate shrink-0 max-w-[45%]">{{${esc(tok.name)}}}</code>` : ''}
             </div>
             <div class="text-[10.5px] text-ink-500 mb-1.5 break-words">${autoLine}</div>
+            ${csvColumns.length ? `<select data-tlm-colmap="${esc(sectionKey)}" data-tlm-colindex="${i}"
+                class="w-full mb-1.5 px-2.5 py-1.5 border border-paper-200 rounded-lg bg-white text-[12px] text-ink-900 focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                <option value="">${esc(t('— map to a spreadsheet column —'))}</option>
+                ${csvColumns.map((c) => `<option value="${esc(c)}"${val === `{{${c}}}` ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+            </select>` : ''}
             <div class="relative">
                 <input type="text" autocomplete="off"
                     data-tlm-slot="${esc(sectionKey)}" data-tlm-index="${i}"
@@ -471,9 +496,19 @@ function wire(panel, meta, attributes, onChange) {
     });
 
     on('change', (e) => {
-        const input = e.target.closest('[data-tlm-file]');
-        if (!input || !input.files || !input.files[0]) return;
-        uploadFile(input.files[0], panel, meta, collect);
+        // "Map to a spreadsheet column" dropdown → write {{Column}} into this
+        // slot's input (or clear it), then collect like a normal edit.
+        const cm = e.target.closest('[data-tlm-colmap]');
+        if (cm) {
+            const row = cm.closest('div.rounded-lg');
+            const slotInput = row && row.querySelector('input[data-tlm-slot]');
+            if (slotInput) slotInput.value = cm.value ? `{{${cm.value}}}` : '';
+            collect();
+            return;
+        }
+        const fileInput = e.target.closest('[data-tlm-file]');
+        if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+        uploadFile(fileInput.files[0], panel, meta, collect);
     });
 
     // Click interactions. This block previously lived INSIDE uploadFile(),

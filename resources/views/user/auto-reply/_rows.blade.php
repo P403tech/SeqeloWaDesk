@@ -86,9 +86,10 @@
             <div class="flex items-center gap-2.5">
                 <span
                     class="w-8 h-8 rounded-lg {{ $tile['cls'] }} grid place-items-center text-[10px] font-mono shrink-0">{{ $tag }}</span>
-                <div class="min-w-0">
-                    <div class="flex items-center gap-2 min-w-0">
-                        <div class="font-semibold text-ink-900 truncate">{{ $kw }}</div>
+                <div class="min-w-0 max-w-[560px]">
+                    <div class="flex items-start gap-2 min-w-0">
+                        <div class="font-semibold text-ink-900 break-words line-clamp-2 leading-snug"
+                            title="{{ $kw }}">{{ $kw }}</div>
                         @if ($rowProvBadge)
                             <span
                                 class="inline-flex items-center px-1.5 py-0.5 rounded-full {{ $rowProvBadge[1] }} text-[9.5px] font-mono font-semibold uppercase tracking-wider shrink-0">{{ $rowProvBadge[0] }}</span>

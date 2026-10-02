@@ -160,7 +160,18 @@ abstract class AbstractCloudCatalogProvider implements WhatsAppCatalogProvider
         $requests = [];
         foreach ($products as $p) {
             $requests[] = [
-                'method'      => 'CREATE',
+                // UPDATE, not CREATE. In Meta's items_batch API, UPDATE is the
+                // UPSERT verb -- it creates the item when the retailer_id is new
+                // and updates it when it already exists. CREATE only ever
+                // inserts: re-sending it for a retailer_id already in the
+                // catalog does NOT apply the new values.
+                //
+                // That made catalog sync silently one-way. A brand-new product
+                // pushed fine (first CREATE), but every later edit -- price,
+                // stock, title, image -- was a no-op on Meta's side, so
+                // Commerce Manager kept showing the original values no matter
+                // how many times the merchant pressed Sync.
+                'method'      => 'UPDATE',
                 'retailer_id' => $p->meta_retailer_id ?: ($p->sku ?: 'wsn-' . $p->id),
                 'data'        => $p->toMetaCatalogPayload($shopUrl),
             ];

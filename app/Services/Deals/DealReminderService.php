@@ -48,6 +48,17 @@ class DealReminderService
                 $deal = Deal::find($task->deal_id);
                 if ($deal) {
                     $disp->notifyDealTaskDue($deal, $task);
+                    // Follow-up date reached → fire the `task_due` flow trigger
+                    // so the customer can be messaged, not just the owner. Rides
+                    // this sweep's existing once-per-task guarantee (reminded_at
+                    // is stamped just below), and is wrapped separately so a
+                    // flow failure never blocks that stamp — an unstamped task
+                    // would nag the owner on every sweep forever.
+                    try {
+                        app(\App\Services\Flow\FlowEnrollmentService::class)->onTaskDue($task);
+                    } catch (\Throwable $e) {
+                        Log::warning('[DEAL] task_due flow-trigger failed (activity ' . $task->id . '): ' . $e->getMessage());
+                    }
                 }
                 // Stamp regardless — a missing/deleted deal shouldn't keep the
                 // orphan task in the sweep forever.

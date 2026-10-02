@@ -82,6 +82,68 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RECORDING_DIR = path.join(__dirname, '../../public/uploads/call-recordings');
 try { fs.mkdirSync(RECORDING_DIR, { recursive: true }); } catch {}
 
+// ── Runaway-recording guards ────────────────────────────────────────────
+// A production box was found with single _user.pcm files of 15-25 GB: the
+// caller vanished, Meta's terminate webhook never reached us, and
+// onconnectionstatechange only LOGGED state changes — so the session (and
+// its RTCAudioSink) kept writing 48 kHz PCM (~8.3 GB/day) for DAYS. Three
+// independent stops now bound every recording:
+//   1. REC_MAX_BYTES     — per-side hard cap on the raw PCM file.
+//   2. CALL_MAX_MS       — absolute per-call watchdog → closeSession().
+//   3. connection-state  — failed/closed ends the call; disconnected gets
+//                          a grace window then ends it (see wireOnState).
+// Plus a janitor that deletes stale *.pcm the crashed/killed process left
+// behind (Laravel only deletes PCM on first playback — never-played files
+// used to live forever).
+const REC_MAX_MINUTES  = Math.max(1, parseInt(process.env.WABA_CALL_REC_MAX_MIN || '30', 10));
+const REC_MAX_BYTES    = REC_MAX_MINUTES * 60 * 96000;         // 48 kHz mono 16-bit = 96000 B/s
+const CALL_MAX_MS      = Math.max(5, parseInt(process.env.WABA_CALL_MAX_MIN || '120', 10)) * 60 * 1000;
+const REC_STALE_HOURS  = Math.max(1, parseInt(process.env.WABA_CALL_REC_STALE_HOURS || '72', 10));
+
+/**
+ * Write one PCM chunk to a side's recording, enforcing the per-side byte
+ * cap. Past the cap the stream is ended once (audio keeps flowing to
+ * STT/live playback — only the DISK write stops) so a stuck session can
+ * cap out at ~170 MB instead of filling the volume.
+ */
+export function recWrite(s, side, buf) {
+  const stream = side === 'user' ? s.recUser : s.recAgent;
+  if (!stream) return;
+  const cappedFlag = side === 'user' ? '_recUserCapped' : '_recAgentCapped';
+  if (s[cappedFlag]) return;
+  if ((stream.bytesWritten || 0) + buf.length > REC_MAX_BYTES) {
+    s[cappedFlag] = true;
+    try { stream.end(); } catch {}
+    console.warn(`[WABA-BRIDGE] ${side} recording hit ${REC_MAX_MINUTES}min cap — stopped writing call=${s.metaCallId}`);
+    return;
+  }
+  stream.write(buf);
+}
+
+/**
+ * Delete *.pcm files older than REC_STALE_HOURS. Runs at boot + hourly.
+ * Anything that old is an orphan (a live call's file is at most
+ * CALL_MAX_MS old) — the four 15-25 GB files above would have been
+ * swept on the first pass instead of sitting until the disk filled.
+ */
+export function sweepStaleRecordings() {
+  let removed = 0, freed = 0;
+  try {
+    const cutoff = Date.now() - REC_STALE_HOURS * 3600 * 1000;
+    for (const f of fs.readdirSync(RECORDING_DIR)) {
+      if (!f.endsWith('.pcm')) continue;
+      const p = path.join(RECORDING_DIR, f);
+      try {
+        const st = fs.statSync(p);
+        if (st.mtimeMs < cutoff) { fs.unlinkSync(p); removed++; freed += st.size; }
+      } catch {}
+    }
+  } catch {}
+  if (removed) console.log(`[WABA-BRIDGE] recording janitor removed ${removed} stale .pcm (${Math.round(freed / 1048576)} MB)`);
+}
+sweepStaleRecordings();
+setInterval(sweepStaleRecordings, 3600 * 1000).unref?.();
+
 // STUN discovers the server's public IP; a TURN relay is what actually carries
 // the media when the server is behind NAT / a firewall (the common cause of
 // `connectionState=failed` → the AI talks but no audio reaches the caller).
@@ -137,6 +199,29 @@ function openUserRecording(s) {
   if (s.recUser) return;                       // already recording
   s.recUser = fs.createWriteStream(path.join(RECORDING_DIR, `${s.metaCallId}_user.pcm`));
   console.log(`[WABA-BRIDGE] caller recording started call=${s.metaCallId}`);
+}
+
+/**
+ * Lazy-open the caller recording from the audio path itself. Every earlier
+ * open site was ORDER-dependent — auto-arm only opened the file if the
+ * caller's track had already arrived (s.audioSink set), and the ontrack
+ * gate only opened it if arming had already happened. On outbound AI calls
+ * those two can land in either order (the customer's track materialises via
+ * the answer SDP / a renegotiation while arming happens after
+ * waitForPeerConnected), and whichever side lost the race left the call
+ * with an AGENT file but NO caller file — "AI voice recorded, client voice
+ * not". The first decoded caller frame is the ground truth that caller
+ * audio exists, so the ondata handler calls this on every frame until the
+ * file is open. Cheap no-op afterwards.
+ */
+export function maybeOpenUserRecording(s) {
+  if (s.recUser || s.closed) return false;
+  if (!s.recordingArmed) return false;
+  if (!s.assistantConfig?.record_user) return false;
+  if (s._recUserCapped) return false;
+  if (!s.metaCallId) return false;             // outbound pre-link — no filename yet
+  openUserRecording(s);
+  return true;
 }
 
 /**
@@ -211,6 +296,17 @@ export function openSession(app, args) {
   };
   sessions.set(args.metaCallId, session);
 
+  // Absolute watchdog — no call may outlive CALL_MAX_MS. Belt-and-braces
+  // behind the terminate webhook + connection-state close: whatever else
+  // goes wrong, the session (and its recording stream) always ends.
+  session.maxDurTimer = setTimeout(() => {
+    if (!session.closed) {
+      console.warn(`[WABA-BRIDGE] max call duration reached — force closing call=${session.metaCallId}`);
+      closeSession(null, session.metaCallId);
+    }
+  }, CALL_MAX_MS);
+  session.maxDurTimer.unref?.();
+
   console.log(`[WABA-BRIDGE] opening call=${args.metaCallId} assistant=${args.assistantId} caller=${args.callerPhone}`);
 
   start(session).catch(e => {
@@ -260,6 +356,18 @@ export function openOutboundSession(app, args) {
     _remoteAnswered: false,
   };
   sessions.set(key, session);
+
+  // Absolute watchdog — resolve the key at FIRE time: linkMetaCall() re-keys
+  // this session from outbound:{waCallId} to the Meta call id mid-flight.
+  session.maxDurTimer = setTimeout(() => {
+    if (!session.closed) {
+      const k = session.metaCallId || key;
+      console.warn(`[WABA-BRIDGE] max call duration reached — force closing call=${k}`);
+      closeSession(null, k);
+    }
+  }, CALL_MAX_MS);
+  session.maxDurTimer.unref?.();
+
   console.log(`[WABA-BRIDGE] opening OUTBOUND waCallId=${args.waCallId} assistant=${args.assistantId} to=${session.calleePhone}`);
   start(session).catch(e => {
     console.error(`[WABA-BRIDGE] outbound start failed: ${e?.message}`);
@@ -362,24 +470,39 @@ async function start(s) {
   // realtime transcription so a workspace with only an OpenAI key still works.
   s.sttProvider = s.deepgramKey ? 'deepgram' : (s.openaiKey ? 'openai' : '');
 
+  // TTS provider: HONOR the assistant's chosen voice_provider. The wizard lets
+  // the operator pick OpenAI TTS — respect that instead of always preferring
+  // ElevenLabs (the "we selected ChatGPT but it keeps using ElevenLabs" bug).
+  // Fall back to whichever key actually exists so a mismatched choice (e.g.
+  // "openai" picked but only an ElevenLabs key saved) still talks.
+  const _voicePref = (s.assistantConfig?.voice_provider || '').toString().toLowerCase();
+  if (_voicePref === 'openai' && s.openaiKey) {
+    s.ttsProvider = 'openai';
+  } else if (_voicePref === 'elevenlabs' && s.elevenlabsKey) {
+    s.ttsProvider = 'elevenlabs';
+  } else {
+    s.ttsProvider = s.elevenlabsKey ? 'elevenlabs' : (s.openaiKey ? 'openai' : '');
+  }
+
   // Key trace — masked (first3…last3 + length), never the raw key. Lets us
   // confirm from the logs WHICH key reached Node and match it to the Laravel
   // [WABA-CALL][voice-keys] line, so "why is ElevenLabs invalid" is one glance:
   // if the masks differ, the wrong key was saved; if they match, the key itself
   // is bad on the vendor side.
   const _mask = (k) => (k && k.length) ? `${k.slice(0, 3)}…${k.slice(-3)} len${k.length}` : 'ABSENT';
-  console.log(`[WABA-BRIDGE] keys ws=${s.workspaceId} deepgram=${_mask(s.deepgramKey)} openai=${_mask(s.openaiKey)} elevenlabs=${_mask(s.elevenlabsKey)} → STT=${s.sttProvider || 'NONE'} TTS=${s.elevenlabsKey ? 'elevenlabs' : 'none'} model=${s.assistantConfig?.model || '?'} langs=${JSON.stringify(s.assistantConfig?.meta?.languages || [])} call=${s.metaCallId}`);
+  console.log(`[WABA-BRIDGE] keys ws=${s.workspaceId} deepgram=${_mask(s.deepgramKey)} openai=${_mask(s.openaiKey)} elevenlabs=${_mask(s.elevenlabsKey)} → STT=${s.sttProvider || 'NONE'} TTS=${s.ttsProvider || 'none'} (picked=${_voicePref || 'auto'}) model=${s.assistantConfig?.model || '?'} langs=${JSON.stringify(s.assistantConfig?.meta?.languages || [])} call=${s.metaCallId}`);
 
-  // Fail-fast guard. Without an STT key (Deepgram OR OpenAI) + a TTS key
-  // (ElevenLabs) the AI bridge would accept the call and then sit silent —
-  // the caller dials, hears the click, then nothing. Worse than declining.
-  // Reject up-front so the AI voicemail fallback (AiFallback::trigger via
-  // the terminating timer) can handle the call by sending a voice-note
-  // "sorry we missed you" over chat instead.
-  if (!s.sttProvider || !s.elevenlabsKey) {
+  // Fail-fast guard. Without an STT key (Deepgram OR OpenAI) AND some TTS key
+  // (ElevenLabs OR OpenAI) the AI bridge would accept the call and then sit
+  // silent — the caller dials, hears the click, then nothing. Worse than
+  // declining. Reject up-front so the AI voicemail fallback (AiFallback::trigger
+  // via the terminating timer) can handle the call by sending a voice-note
+  // "sorry we missed you" over chat instead. NOTE: OpenAI TTS alone is enough —
+  // an ElevenLabs key is NOT mandatory.
+  if (!s.sttProvider || !s.ttsProvider) {
     const missing = [];
     if (!s.sttProvider) missing.push('Deepgram or OpenAI (speech-to-text)');
-    if (!s.elevenlabsKey) missing.push('ElevenLabs (voice)');
+    if (!s.ttsProvider) missing.push('ElevenLabs or OpenAI (voice)');
     console.warn(`[WABA-BRIDGE] missing ${missing.join(' + ')} key for ws=${s.workspaceId} — rejecting call so voicemail fallback fires. Configure at /admin/api-keys.`);
     await metaAction(s, 'reject');
     await reportBridgeError(s, `missing_voice_keys:${missing.join(',')}`);
@@ -404,7 +527,30 @@ async function start(s) {
     console.log(`[WABA-BRIDGE] iceConnectionState=${s.pc.iceConnectionState} call=${s.metaCallId}`);
   };
   s.pc.onconnectionstatechange = () => {
-    console.log(`[WABA-BRIDGE] connectionState=${s.pc.connectionState} call=${s.metaCallId}`);
+    const st = s.pc.connectionState;
+    console.log(`[WABA-BRIDGE] connectionState=${st} call=${s.metaCallId}`);
+    // Log-only used to be the whole handler — so when the caller vanished
+    // and Meta's terminate webhook was lost, the session (and its recording
+    // stream) ran FOREVER. Now a dead transport ends the call: failed/closed
+    // immediately; disconnected after a 30 s grace (transient ICE flaps
+    // recover, real hangups don't).
+    const key = () => s.metaCallId || (s.waCallId ? `outbound:${s.waCallId}` : null);
+    if (st === 'failed' || st === 'closed') {
+      const k = key();
+      if (k && !s.closed) closeSession(null, k);
+    } else if (st === 'disconnected') {
+      clearTimeout(s._discTimer);
+      s._discTimer = setTimeout(() => {
+        const k = key();
+        if (k && !s.closed && s.pc && s.pc.connectionState === 'disconnected') {
+          console.warn(`[WABA-BRIDGE] still disconnected after grace — closing call=${k}`);
+          closeSession(null, k);
+        }
+      }, 30000);
+      s._discTimer.unref?.();
+    } else if (st === 'connected') {
+      clearTimeout(s._discTimer);
+    }
   };
 
   // 3. Outbound audio source — the AI's TTS frames go here.
@@ -466,6 +612,10 @@ async function start(s) {
         // (309 s file + slow/garbled "no clear voice"). Measure the TRUE rate
         // from wall-clock and resample mono → a real 48 kHz so the recording
         // matches the call length and sounds natural.
+        // Ground-truth open: a caller frame is here, so if recording is armed
+        // for the user side but the file never opened (arm/track order race —
+        // the "AI voice recorded, client voice not" bug), open it NOW.
+        maybeOpenUserRecording(s);
         if (s.recUser) {
           const nMono = mono.byteLength >> 1;
           if (!s._sinkT0) { s._sinkT0 = Date.now(); s._sinkSamples = 0; }
@@ -477,7 +627,7 @@ async function start(s) {
             : (frame.sampleRate || 48000);
           s._effRate = effRate;
           const rec48 = (effRate === 48000) ? mono : resampleLinear(mono, effRate, 48000);
-          s.recUser.write(rec48);
+          recWrite(s, 'user', rec48);   // size-capped — see REC_MAX_BYTES
         }
         // Barge-in (OPT-IN, default OFF): let the caller talk over the AI to
         // stop it. Disabled by default because carrier lines with weak echo
@@ -630,6 +780,14 @@ async function start(s) {
     // The caller's inbound track is usually live already — open its file now;
     // the agent side opens on its first spoken frame (see speak()).
     if (s.audioSink && s.assistantConfig.record_user) openUserRecording(s);
+    else if (s.assistantConfig.record_user) {
+      // Caller track hasn't materialised yet (common on OUTBOUND — the
+      // customer's track arrives with/after the answer SDP). Not fatal:
+      // the ondata handler lazy-opens the file on the first caller frame
+      // (maybeOpenUserRecording). Log it so a missing caller file is
+      // diagnosable from the server log in one line.
+      console.warn(`[WABA-BRIDGE] user recording armed but caller track not up yet — will open on first caller frame call=${s.metaCallId}`);
+    }
     console.log(`[WABA-BRIDGE] recording AUTO-ARMED for AI call=${s.metaCallId} (agent=${!!s.assistantConfig.record_agent} user=${!!s.assistantConfig.record_user})`);
   }
 
@@ -992,30 +1150,41 @@ async function speak(s, text, role) {
     s.recAgent = fs.createWriteStream(path.join(RECORDING_DIR, `${s.metaCallId}_agent.pcm`));
   }
 
-  // Prefer ElevenLabs (streaming, low latency). If it yields no audio —
-  // usually because PCM output needs a PAID ElevenLabs tier — fall back to
-  // OpenAI TTS (same key as STT + the LLM). Once ElevenLabs proves unusable
-  // on this call we skip it to avoid the per-reply delay.
+  // Speak with the provider the operator PICKED (s.ttsProvider). When OpenAI
+  // is selected, use it directly — do NOT try ElevenLabs first (that was the
+  // "selected ChatGPT but it keeps using ElevenLabs" bug, which also burned
+  // ElevenLabs credits). When ElevenLabs is selected, prefer it (streaming,
+  // low latency) and fall back to OpenAI if it yields no audio (usually a PCM
+  // output that needs a PAID tier); once it proves unusable we skip it.
   let produced = 0;
-  if (!s.ttsFallbackOpenAI && s.elevenlabsKey) {
-    produced = await speakElevenLabs(s, text);
-    if (produced === 0) {
-      // Log the REAL reason ElevenLabs returned nothing so the operator can
-      // fix it (wrong/free API key, or a library voice not on the account),
-      // instead of a generic guess. Falls back to OpenAI so the call still works.
-      const why = s._elevenLabsError
-        ? `ElevenLabs rejected the request: ${s._elevenLabsError}`
-        : 'ElevenLabs produced no audio (check the API key is your PAID account + the voice is a premade/added voice)';
-      console.warn(`[WABA-BRIDGE] ${why} — falling back to OpenAI TTS. ElevenLabs credits will NOT be used until this is fixed. call=${s.metaCallId}`);
-      s.ttsFallbackOpenAI = true;
-    }
-  }
-  if (produced === 0 && s.openaiKey) {
+  if (s.ttsProvider === 'openai' && s.openaiKey) {
     produced = await speakOpenAiTts(s, text);
     console.log(`[WABA-BRIDGE] OpenAI TTS produced ${produced} bytes for "${text.slice(0, 40)}" call=${s.metaCallId}`);
+    // Only if OpenAI unexpectedly yields nothing do we borrow ElevenLabs.
+    if (produced === 0 && s.elevenlabsKey) {
+      produced = await speakElevenLabs(s, text);
+    }
+  } else {
+    if (!s.ttsFallbackOpenAI && s.elevenlabsKey) {
+      produced = await speakElevenLabs(s, text);
+      if (produced === 0) {
+        // Log the REAL reason ElevenLabs returned nothing so the operator can
+        // fix it (wrong/free API key, or a library voice not on the account),
+        // instead of a generic guess. Falls back to OpenAI so the call still works.
+        const why = s._elevenLabsError
+          ? `ElevenLabs rejected the request: ${s._elevenLabsError}`
+          : 'ElevenLabs produced no audio (check the API key is your PAID account + the voice is a premade/added voice)';
+        console.warn(`[WABA-BRIDGE] ${why} — falling back to OpenAI TTS. ElevenLabs credits will NOT be used until this is fixed. call=${s.metaCallId}`);
+        s.ttsFallbackOpenAI = true;
+      }
+    }
+    if (produced === 0 && s.openaiKey) {
+      produced = await speakOpenAiTts(s, text);
+      console.log(`[WABA-BRIDGE] OpenAI TTS produced ${produced} bytes for "${text.slice(0, 40)}" call=${s.metaCallId}`);
+    }
   }
   if (produced === 0) {
-    console.warn(`[WABA-BRIDGE] no working TTS (ElevenLabs empty + no OpenAI key) — silent reply. Configure a key at /admin/api-keys.`);
+    console.warn(`[WABA-BRIDGE] no working TTS (chosen=${s.ttsProvider || 'none'}) — silent reply. Configure a key at /admin/api-keys.`);
   }
 
   // Caller barged in mid-reply — the floor was already released and the queue
@@ -1074,7 +1243,7 @@ async function speakElevenLabs(s, text) {
           const pcm16k = Buffer.from(msg.audio, 'base64');
           ttsBytes += pcm16k.length;
           const pcm48k = upsample3x(pcm16k);
-          s.recAgent?.write(pcm48k);
+          recWrite(s, 'agent', pcm48k);   // size-capped — see REC_MAX_BYTES
           enqueueAudio(s, pcm48k);
         } else if (msg.error || msg.message) {
           s._elevenLabsError = String(msg.message || msg.error || '').slice(0, 180);
@@ -1125,7 +1294,7 @@ async function speakOpenAiTts(s, text) {
         const pcm24 = buf.subarray(0, usable);
         total += usable;
         const pcm48 = upsample2x(pcm24);
-        s.recAgent?.write(pcm48);
+        recWrite(s, 'agent', pcm48);   // size-capped — see REC_MAX_BYTES
         enqueueAudio(s, pcm48);
       });
       r.data.on('end', resolve);
@@ -1407,6 +1576,8 @@ export function closeSession(app, metaCallId) {
   s.closed = true;
 
   try { clearInterval(s.audioPacer); } catch {}
+  try { clearTimeout(s.maxDurTimer); } catch {}
+  try { clearTimeout(s._discTimer); } catch {}
   try { s.sttSocket?.close?.(); } catch {}
   try { s.ttsSocket?.close?.(); } catch {}
   try { s.audioSink?.stop?.(); } catch {}

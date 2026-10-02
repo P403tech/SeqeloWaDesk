@@ -121,7 +121,12 @@ class NewLoginAlertListener
                 "From IP: " . ($ip ?: 'unknown') . "\n" .
                 "Browser: " . ($ua ?: 'unknown') . "\n" .
                 "Reason for alert: " . implode(', ', $reasons) . "\n\n" .
-                "If this was you, no action is needed. If not, change your password right away at " . url('/settings?tab=security') . "\n\n" .
+                // Link to the PASSWORD-RESET flow, not /settings?tab=security: the
+                // latter is an authenticated page, so a recipient who isn't logged in
+                // (the exact "someone else signed in" case this alert is for) was
+                // bounced to the login screen instead of being able to act. The reset
+                // page works logged-out; signed-in users can still use Settings → Security.
+                "If this was you, no action is needed. If not, reset your password now at " . url('/forgot-password') . " (or, if you're signed in, open Settings → Security).\n\n" .
                 "— {$appName} security",
                 function ($m) use ($user, $subject, $fromAddr, $fromName) {
                     $m->to($user->email)->subject($subject);

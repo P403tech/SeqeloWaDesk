@@ -1,3 +1,13 @@
+@php
+    // Which channel this build is for — set by the index channel chooser
+    // (?channel=sms / ?channel=email). SMS and Email reuse this exact builder,
+    // but neither speaks Meta templates, the flow engine or A/B variants yet,
+    // so those surfaces are hidden rather than offered and silently ignored.
+    $campaignChannel = $campaignChannel ?? 'whatsapp';
+    $isEmailCampaign = $campaignChannel === 'email';
+    $customOnlyChannel = in_array($campaignChannel, ['sms', 'email'], true);
+@endphp
+
 <x-layouts.user :title="__('New WhatsApp Campaign')" nav-key="wa-campaigns" page="user-wa-campaigns-create">
 
     @if (session('status') || $errors->any())
@@ -56,6 +66,8 @@
             enctype="multipart/form-data" data-ajax="create-campaign"
             class="grid grid-cols-1 xl:grid-cols-[1fr_342px] gap-5 items-start">
             @csrf
+            @php $stepReview = !empty($canFollowups) ? 6 : 5; @endphp
+            <input type="hidden" name="followups_json" id="followups_json" value="">
 
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
 
@@ -89,9 +101,18 @@
                                 class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Schedule') }}</span>
                             <span class="bar flex-1 h-[2px] mx-2 rounded bg-paper-200"></span>
                         </div>
-                        <div class="step-node flex items-center gap-2.5 cursor-pointer" data-n="5">
+                        @if (!empty($canFollowups))
+                        <div class="step-node flex items-center gap-2.5 flex-1 cursor-pointer" data-n="5">
                             <span
                                 class="dot w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold font-mono shrink-0 transition border-[1.5px] bg-paper-0 border-paper-200 text-ink-500">5</span>
+                            <span
+                                class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Follow-ups') }}</span>
+                            <span class="bar flex-1 h-[2px] mx-2 rounded bg-paper-200"></span>
+                        </div>
+                        @endif
+                        <div class="step-node flex items-center gap-2.5 cursor-pointer" data-n="{{ $stepReview }}">
+                            <span
+                                class="dot w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold font-mono shrink-0 transition border-[1.5px] bg-paper-0 border-paper-200 text-ink-500">{{ $stepReview }}</span>
                             <span
                                 class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Review') }}</span>
                         </div>
@@ -164,7 +185,7 @@
                                     <p class="mt-1.5 text-[12px] text-ink-500 leading-snug">
                                         {{ __('Write text and attach media or buttons for a one-off broadcast.') }}</p>
                                 </label>
-                                @unless (($campaignChannel ?? 'whatsapp') === 'sms')
+                                @unless ($customOnlyChannel)
                                 <label
                                     class="type-tile cursor-pointer border rounded-2xl p-4 transition border-paper-200"
                                     data-type="Template">
@@ -222,6 +243,10 @@
                             </div>
                         </div>
 
+                        {{-- A/B is WhatsApp/SMS only for now: the email runner reads
+                             custom_message alone, so an email campaign that offered a
+                             Variant B would silently send Variant A to everyone. --}}
+                        @unless ($isEmailCampaign)
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <label
                                 class="border border-paper-200 rounded-lg px-3 py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-paper-50">
@@ -248,6 +273,7 @@
                                     {{ __('Variant B receives the remaining audience. Set Variant B content in the Compose step.') }}</div>
                             </div>
                         </div>
+                        @endunless
                     </div>
 
                     <div class="step-pane hidden" data-step="2">
@@ -284,22 +310,29 @@
                             <div data-engine-note
                                 class="hidden mx-5 mt-4 rounded-xl border border-accent-amber/40 bg-accent-amber/10 px-3 py-2.5 text-[11.5px] text-ink-700"></div>
 
-                            <!-- 02a Header -->
+                            {{-- 02a Header — on the EMAIL channel this same field is the
+                                 mail Subject (the runner reads custom_header, falling back
+                                 to the campaign name), so it is relabelled and required
+                                 rather than duplicated into a second input. --}}
                             <div class="sec px-5 py-4 border-b border-paper-200">
                                 <div class="flex items-center gap-2.5 mb-3">
                                     <span
                                         class="w-[23px] h-[23px] rounded-[7px] bg-paper-50 text-wa-deep inline-flex items-center justify-center text-[10px] font-semibold font-mono shrink-0">A</span>
                                     <span
-                                        class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Header') }}</span>
+                                        class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ $isEmailCampaign ? __('Subject') : __('Header') }}</span>
                                     <span class="font-mono text-[10px] text-ink-500">{{ __('optional') }}</span>
                                 </div>
                                 <label class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block"
-                                    for="cc-header">{{ __('Header text') }} <span
-                                        class="font-mono text-[10px] text-ink-500">{{ __('max 60') }}</span></label>
+                                    for="cc-header">{{ $isEmailCampaign ? __('Subject line') : __('Header text') }} <span
+                                        class="font-mono text-[10px] text-ink-500">{{ $isEmailCampaign ? __('max 150') : __('max 60') }}</span></label>
                                 <input id="cc-header" name="custom_header" type="text"
-                                    value="{{ old('custom_header') }}" maxlength="60"
-                                    placeholder="{{ __('e.g. May offer is live') }}"
+                                    value="{{ old('custom_header') }}" maxlength="{{ $isEmailCampaign ? 150 : 60 }}"
+                                    placeholder="{{ $isEmailCampaign ? __('e.g. Your May offer is live') : __('e.g. May offer is live') }}"
                                     class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                                @if ($isEmailCampaign)
+                                    <div class="text-[10.5px] text-ink-500 mt-1">
+                                        {{ __('Used as the email subject. Leave it blank to fall back to the campaign name.') }}</div>
+                                @endif
                             </div>
 
                             <!-- 02b Body -->
@@ -345,11 +378,14 @@
  contact attribute value at send time. This panel just shows
  which slot maps to which attribute so the operator can verify
  the personalization before launching. --}}
-                                {{-- Hidden: named tokens ({{company}}) already name their attribute,
- so the slot→attribute panel is redundant + confusing. The server
- builds the map from the token names on save. --}}
+                                {{-- Variable mapping. Each {{slot}} in the body gets a dropdown to
+                                     pick what fills it — a COLUMN from an uploaded recipient CSV
+                                     (offered first, "From your file") or a contact attribute. So a
+                                     user personalizes with a spreadsheet without typing variable
+                                     names (WA-Sender style). Columns are pushed in by the CSV
+                                     upload handler via the panel's setColumns(). --}}
                                 <div
-                                    class="hidden mt-2.5 rounded-lg border border-paper-200 bg-paper-50/60 px-3 py-2.5">
+                                    class="mt-2.5 rounded-lg border border-paper-200 bg-paper-50/60 px-3 py-2.5">
                                     <div class="flex items-center gap-2 mb-2">
                                         <svg viewBox="0 0 16 16" class="w-3.5 h-3.5 text-wa-deep" fill="none"
                                             stroke="currentColor" stroke-width="1.6">
@@ -358,12 +394,12 @@
                                         <span
                                             class="text-[11.5px] font-semibold text-ink-700">{{ __('Variable mapping') }}</span>
                                         <span
-                                            class="font-mono text-[10px] text-ink-500">{{ __('which attribute fills each slot') }}</span>
+                                            class="font-mono text-[10px] text-ink-500">{{ __('which column or attribute fills each slot') }}</span>
                                     </div>
                                     <div id="cc-var-map-rows" class="space-y-1.5"></div>
                                     <div id="cc-var-map-empty" class="text-[11px] text-ink-500 leading-[1.4]">
-                                        {{ __('No variables yet. Press / in the body to insert an attribute like') }}
-                                        <span class="font-mono">@{{ 1 }}</span> {{ __('and map it.') }}
+                                        {{ __('Add a variable like') }} <span class="font-mono">@{{ 1 }}</span>
+                                        {{ __('to the message (press / to insert one), then upload your recipient CSV under Recipients and map each variable to a column below.') }}
                                     </div>
                                 </div>
                                 <div class="text-[10.5px] text-ink-500 mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -378,6 +414,10 @@
                                 </div>
                             </div>
 
+                            {{-- Attachment is WhatsApp-only for now: the email runner
+                                 sends the body alone, so an email campaign that offered
+                                 a file picker would silently drop the operator's PDF. --}}
+                            @unless ($isEmailCampaign)
                             <!-- 02c Attachment -->
                             <div class="sec px-5 py-4 border-b border-paper-200">
                                 <div class="flex items-center gap-2.5 mb-3">
@@ -486,6 +526,8 @@
                                     </div>
                                 </div>
                             </div>
+
+                            @endunless
 
                             <!-- 02d Footer -->
                             <div class="sec px-5 py-4 border-b border-paper-200">
@@ -989,6 +1031,21 @@
                             </label>
                         </div>
 
+                        {{-- Best time to send — engagement heatmap + suggestion. Pure
+                             statistics (no AI). Filled by campaign-best-time.js. --}}
+                        <div id="best-time-card" class="mb-4 border border-paper-200 rounded-xl bg-paper-50/40 overflow-hidden hidden"
+                            data-url="{{ route('user.wa-campaigns.api.best-time') }}">
+                            <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-paper-200">
+                                <div>
+                                    <div class="text-[13px] font-semibold text-ink-900">{{ __('Best time to send') }}</div>
+                                    <div id="best-time-sub" class="text-[11px] text-ink-500 mt-0.5">{{ __('Analyzing when your audience engages…') }}</div>
+                                </div>
+                                <button type="button" id="best-time-use"
+                                    class="hidden shrink-0 px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11.5px] font-semibold hover:bg-wa-teal">{{ __('Use best time') }}</button>
+                            </div>
+                            <div id="best-time-heatmap" class="px-2 py-2"></div>
+                        </div>
+
                         <div data-schedule-field class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                             <div>
                                 <label class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block"
@@ -1083,7 +1140,12 @@
                         {{-- Smart delivery (anti-ban). Always visible — the paced loop runs
                              for "Send now" too. Every field optional: blank = the platform
                              default pacing set by the admin. Strongly recommended for 1000+
-                             recipients on the Unofficial API. --}}
+                             recipients on the Unofficial API.
+                             Hidden for email: the mail runner honours the auto-end date
+                             above but not per-message pacing, so offering a delay, daily
+                             cap, batch size or active-hours window here would promise
+                             behaviour the channel does not have. --}}
+                        @unless ($isEmailCampaign)
                         @php
                             // Effective timezone for the active-hours window — the SAME tz the
                             // schedule step submits (defaults to the workspace tz), so the hours
@@ -1174,6 +1236,7 @@
                             </div>
                             <div class="text-[10.5px] text-ink-500 mt-1">{{ __('Only send within these hours, in') }} <b data-smart-tz>{{ $smartTz }}</b> {{ __('(the campaign timezone set in the Schedule step). Outside the window the run waits for the next opening. Leave both blank to send any time.') }}</div>
                         </div>
+                        @endunless
 
                         <div data-schedule-now-note
                             class="hidden bg-wa-bubble/40 border border-wa-green/30 rounded-lg p-4 text-[12.5px] text-ink-700 leading-relaxed">
@@ -1190,10 +1253,92 @@
                         </div>
                     </div>
 
+                    @if (!empty($canFollowups))
                     <div class="step-pane hidden" data-step="5">
                         <div class="flex items-center gap-2.5 mb-4">
                             <span
                                 class="w-[23px] h-[23px] rounded-[7px] bg-paper-50 text-wa-deep inline-flex items-center justify-center text-[10px] font-semibold font-mono shrink-0">05</span>
+                            <span
+                                class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Follow-ups') }}</span>
+                        </div>
+                        <p class="text-[12px] text-ink-500 mb-4 leading-relaxed">
+                            {{ __('React automatically to how each recipient engages — start a flow when they reply, send a reminder template when they don\'t, tag a clicker. Rules run after the campaign sends.') }}
+                        </p>
+
+                        <template id="fu-row-tpl">
+                            <div class="fu-row border border-paper-200 rounded-xl p-3 mb-3 bg-paper-50/40" data-fu-row>
+                                <div class="flex flex-wrap items-end gap-2.5">
+                                    <label class="flex flex-col gap-1">
+                                        <span class="text-[10px] uppercase tracking-wide text-ink-500 font-mono">{{ __('When') }}</span>
+                                        <select data-fu-event class="text-[12.5px] border border-paper-200 rounded-lg px-2 py-1.5 bg-paper-0">
+                                            <option value="replied">{{ __('Recipient replies') }}</option>
+                                            <option value="clicked_button">{{ __('Taps a quick-reply button') }}</option>
+                                            <option value="clicked_link">{{ __('Clicks a link') }}</option>
+                                            <option value="read">{{ __('Reads the message') }}</option>
+                                            <option value="read_no_reply">{{ __('Reads but no reply in…') }}</option>
+                                            <option value="delivered_no_read">{{ __('Delivered but not read in…') }}</option>
+                                            <option value="sent_no_reply">{{ __('No reply in…') }}</option>
+                                            <option value="not_delivered">{{ __('Not delivered in…') }}</option>
+                                            <option value="failed">{{ __('Send failed') }}</option>
+                                        </select>
+                                    </label>
+                                    <label class="flex flex-col gap-1" data-fu-delay-wrap hidden>
+                                        <span class="text-[10px] uppercase tracking-wide text-ink-500 font-mono">{{ __('After') }}</span>
+                                        <span class="inline-flex items-center gap-1">
+                                            <input type="number" min="0" value="6" data-fu-delay-value class="w-16 text-[12.5px] border border-paper-200 rounded-lg px-2 py-1.5 bg-paper-0">
+                                            <select data-fu-delay-unit class="text-[12.5px] border border-paper-200 rounded-lg px-2 py-1.5 bg-paper-0">
+                                                <option value="minute">{{ __('minutes') }}</option>
+                                                <option value="hour" selected>{{ __('hours') }}</option>
+                                                <option value="day">{{ __('days') }}</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                    <span class="text-[13px] text-ink-400 pb-2">→</span>
+                                    <label class="flex flex-col gap-1">
+                                        <span class="text-[10px] uppercase tracking-wide text-ink-500 font-mono">{{ __('Then') }}</span>
+                                        <select data-fu-action class="text-[12.5px] border border-paper-200 rounded-lg px-2 py-1.5 bg-paper-0">
+                                            <option value="send_template">{{ __('Send a template') }}</option>
+                                            <option value="start_flow">{{ __('Start a flow') }}</option>
+                                            <option value="enroll_drip">{{ __('Enroll in a drip') }}</option>
+                                            <option value="add_tag">{{ __('Add a tag') }}</option>
+                                            <option value="remove_tag">{{ __('Remove a tag') }}</option>
+                                            <option value="assign_agent">{{ __('Assign to an agent') }}</option>
+                                            <option value="opt_out">{{ __('Opt the contact out') }}</option>
+                                        </select>
+                                    </label>
+                                    <label class="flex flex-col gap-1 flex-1 min-w-[160px]" data-fu-ref-wrap>
+                                        <span class="text-[10px] uppercase tracking-wide text-ink-500 font-mono" data-fu-ref-label>{{ __('Template') }}</span>
+                                        <select data-fu-ref class="text-[12.5px] border border-paper-200 rounded-lg px-2 py-1.5 bg-paper-0"></select>
+                                    </label>
+                                    <button type="button" data-fu-remove class="text-accent-coral/80 hover:text-accent-coral text-[11px] font-semibold pb-2">{{ __('Remove') }}</button>
+                                </div>
+                                <p class="text-[10.5px] text-ink-400 mt-2 hidden" data-fu-window-note>
+                                    {{ __('No reply means the 24-hour window is closed — only a template (or a flow/drip that starts with a template) can send.') }}
+                                </p>
+                            </div>
+                        </template>
+
+                        @php
+                            $fuOptions = \App\Models\CampaignFollowup::buildPickerOptions(
+                                $flows ?? collect(), $templates ?? collect(), $drips ?? collect(), $tags ?? collect(),
+                                (isset($campaign) && $campaign) ? $campaign : null, $agents ?? collect(),
+                            );
+                        @endphp
+                        <script type="application/json" id="fu-options">@json($fuOptions)</script>
+
+                        <div id="fu-rows"></div>
+                        <button type="button" id="fu-add"
+                            class="mt-1 px-3 py-2 rounded-full border border-wa-deep/30 bg-wa-deep/5 text-wa-deep text-[12px] font-semibold hover:bg-wa-deep/10 inline-flex items-center gap-1.5">
+                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10"/></svg>
+                            {{ __('Add a follow-up rule') }}
+                        </button>
+                    </div>
+                    @endif
+
+                    <div class="step-pane hidden" data-step="{{ $stepReview }}">
+                        <div class="flex items-center gap-2.5 mb-4">
+                            <span
+                                class="w-[23px] h-[23px] rounded-[7px] bg-paper-50 text-wa-deep inline-flex items-center justify-center text-[10px] font-semibold font-mono shrink-0">{{ str_pad((string) $stepReview, 2, '0', STR_PAD_LEFT) }}</span>
                             <span
                                 class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Review') }}</span>
                             <span class="font-mono text-[10px] text-ink-500">{{ __('confirm') }}</span>
@@ -1281,7 +1426,7 @@
                         Previous
                     </button>
                     <div class="font-mono text-[11px] text-ink-500">{{ __('Step') }} <span
-                            id="cur-step">1</span> of 5</div>
+                            id="cur-step">1</span> of {{ $stepReview }}</div>
                     <div class="flex items-center gap-2">
                         <button id="nextBtn" type="button"
                             class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">

@@ -33,6 +33,25 @@
                             <path d="M8 10l5-5M11 7l1.5 1.5M9.5 5.5L11 4" />
                         </svg>AI keys <span
                             class="ml-auto text-[9px] font-mono px-1.5 py-px rounded bg-[#F3E9FF] text-[#5B3D8A]">3</span></a>
+                    <a data-tab="payments" href="?tab=payments" class="set-tab"><svg viewBox="0 0 16 16"
+                            class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                            <rect x="2" y="4" width="12" height="8" rx="1.5" />
+                            <path d="M2 6.5h12M4 9.5h3" />
+                        </svg>{{ __('Payment gateways') }}</a>
+                    @if (!empty($domainWs))
+                        <a data-tab="domain" href="?tab=domain" class="set-tab"><svg viewBox="0 0 16 16"
+                                class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                                <circle cx="8" cy="8" r="6" /><path d="M2 8h12M8 2a8 8 0 0 1 0 12M8 2a8 8 0 0 0 0 12" />
+                            </svg>{{ __('Custom domain') }}</a>
+                    @endif
+                    {{-- Meta app (own Facebook/Instagram App ID + Secret) — shown only in
+                         own-app mode (admin toggle "Clients use their OWN Meta app"). --}}
+                    @if (!empty($metaAllowManualApp))
+                        <a data-tab="metaapp" href="?tab=metaapp" class="set-tab"><svg viewBox="0 0 16 16"
+                                class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                                <rect x="2" y="3" width="12" height="10" rx="2" /><path d="M2 6h12M5 9.5h4" />
+                            </svg>{{ __('Meta app') }}</a>
+                    @endif
 
                     <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 px-3 pt-3 pb-1.5">
                         {{ __('System') }}</div>
@@ -732,27 +751,44 @@
                                 'name' => 'Anthropic Claude',
                                 'docs' => 'console.anthropic.com/settings/keys',
                                 'sub' => 'Claude Opus 4.7, Sonnet 4.6, Haiku 4.5',
-                            ],
                             'gemini' => [
                                 'name' => 'Google Gemini',
                                 'docs' => 'aistudio.google.com/app/apikey',
                                 'sub' => 'Gemini 3.5 Flash, 3.1 Pro, 2.5 Pro',
-                            ],
                             'muse' => [
                                 'name' => 'Muse (Meta)',
                                 'docs' => 'ai.developer.meta.com',
                                 'sub' => 'Muse Spark 1.3, 1.1',
-                            ],
                             'mistral' => [
                                 'name' => 'Mistral',
                                 'docs' => 'console.mistral.ai/api-keys',
                                 'sub' => 'Mistral Large, Codestral, Magistral',
-                            ],
                             'elevenlabs' => [
                                 'name' => 'ElevenLabs',
                                 'docs' => 'elevenlabs.io/app/settings/api-keys',
                                 'sub' => 'Eleven v3, multilingual, turbo',
-                            ],
+                            'openai'      => ['name' => 'OpenAI',           'docs' => 'platform.openai.com/api-keys',        'sub' => 'GPT-5.x, GPT-4.1, GPT-4o'],
+                            'anthropic'   => ['name' => 'Anthropic Claude', 'docs' => 'console.anthropic.com/settings/keys',  'sub' => 'Claude Opus 5, Sonnet 5, Haiku 4.5'],
+                            'gemini'      => ['name' => 'Google Gemini',    'docs' => 'aistudio.google.com/app/apikey',      'sub' => 'Gemini 3.5 Flash, 2.5 Pro'],
+                            'mistral'     => ['name' => 'Mistral',          'docs' => 'console.mistral.ai/api-keys',         'sub' => 'Mistral Large, Small, Codestral'],
+                            'deepseek'    => ['name' => 'DeepSeek',         'docs' => 'platform.deepseek.com/api_keys',      'sub' => 'DeepSeek Chat, R1'],
+                            'xai'         => ['name' => 'xAI (Grok)',       'docs' => 'console.x.ai',                        'sub' => 'Grok 4, Grok 3'],
+                            'perplexity'  => ['name' => 'Perplexity',       'docs' => 'perplexity.ai/settings/api',          'sub' => 'Sonar Pro, Sonar'],
+                            'groq'        => ['name' => 'Groq',             'docs' => 'console.groq.com/keys',               'sub' => 'Llama, Kimi — fastest'],
+                            'qwen'        => ['name' => 'Alibaba Qwen',     'docs' => 'dashscope.console.aliyun.com',        'sub' => 'Qwen Max, Plus, Turbo'],
+                            'moonshot'    => ['name' => 'Moonshot (Kimi)',  'docs' => 'platform.moonshot.ai',               'sub' => 'Kimi K2'],
+                            'zai'         => ['name' => 'Z.ai (GLM)',       'docs' => 'z.ai',                                'sub' => 'GLM 4.6, 4.5'],
+                            'cohere'      => ['name' => 'Cohere',           'docs' => 'dashboard.cohere.com/api-keys',       'sub' => 'Command A, Command R'],
+                            'nvidia'      => ['name' => 'NVIDIA',           'docs' => 'build.nvidia.com',                    'sub' => 'Llama, DeepSeek (NIM)'],
+                            'llama'       => ['name' => 'Meta Llama',       'docs' => 'llama.developer.meta.com',            'sub' => 'Llama 4, Llama 3.3'],
+                            'huggingface' => ['name' => 'Hugging Face',     'docs' => 'huggingface.co/settings/tokens',      'sub' => 'Llama, DeepSeek, Qwen'],
+                            'baidu'       => ['name' => 'Baidu (Ernie)',    'docs' => 'console.bce.baidu.com/qianfan',       'sub' => 'Ernie 4.5'],
+                            'ai21'        => ['name' => 'AI21 (Jamba)',     'docs' => 'studio.ai21.com/account/api-key',     'sub' => 'Jamba Large, Mini'],
+                            'reka'        => ['name' => 'Reka',             'docs' => 'platform.reka.ai',                    'sub' => 'Reka Core, Flash'],
+                            'yi'          => ['name' => '01.AI (Yi)',       'docs' => 'platform.01.ai',                      'sub' => 'Yi Lightning, Large'],
+                            'openrouter'  => ['name' => 'OpenRouter',       'docs' => 'openrouter.ai/keys',                  'sub' => 'One key, 20+ models'],
+                            'elevenlabs'  => ['name' => 'ElevenLabs',       'docs' => 'elevenlabs.io/app/settings/api-keys', 'sub' => 'Eleven v3, multilingual (voice)'],
+                            'deepgram'    => ['name' => 'Deepgram',         'docs' => 'console.deepgram.com',                'sub' => 'Nova STT (voice)'],
                         ];
                         $adminKeysByProvider = \App\Models\AdminAiKey::query()
                             ->whereIn('provider', array_keys($providers))
@@ -1458,6 +1494,227 @@
                     </form>
 
                 </div>
+
+                <!-- PAYMENT GATEWAYS -->
+                <div data-pane="payments" class="space-y-5 hidden">
+                    <div class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
+                        <div class="flex items-start justify-between gap-4 mb-1">
+                            <div>
+                                <h3 class="font-serif text-[20px] mb-1">{{ __('Payment gateways') }}</h3>
+                                <p class="text-[12px] text-ink-500 leading-relaxed max-w-2xl">
+                                    {{ __('Add your OWN payment gateway keys so checkouts charge INTO your account. These same keys are used for your online store AND appointment booking deposits. Paste the keys the gateway names in its docs.') }}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            @include('user.settings._payment_gateways', ['catalog' => $catalog, 'configured' => $configured, 'fields' => $fields, 'webhookBase' => $webhookBase])
+                        </div>
+                    </div>
+                </div>
+
+                <!-- META APP — own Facebook/Instagram App ID + Secret. Shown only in
+                     own-app mode (admin toggle). Clients connect FB/IG with THEIR own
+                     Meta app so inbound works while the platform app is in review. -->
+                @if (!empty($metaAllowManualApp))
+                    @php $mws = $authUser->currentWorkspace; @endphp
+                    <div data-pane="metaapp" class="space-y-5 hidden">
+                        <div class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
+                            <div class="mb-1">
+                                <h3 class="font-serif text-[20px] mb-1">{{ __('Your own Meta app') }}</h3>
+                                <p class="text-[12px] text-ink-500 leading-relaxed max-w-2xl">
+                                    {{ __('Connect Facebook and Instagram with your OWN Meta app instead of the platform default. Paste your App ID and App Secret below — one app covers both channels. Leave both blank to use the platform app.') }}
+                                </p>
+                            </div>
+
+                            @if (session('status'))
+                                <div class="my-3 rounded-lg bg-wa-mint border border-wa-green/30 px-4 py-2 text-[12.5px] text-wa-deep font-mono">{{ session('status') }}</div>
+                            @endif
+                            @error('meta_app')
+                                <div class="my-3 rounded-lg bg-accent-coral/10 border border-accent-coral/40 px-4 py-2 text-[12.5px] text-[#A1431F]">{{ $message }}</div>
+                            @enderror
+
+                            <form method="POST" action="{{ route('user.settings.meta-app') }}" class="mt-4 space-y-4" autocomplete="off">
+                                @csrf
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <label class="block">
+                                        <span class="text-[12px] font-semibold text-ink-700">{{ __('App ID') }}</span>
+                                        <input type="text" name="meta_app_id" value="{{ $mws->meta_app_id }}" placeholder="e.g. 1486133033552760"
+                                            class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                        <span class="text-[10px] text-ink-400 leading-snug mt-1 block">{{ __('Your Meta app’s App ID (Settings → Basic). Instagram connects through this same Facebook app.') }}</span>
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-[12px] font-semibold text-ink-700">{{ __('App Secret') }}</span>
+                                        <input type="password" name="meta_app_secret" autocomplete="new-password"
+                                            placeholder="{{ $mws->meta_app_secret ? '•••••••• '.__('stored — leave blank to keep') : '' }}"
+                                            class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                    </label>
+                                </div>
+
+                                {{-- Instagram-Login app (SEPARATE Instagram App ID + secret). Facebook
+                                     uses the Meta app above; Instagram DMs need this Instagram-Login
+                                     app so they deliver without Advanced-Access review. --}}
+                                <div class="mt-2 pt-4 border-t border-paper-200">
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <span class="w-6 h-6 rounded-lg grid place-items-center bg-wa-mint text-wa-deep">
+                                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4"/><circle cx="8" cy="8" r="2.9"/><circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none"/></svg>
+                                        </span>
+                                        <span class="text-[13px] font-semibold text-ink-900">{{ __('Instagram app (for Instagram DMs)') }}</span>
+                                    </div>
+                                    <p class="text-[11.5px] text-ink-500 leading-relaxed max-w-2xl mb-3">
+                                        {{ __('Instagram has its OWN App ID + Secret (developers.facebook.com → your app → Instagram → API setup with Instagram login). Paste them here so Instagram connects through the Instagram-Login flow — this is what makes DMs arrive. Leave blank to use the Facebook app above.') }}
+                                    </p>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <label class="block">
+                                            <span class="text-[12px] font-semibold text-ink-700">{{ __('Instagram App ID') }}</span>
+                                            <input type="text" name="ig_login_app_id" value="{{ $igLoginAppId ?? ($mws->ig_login_app_id ?? '') }}" placeholder="e.g. 4329377027362895"
+                                                class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                        </label>
+                                        <label class="block">
+                                            <span class="text-[12px] font-semibold text-ink-700">{{ __('Instagram App Secret') }}</span>
+                                            <input type="password" name="ig_login_app_secret" autocomplete="new-password"
+                                                placeholder="{{ !empty($igLoginSecretSet) ? '•••••••• '.__('stored — leave blank to keep') : '' }}"
+                                                class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                        </label>
+                                    </div>
+                                    <div class="mt-2 rounded-lg bg-paper-50 border border-paper-200 px-3 py-2">
+                                        <div class="text-[11px] text-ink-600">{{ __('In your Instagram app → API setup with Instagram login → Business login settings, add this OAuth redirect URI:') }}</div>
+                                        <code class="block mt-1 font-mono text-[11px] text-wa-deep break-all select-all">{{ $igOauthRedirect ?? url('/instagram/callback') }}</code>
+                                        <div class="text-[11px] text-ink-500 mt-1.5">{{ __('After saving, connect Instagram from Channels — it opens the Instagram login (not a token paste), and DMs flow in.') }}</div>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center gap-2">
+                                    <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">{{ __('Save') }}</button>
+                                </div>
+                            </form>
+                            @if ($mws->meta_app_id && $mws->meta_app_secret)
+                                <form method="POST" action="{{ route('user.settings.meta-app.test') }}" class="mt-3">
+                                    @csrf
+                                    <button type="submit" class="px-4 py-2 rounded-full border border-paper-200 text-[12px] font-semibold text-ink-700 hover:bg-paper-50 inline-flex items-center gap-2">
+                                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 8l1.5 1.5L11 6"/><circle cx="8" cy="8" r="6.5"/></svg>
+                                        {{ __('Test connection') }}
+                                    </button>
+                                    <span class="text-[11px] text-ink-400 ml-2">{{ __('Checks your saved App ID + Secret against Meta.') }}</span>
+                                </form>
+                            @endif
+                        </div>
+
+                        {{-- Full set-up checklist for the client's own Meta app. --}}
+                        @php
+                            // Shared token, auto-generated if the admin never set one, so the
+                            // value shown here always matches what each channel's webhook
+                            // handshake expects. FB falls back to the shared token, and IG
+                            // falls back to the shared token too (NOT to the FB override) —
+                            // mirroring FacebookWebhookController::verify / InstagramWebhookController::verify.
+                            $__verifyTok = (string) (\App\Models\SystemSetting::get('fb_webhook_verify_token', '') ?: \App\Support\MetaWebhook::verifyToken());
+                            $__igVerifyTok = (string) (\App\Models\SystemSetting::get('instagram_webhook_verify_token', '') ?: \App\Support\MetaWebhook::verifyToken());
+                        @endphp
+                        <div class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
+                            <h3 class="font-serif text-[18px] mb-1">{{ __('Set up your Meta app') }}</h3>
+                            <p class="text-[12px] text-ink-500 mb-4">{{ __('Do these once in your app at developers.facebook.com so Facebook + Instagram connect and messages flow into your inbox.') }}</p>
+
+                            <div class="space-y-3 text-[12px] text-ink-700">
+                                <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5">
+                                    <div class="font-semibold mb-1">{{ __('1. Products to add') }}</div>
+                                    <div class="text-ink-600">{{ __('Facebook Login for Business, Messenger, Webhooks, Instagram.') }}</div>
+                                </div>
+                                <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5">
+                                    <div class="font-semibold mb-1">{{ __('2. Valid OAuth Redirect URIs (Facebook Login → Settings)') }}</div>
+                                    <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ url('/facebook/callback') }}</code>
+                                    <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ url('/instagram/callback') }}</code>
+                                </div>
+                                <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5 space-y-2.5">
+                                    <div class="font-semibold">{{ __('3. Webhooks — set BOTH (Facebook and Instagram use different callback URLs)') }}</div>
+                                    <div>
+                                        <div class="text-[11px] text-ink-500">{{ __('Facebook (Messenger → Webhooks) — Callback URL') }}</div>
+                                        <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ url('/webhooks/facebook') }}</code>
+                                        <div class="text-[11px] text-ink-500 mt-1">{{ __('Verify token') }}</div>
+                                        @if ($__verifyTok !== '')
+                                            <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ $__verifyTok }}</code>
+                                        @else
+                                            <div class="text-[11px] text-[#A1431F]">{{ __('Ask your platform admin to set the webhook verify token.') }}</div>
+                                        @endif
+                                    </div>
+                                    <div class="border-t border-paper-200 pt-2">
+                                        <div class="text-[11px] text-ink-500">{{ __('Instagram (Instagram → Webhooks) — Callback URL') }}</div>
+                                        <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ url('/webhooks/instagram') }}</code>
+                                        <div class="text-[11px] text-ink-500 mt-1">{{ __('Verify token') }}</div>
+                                        @if ($__igVerifyTok !== '')
+                                            <code class="block font-mono text-[11px] text-wa-deep break-all select-all">{{ $__igVerifyTok }}</code>
+                                        @else
+                                            <div class="text-[11px] text-[#A1431F]">{{ __('Ask your platform admin to set the Instagram webhook verify token.') }}</div>
+                                        @endif
+                                    </div>
+                                </div>
+                                <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5">
+                                    <div class="font-semibold mb-1">{{ __('4. Webhook fields to subscribe') }}</div>
+                                    <div class="text-ink-600"><span class="font-medium">{{ __('Facebook Page:') }}</span> <span class="font-mono text-[11px]">messages, messaging_postbacks, feed</span></div>
+                                    <div class="text-ink-600 mt-0.5"><span class="font-medium">{{ __('Instagram:') }}</span> <span class="font-mono text-[11px]">messages, comments, mentions</span></div>
+                                </div>
+                                <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5">
+                                    <div class="font-semibold mb-1">{{ __('5. Permissions to request (App Review)') }}</div>
+                                    <div class="font-mono text-[11px] text-ink-600 leading-relaxed">pages_show_list, pages_messaging, pages_manage_metadata, pages_read_engagement, pages_manage_posts, pages_read_user_content, instagram_basic, instagram_manage_messages, instagram_manage_comments</div>
+                                </div>
+                                <div class="text-[11px] text-ink-500">{{ __('Then paste your App ID + Secret above and connect Facebook / Instagram from the Channels page.') }}</div>
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
+                <!-- CUSTOM DOMAIN — captcha keys (only when a domain is connected + verified) -->
+                @if (!empty($domainWs))
+                    <div data-pane="domain" class="space-y-5 hidden">
+                        <div class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
+                            <div class="mb-1">
+                                <h3 class="font-serif text-[20px] mb-1">{{ __('Custom domain captcha') }}</h3>
+                                <p class="text-[12px] text-ink-500 leading-relaxed max-w-2xl">
+                                    {{ __('Your login page is served on') }}
+                                    <a href="https://{{ $domainWs->custom_domain }}" target="_blank" rel="noopener" class="font-mono text-wa-deep hover:underline">{{ $domainWs->custom_domain }}</a>.
+                                    {{ __('Google reCAPTCHA keys are tied to a domain, so add keys registered for THIS domain. Leave it off and the login page simply shows no captcha (no error).') }}
+                                </p>
+                            </div>
+
+                            @if (session('status'))
+                                <div class="my-3 rounded-lg bg-wa-mint border border-wa-green/30 px-4 py-2 text-[12.5px] text-wa-deep font-mono">{{ session('status') }}</div>
+                            @endif
+                            @error('captcha')
+                                <div class="my-3 rounded-lg bg-accent-coral/10 border border-accent-coral/40 px-4 py-2 text-[12.5px] text-[#A1431F]">{{ $message }}</div>
+                            @enderror
+
+                            <form method="POST" action="{{ route('user.settings.captcha') }}" class="mt-4 space-y-4" autocomplete="off">
+                                @csrf
+                                <label class="inline-flex items-center gap-2">
+                                    <input type="checkbox" name="captcha_enabled" value="1" @checked($domainWs->captcha_enabled) class="w-4 h-4 rounded accent-wa-deep">
+                                    <span class="text-[12.5px] font-semibold text-ink-800">{{ __('Enable reCAPTCHA on my domain login') }}</span>
+                                </label>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <label class="block">
+                                        <span class="text-[12px] font-semibold text-ink-700">{{ __('reCAPTCHA type') }}</span>
+                                        <select name="captcha_version" class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep">
+                                            <option value="v2" @selected(($domainWs->captcha_version ?? 'v2') === 'v2')>{{ __('v2 (checkbox)') }}</option>
+                                            <option value="v3" @selected(($domainWs->captcha_version ?? '') === 'v3')>{{ __('v3 (invisible)') }}</option>
+                                        </select>
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-[12px] font-semibold text-ink-700">{{ __('Site key') }}</span>
+                                        <input type="text" name="captcha_site_key" value="{{ $domainWs->captcha_site_key }}" placeholder="6Lc..."
+                                            class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                    </label>
+                                    <label class="block sm:col-span-2">
+                                        <span class="text-[12px] font-semibold text-ink-700">{{ __('Secret key') }}</span>
+                                        <input type="password" name="captcha_secret" autocomplete="new-password"
+                                            placeholder="{{ $domainWs->captcha_secret ? '•••••••• '.__('stored — leave blank to keep') : '6Lc...' }}"
+                                            class="w-full mt-1 px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] font-mono focus:outline-none focus:border-wa-deep" />
+                                        <span class="text-[10px] text-ink-400 leading-snug mt-1 block">{{ __('Get both keys from Google reCAPTCHA admin, registered for your domain above.') }}</span>
+                                    </label>
+                                </div>
+
+                                <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">{{ __('Save') }}</button>
+                            </form>
+                        </div>
+                    </div>
+                @endif
 
             </section>
         </div>

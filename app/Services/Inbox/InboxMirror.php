@@ -43,14 +43,27 @@ class InboxMirror
         string $body,
         ?string $waMessageId = null,
         ?string $provider = null,
-        array $meta = []
+        array $meta = [],
+        ?int $receivingDeviceId = null
     ): ?int {
         try {
             if ($workspaceId <= 0) return null;
             $digits = preg_replace('/\D+/', '', $toPhone);
             if ($digits === '') return null;
 
-            $conv = self::findConversation($workspaceId, $toPhone);
+            // Pass the SENDING business number so, in a multi-number workspace,
+            // the send lands in THAT number's thread — not the contact's
+            // oldest/other-number thread (the "campaign from A shows under B"
+            // bug). Accepted either as the explicit arg or via
+            // $meta['receiving_device_id'] (convenient for the bulk callers).
+            // The resolver only partitions when the workspace has 2+ numbers, so
+            // single-number installs are unaffected; a non-matching id simply
+            // finds no thread and the send is skipped (never misrouted).
+            $rxDevice = $receivingDeviceId
+                ?: ((isset($meta['receiving_device_id']) && (int) $meta['receiving_device_id'] > 0)
+                    ? (int) $meta['receiving_device_id'] : null);
+            unset($meta['receiving_device_id']);
+            $conv = self::findConversation($workspaceId, $toPhone, $rxDevice);
 
             // No thread yet → do NOT create one for a bulk send. A 100k
             // campaign would otherwise write 100k conversation rows, burying
@@ -149,12 +162,14 @@ class InboxMirror
      * must never partition the lookup. Oldest wins so the thread with the
      * real history is the survivor.
      */
-    public static function findConversation(int $workspaceId, string $phone): ?Conversation
+    public static function findConversation(int $workspaceId, string $phone, ?int $receivingDeviceId = null): ?Conversation
     {
         // Delegates to ConversationResolver, which every other create path now
         // shares. This method's own matching was already the correct one — it
         // is kept as a named entry point so existing callers keep working.
-        return ConversationResolver::find($workspaceId, $phone);
+        // $receivingDeviceId (optional) lets a multi-number workspace target the
+        // sending number's thread; null keeps the legacy device-blind match.
+        return ConversationResolver::find($workspaceId, $phone, $receivingDeviceId);
     }
 
     /**

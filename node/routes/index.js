@@ -4,10 +4,10 @@
 // ==============================
 
 import { Router } from "express";
-import { initializeClient, getClientStatus, terminateClient, checkConnection, getContacts, getPairingCode } from "../controllers/clientController.js";
+import { initializeClient, getClientStatus, getClientsStatus, terminateClient, checkConnection, getContacts, getPairingCode } from "../controllers/clientController.js";
 import { sendMessage, sendMediaOnly, sendMediaMessage, sendLocation, sendProductCatalog, sendReaction, pinMessage, starMessage, sendContact, deleteMessage, editMessage, sendGroupMessage } from "../controllers/messageController.js";
 import { scheduleMessage, getScheduledMessages, scheduleBulkMessage, scheduleRecurring, sendBulkImmediate, pauseSchedule, resumeSchedule, cancelSchedule, updateSchedule } from "../controllers/scheduleController.js";
-import { resumeByPhone, resumeForm, resumeGoogleFormEndpoint, resumePort, startFlow } from "../controllers/flowController.js";
+import { resumeByPhone, resumeDelay, resumeForm, resumeGoogleFormEndpoint, resumePort, startFlow } from "../controllers/flowController.js";
 import { endFlowSessionsForPhone } from "../services/flowService.js";
 import { providerInbound } from "../controllers/providerFlowController.js";
 import { answer as wabaCallAnswer, terminate as wabaCallTerminate, placeOutbound as wabaCallPlaceOutbound, linkMeta as wabaCallLinkMeta, connect as wabaCallConnect } from "../controllers/wabaCallController.js";
@@ -148,6 +148,9 @@ export function initializeRoutes(app) {
     }
     next();
   };
+  // BULK status for many numbers in ONE call. Token-guarded because it
+  // reports on whichever numbers the caller names — see getClientsStatus.
+  app.post("/api/clients-status", nodeTokenGuard, (req, res) => getClientsStatus(req, res, app));
   app.post("/api/groups/create/:phoneNumber",         nodeTokenGuard, (req, res) => groupCreate(req, res, app));
   app.get ("/api/groups/all/:phoneNumber",            nodeTokenGuard, (req, res) => groupListAll(req, res, app));
   app.get ("/api/groups/meta/:phoneNumber",           nodeTokenGuard, (req, res) => groupMetadata(req, res, app));
@@ -189,6 +192,8 @@ app.post('/api/wa/campaign/:scheduleId/cancel', (req, res) =>
   app.post("/api/flow/start/:phoneNumber", (req, res) => startFlow(req, res, app));
   // Laravel commerce webhook → resume paused CommerceShop session.
   app.post("/api/flow/resume-port/:sessionKey", (req, res) => resumePort(req, res, app));
+  // Heartbeat sweep → resume a durable LONG delay whose time has come.
+  app.post("/api/flow/resume-delay", (req, res) => resumeDelay(req, res, app));
   // WABA inbound order webhook (no callback data) → phone-based lookup.
   app.post("/api/flow/resume-by-phone/:workspaceId/:customerPhone", (req, res) => resumeByPhone(req, res, app));
   // WhatsApp Form submission → resume the paused WaForm node, stamp

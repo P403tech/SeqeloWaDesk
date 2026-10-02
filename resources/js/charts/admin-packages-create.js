@@ -1,8 +1,13 @@
 export default function init() {
-    const total = 4;
     let current = 1;
 
     const panes  = document.querySelectorAll('.step-pane');
+    // Derive the total from the actual panes rendered. With the Instagram
+    // add-on installed the blade emits a 5th "Instagram" pane, so a hardcoded
+    // 4 made step 4 look like the last step: Next was hidden, "Save changes"
+    // appeared, and the review ran on the Instagram pane instead of advancing
+    // to the real Display & review step.
+    const total  = panes.length || 4;
     const nodes  = document.querySelectorAll('.step-node');
     const prev   = document.getElementById('prevBtn');
     const next   = document.getElementById('nextBtn');

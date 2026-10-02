@@ -151,6 +151,9 @@ export default function init() {
       if (!String(state.name || '').trim()) {
         return { ok: false, msg: 'Name your widget.', el: field('name') };
       }
+      if (state.mode === 'flow' && !state.flow_id) {
+        return { ok: false, msg: 'Pick a workflow — or switch the engine back to a smart agent.', el: field('flow_id') };
+      }
       if (['ai', 'both'].includes(state.mode) && !state.assistant_id) {
         return { ok: false, msg: 'Link a smart agent — or switch the engine to WhatsApp deep-link.', el: field('assistant_id') };
       }
@@ -246,6 +249,49 @@ export default function init() {
 
   // ------------------------------- save -------------------------------
 
+  // Human labels for the fields the server can reject, so the toast says
+  // "Workflow to run" rather than "flow_id".
+  const FIELD_LABELS = {
+    name: 'Widget name', mode: 'Engine', assistant_id: 'Smart agent', flow_id: 'Workflow to run',
+    target_whatsapp_number: 'WhatsApp number', target_whatsapp_cc: 'Country code',
+    header_title: 'Header title', button_label: 'Send-button label',
+    welcome_message: 'Welcome message', prefilled_message: 'Prefilled message',
+    position: 'Placement', button_color: 'Bubble colour', header_bg: 'Header fill',
+    header_text_color: 'Header ink', message_bubble_color: 'Bubble fill',
+    message_text_color: 'Bubble ink', body_bg_kind: 'Background type',
+    body_bg_color: 'Background colour', body_bg_image_url: 'Background image',
+    button_image_url: 'Bubble image', action_button_bg: 'Send-button fill',
+    action_button_text_color: 'Send-button ink', allowed_domains: 'Allowed domains',
+  };
+
+  /** Which step pane a field lives in, so we can jump the user straight to it. */
+  function stepOfField(el) {
+    const pane = el?.closest?.('.step-pane[data-step]');
+    const n = pane ? parseInt(pane.dataset.step, 10) : NaN;
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * Normalise either failure shape into { msg, key }. Laravel's 422 carries the
+   * real reason per field; our own rules carry a sentence plus an optional
+   * `field` hint. Falling back to the generic line is now the last resort, not
+   * the default.
+   */
+  function serverProblem(json) {
+    if (json && json.errors && typeof json.errors === 'object') {
+      const key = Object.keys(json.errors)[0];
+      if (key) {
+        const raw = json.errors[key];
+        const detail = Array.isArray(raw) ? raw[0] : String(raw || '');
+        const label = FIELD_LABELS[key] || key.replace(/_/g, ' ');
+        return { msg: `${label}: ${detail}`, key };
+      }
+    }
+    if (json && json.error) return { msg: String(json.error), key: json.field || null };
+    if (json && json.message) return { msg: String(json.message), key: null };
+    return { msg: 'Save failed — check the highlighted step.', key: null };
+  }
+
   async function save({ revealSnippet = false } = {}) {
     // Walk every step's validator before posting so the user sees the
     // first real problem rather than a 422 from the server.
@@ -259,8 +305,26 @@ export default function init() {
         headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, 'Accept': 'application/json' },
         body: JSON.stringify(state),
       });
-      const json = await res.json();
-      if (!res.ok || !json.ok) { toast(json.error || 'Save failed — check the highlighted step.', 'error'); return false; }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        // Two DIFFERENT failure shapes come back from this endpoint and only
+        // one was ever handled:
+        //   { ok:false, error:'...' }              our own business rules
+        //   { message, errors:{ field:[msg] } }    Laravel's validate() 422
+        // The second has no `error` key, so every field-level failure fell
+        // through to the generic "check the highlighted step" — which names
+        // neither the step nor the field, and is what the operator was staring
+        // at with no way to tell what was actually wrong.
+        const problem = serverProblem(json);
+        toast(problem.msg, 'error');
+        if (problem.key) {
+          const el = field(problem.key);
+          const step = stepOfField(el);
+          if (step) showStep(step);
+          flashInvalid(el);
+        }
+        return false;
+      }
       state.id = json.id;
       token = json.embed_token;
       document.getElementById('cbw-state-pill').textContent = 'Saved';

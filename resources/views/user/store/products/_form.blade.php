@@ -19,7 +19,7 @@
     @endif
 
     {{-- Two-column shell. Left column = wide editing area, right = sticky organization rail. --}}
-    <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5 items-start">
+    <div class="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5 items-start">
 
         {{-- ============================== LEFT COLUMN ============================== --}}
         <div class="space-y-5">
@@ -289,7 +289,7 @@
         </div>
 
         {{-- ============================== RIGHT COLUMN (sticky rail) ============================== --}}
-        <aside class="space-y-4 lg:sticky lg:top-4">
+        <aside class="space-y-4 xl:sticky xl:top-4">
 
             {{-- Status card --}}
             <section class="bg-paper-0 border border-paper-200 rounded-2xl p-4 shadow-card">

@@ -75,6 +75,36 @@ class AttributesController extends Controller
         ]);
     }
 
+    /**
+     * Built-in contact fields every workspace has out of the box. These are
+     * NOT rows in the `attributes` table — they map straight onto Contact
+     * columns (and business_name/today are workspace/system values), and the
+     * merge-tag resolver (TemplateOverrideResolver) already knows how to fill
+     * them. Returned first in the `/` picker so the operator can always insert
+     * {{first_name}} etc. even before creating a single custom attribute.
+     *
+     * Keys match the tokens documented in the flow/template guide + the ones
+     * varsForRecipient resolves, so what the picker offers is what actually
+     * fills at send time.
+     *
+     * @return array<int, array{name:string,key:string,description:string}>
+     */
+    public static function systemAttributes(): array
+    {
+        return [
+            ['key' => 'first_name',    'name' => __('First name'),    'description' => __('Contact first name')],
+            ['key' => 'name',          'name' => __('Full name'),     'description' => __('Contact full name')],
+            ['key' => 'last_name',     'name' => __('Last name'),     'description' => __('Contact last name')],
+            ['key' => 'phone_number',  'name' => __('Phone number'),  'description' => __('Contact mobile number')],
+            ['key' => 'email',         'name' => __('Email'),         'description' => __('Contact email address')],
+            ['key' => 'country_code',  'name' => __('Country code'),  'description' => __('Contact dialling code')],
+            ['key' => 'address',       'name' => __('Address'),       'description' => __('Contact address')],
+            ['key' => 'language',      'name' => __('Language'),      'description' => __('Contact language')],
+            ['key' => 'business_name', 'name' => __('Business name'), 'description' => __('Your workspace / business name')],
+            ['key' => 'today',         'name' => __('Today'),         'description' => __("Today's date")],
+        ];
+    }
+
     public function apiList(): JsonResponse
     {
         $rows = Attribute::query()
@@ -84,7 +114,7 @@ class AttributesController extends Controller
 
         return response()->json([
             'ok'     => true,
-            'system' => [],
+            'system' => self::systemAttributes(),
             'custom' => $rows->map(fn ($a) => [
                 'name'        => $a->attribute_name,
                 'key'         => $a->attribute_key,

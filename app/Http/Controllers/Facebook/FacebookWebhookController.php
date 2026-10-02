@@ -28,9 +28,11 @@ class FacebookWebhookController extends Controller
         $token = (string) $request->query('hub_verify_token', $request->query('hub.verify_token', ''));
         $challenge = (string) $request->query('hub_challenge', $request->query('hub.challenge', ''));
 
-        // Reuse the WhatsApp webhook verify token — the operator already set it
-        // in System Message settings; no need to enter a Facebook-specific one.
-        $expected = (string) (SystemSetting::get('fb_webhook_verify_token', '') ?: SystemSetting::get('waba_webhook_verify_token', ''));
+        // Reuse the shared Meta webhook verify token (auto-generated if the admin
+        // never set one), so a bring-your-own-app client can complete the
+        // handshake without any admin webhook config. A Facebook-specific
+        // override still wins when present.
+        $expected = (string) (SystemSetting::get('fb_webhook_verify_token', '') ?: \App\Support\MetaWebhook::verifyToken());
         if ($mode === 'subscribe' && $expected !== '' && hash_equals($expected, $token)) {
             return response($challenge, 200)->header('Content-Type', 'text/plain');
         }
@@ -88,15 +90,40 @@ class FacebookWebhookController extends Controller
                     }
                 }
 
-                // Feed events (new posts, comments, reactions) under entry[].changes[].
+                // Change events under entry[].changes[]. This used to `continue`
+                // on anything that wasn't 'feed', which silently discarded
+                // leadgen — so Instant Form submissions never reached us even
+                // once the Page was subscribed to the field.
                 foreach ((array) ($entry['changes'] ?? []) as $change) {
-                    if (($change['field'] ?? '') !== 'feed') {
+                    $field = (string) ($change['field'] ?? '');
+                    $value = (array) ($change['value'] ?? []);
+
+                    if ($field === 'feed') {
+                        try {
+                            FacebookIngestService::feedComment($page, $value);
+                        } catch (\Throwable $e) {
+                            Log::warning('[FB-HOOK] feed ingest failed: '.$e->getMessage(), ['page' => $page->id]);
+                        }
                         continue;
                     }
-                    try {
-                        FacebookIngestService::feedComment($page, (array) ($change['value'] ?? []));
-                    } catch (\Throwable $e) {
-                        Log::warning('[FB-HOOK] feed ingest failed: '.$e->getMessage(), ['page' => $page->id]);
+
+                    if ($field === 'leadgen') {
+                        // Meta's leadgen webhook carries IDs ONLY — never the
+                        // answers. The ingest service does the second Graph call
+                        // (GET /{leadgen_id}) that fetches them, which is why it
+                        // needs leads_retrieval and not just a webhook.
+                        try {
+                            app(\App\Services\Facebook\MetaLeadIngestService::class)->ingest(
+                                $page,
+                                (string) ($value['leadgen_id'] ?? ''),
+                                (string) ($value['form_id'] ?? ''),
+                            );
+                        } catch (\Throwable $e) {
+                            Log::warning('[FB-HOOK] leadgen ingest failed: '.$e->getMessage(), [
+                                'page' => $page->id, 'leadgen_id' => $value['leadgen_id'] ?? null,
+                            ]);
+                        }
+                        continue;
                     }
                 }
             }

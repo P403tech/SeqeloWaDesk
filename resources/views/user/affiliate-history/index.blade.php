@@ -22,9 +22,9 @@
                     </svg></a>
                 <div class="min-w-0">
                     <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">
-                        {{ __('More / Affiliate history') }}</div>
-                    <div class="font-serif text-[20px] leading-tight truncate">{{ __('Affiliate') }} <span
-                            class="italic text-wa-deep">{{ __('history') }}</span></div>
+                        {{ __('More / Refer & Earn') }}</div>
+                    <div class="font-serif text-[20px] leading-tight truncate">{{ __('Refer &') }} <span
+                            class="italic text-wa-deep">{{ __('Earn') }}</span></div>
                 </div>
             </div>
             <div class="flex items-center gap-2">
@@ -41,6 +41,11 @@
                     </svg>
                     Export CSV
                 </a>
+                <a href="{{ $waShareUrl }}" target="_blank" rel="noopener"
+                    class="px-3.5 py-1.5 rounded-full bg-wa-green hover:opacity-90 text-white text-[12px] font-semibold inline-flex items-center gap-2">
+                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="currentColor"><path d="M8 0a8 8 0 0 0-6.9 12l-1 3.6 3.7-1A8 8 0 1 0 8 0Zm4.3 11c-.2.5-1 1-1.5 1-.4 0-.9.2-3-.9-2.5-1.3-4-3.9-4.1-4-.2-.2-1-1.3-1-2.5s.6-1.7.8-2c.2-.2.4-.2.6-.2h.4c.2 0 .4 0 .6.5l.8 2c0 .2.1.4 0 .5l-.4.5-.3.3c-.1.2-.3.3-.1.6.1.3.7 1.1 1.4 1.8 1 .8 1.7 1 2 1.2.2.1.4 0 .5-.1l.7-.8c.2-.2.4-.2.6-.1l1.9.9c.2.1.4.2.5.3.1.2.1.7-.1 1.2Z"/></svg>
+                    {{ __('Share on WhatsApp') }}
+                </a>
                 <button type="button" id="ah-copy-link"
                     class="px-3.5 py-1.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-2"
                     data-url="{{ $referralUrl }}">
@@ -48,13 +53,80 @@
                         <rect x="3" y="3" width="9" height="9" rx="1.5" />
                         <path d="M5.5 5.5h-2v9h9v-2" />
                     </svg>
-                    Copy share link
+                    {{ __('Copy link') }}
                 </button>
             </div>
         </div>
     </div>
 
     <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-6 space-y-6">
+
+        @php
+            $fmt = fn ($minor) => \App\Support\FormatSettings::formatIn((int) $minor / 100, $defaultCurrency);
+            $refMoney  = $fmt($referrerRewardMinor);
+            $friMoney  = $fmt($refereeRewardMinor);
+            $twoSided  = ($refereeRewardMinor ?? 0) > 0;
+        @endphp
+
+        <!-- How Refer & Earn works + pipeline -->
+        <section class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-stretch">
+            {{-- Steps card --}}
+            <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-5 shadow-card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('How it works') }}</div>
+                        <h2 class="font-serif text-[20px] leading-tight mt-1">{{ __('Invite friends, both of you earn') }}</h2>
+                    </div>
+                    @unless ($referralEnabled)
+                        <span class="text-[10.5px] font-mono px-2 py-0.5 rounded bg-accent-coral/15 text-accent-coral">{{ __('Programme off') }}</span>
+                    @endunless
+                </div>
+                <ol class="grid sm:grid-cols-3 gap-3">
+                    <li class="rounded-xl bg-paper-50 border border-paper-200 p-3.5">
+                        <div class="w-7 h-7 rounded-full bg-wa-mint text-wa-deep font-serif text-[15px] flex items-center justify-center mb-2">1</div>
+                        <div class="text-[12.5px] font-semibold text-ink-800">{{ __('Share your link') }}</div>
+                        <p class="text-[11.5px] text-ink-500 mt-1">{{ __('Send it on WhatsApp or copy it anywhere.') }}</p>
+                    </li>
+                    <li class="rounded-xl bg-paper-50 border border-paper-200 p-3.5">
+                        <div class="w-7 h-7 rounded-full bg-wa-mint text-wa-deep font-serif text-[15px] flex items-center justify-center mb-2">2</div>
+                        <div class="text-[12.5px] font-semibold text-ink-800">{{ __('Friend joins & tops up') }}</div>
+                        <p class="text-[11.5px] text-ink-500 mt-1">{{ __('They sign up with your link and make their first paid top-up.') }}</p>
+                    </li>
+                    <li class="rounded-xl bg-wa-mint/40 border border-wa-green/40 p-3.5">
+                        <div class="w-7 h-7 rounded-full bg-wa-deep text-white font-serif text-[15px] flex items-center justify-center mb-2">3</div>
+                        <div class="text-[12.5px] font-semibold text-ink-800">{{ __('You both earn') }}</div>
+                        <p class="text-[11.5px] text-ink-600 mt-1">
+                            {{ __('You get') }} <span class="font-semibold text-wa-deep">{!! $refMoney !!}</span>@if ($twoSided), {{ __('they get') }} <span class="font-semibold text-wa-deep">{!! $friMoney !!}</span>@endif —
+                            {{ __('straight to your wallet.') }}
+                        </p>
+                    </li>
+                </ol>
+                <p class="text-[11px] text-ink-400 mt-3">{{ __('Rewards are paid on the first paid top-up (not at signup). A pending invite expires after :days days.', ['days' => $referralWindowDays]) }}</p>
+            </div>
+
+            {{-- Pipeline summary --}}
+            <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-5 shadow-card">
+                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-3">{{ __('Your pipeline') }}</div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="rounded-xl bg-paper-50 border border-paper-200 p-3">
+                        <div class="text-[11px] text-ink-500">{{ __('Joined') }}</div>
+                        <div class="font-serif text-[26px] leading-none mt-1">{{ number_format($pipeline['joined']) }}</div>
+                    </div>
+                    <div class="rounded-xl bg-paper-50 border border-paper-200 p-3">
+                        <div class="text-[11px] text-ink-500">{{ __('Converted') }}</div>
+                        <div class="font-serif text-[26px] leading-none mt-1 text-wa-deep">{{ number_format($pipeline['converted']) }}</div>
+                    </div>
+                    <div class="rounded-xl bg-paper-50 border border-paper-200 p-3">
+                        <div class="text-[11px] text-ink-500">{{ __('Pending') }}</div>
+                        <div class="font-serif text-[26px] leading-none mt-1 text-accent-amber">{{ number_format($pipeline['pending']) }}</div>
+                    </div>
+                    <div class="rounded-xl bg-wa-mint/40 border border-wa-green/40 p-3">
+                        <div class="text-[11px] text-ink-500">{{ __('Earned') }}</div>
+                        <div class="font-serif text-[26px] leading-none mt-1">{!! $fmt($pipeline['earnedMinor']) !!}</div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <!-- KPI strip -->
         <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -99,13 +171,13 @@
             <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
                 <div class="flex items-center justify-between">
                     <span
-                        class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Avg per signup') }}</span>
+                        class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Avg per referral') }}</span>
                     <span class="text-[10px] text-ink-500 font-mono">{{ __('credits') }}</span>
                 </div>
                 <div class="mt-2 flex items-baseline gap-2">
                     <span class="font-serif text-[28px] leading-none"
                         data-ah="avgPerSignup">{{ number_format($stats['avgPerSignup']) }}</span>
-                    <span class="text-[11px] text-ink-500">/ signup</span>
+                    <span class="text-[11px] text-ink-500">/ {{ __('referral') }}</span>
                 </div>
             </div>
             <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
@@ -117,8 +189,7 @@
                 <div class="mt-2 flex items-baseline gap-2">
                     <span class="font-serif text-[24px] leading-none truncate">{{ $referralCode }}</span>
                 </div>
-                <div class="mt-1 text-[10.5px] text-ink-500 font-mono">+{{ number_format($signupReward) }}
-                    {{ __('credits per signup') }}</div>
+                <div class="mt-1 text-[10.5px] text-ink-500 font-mono">{!! $refMoney !!} {{ __('per referral') }}</div>
             </div>
         </section>
 
@@ -248,8 +319,12 @@
                     <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-paper-0/70">
                         {{ __('Your share link') }}</div>
                     <div class="mt-2 font-serif text-[22px] tracking-[-0.01em]">{{ $referralCode }}</div>
-                    <p class="mt-2 text-[11.5px] text-paper-0/80 leading-relaxed">+{{ number_format($signupReward) }}
-                        credits per signup. Share this link anywhere — bio, email signature, group chats.</p>
+                    <p class="mt-2 text-[11.5px] text-paper-0/80 leading-relaxed">
+                        {{ __('You earn') }} {!! $refMoney !!}@if ($twoSided) {{ __('and your friend earns') }} {!! $friMoney !!}@endif
+                        {{ __('when they make their first paid top-up. Share it anywhere — bio, email signature, group chats.') }}</p>
+                    <div class="mt-3 bg-paper-0 rounded-xl p-2.5 grid place-items-center">
+                        <div data-qr-url="{{ $referralUrl }}" class="w-[140px] h-[140px] grid place-items-center overflow-hidden"></div>
+                    </div>
                     <div
                         class="mt-3 px-3 py-2 rounded-lg bg-paper-0/15 border border-paper-0/15 font-mono text-[11px] break-all">
                         {{ $referralUrl }}</div>
@@ -309,13 +384,18 @@
                                 class="w-3 h-3 text-wa-deep shrink-0 mt-0.5" fill="none" stroke="currentColor"
                                 stroke-width="2">
                                 <path d="M3 8l3 3 7-7" />
-                            </svg>+{{ number_format($signupReward) }} {{ __('credits land in your wallet') }}</li>
-                        <li class="flex items-start gap-2"><svg viewBox="0 0 16 16"
-                                class="w-3 h-3 text-wa-deep shrink-0 mt-0.5" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <path d="M3 8l3 3 7-7" />
-                            </svg>Credits spend at {{ $creditsPerMessage }}
-                            credit{{ $creditsPerMessage === 1 ? '' : 's' }} {{ __('per message') }}</li>
+                            </svg>+{{ number_format($signupRewardCredits) }} {{ __('credits land in your wallet') }}</li>
+                        {{-- Only meaningful when the workspace is billed per message
+                             (pay-per-message / BSP). In classic plan mode sends come
+                             from the plan quota, so "credits per message" would mislead. --}}
+                        @if (\App\Services\MessageBillingService::payPerMessageFor(auth()->user()?->currentWorkspace))
+                            <li class="flex items-start gap-2"><svg viewBox="0 0 16 16"
+                                    class="w-3 h-3 text-wa-deep shrink-0 mt-0.5" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M3 8l3 3 7-7" />
+                                </svg>Credits spend at {{ $creditsPerMessage }}
+                                credit{{ $creditsPerMessage === 1 ? '' : 's' }} {{ __('per message') }}</li>
+                        @endif
                     </ul>
                 </div>
             </aside>

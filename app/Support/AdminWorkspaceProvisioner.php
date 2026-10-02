@@ -48,7 +48,7 @@ class AdminWorkspaceProvisioner
 
         $ws = Workspace::where('owner_user_id', $user->id)->first();
         if (!$ws) {
-            $ws = Workspace::create([
+            $ws = Workspace::createWithUniqueSlug([
                 'name'          => trim($user->name . ' Admin'),
                 'slug'          => Str::slug($user->name . '-admin') . '-' . substr(md5((string) $user->id), 0, 6),
                 'owner_user_id' => $user->id,

@@ -114,9 +114,12 @@ class PusherHttpBroadcaster extends Broadcaster
         }
 
         Log::info('[RT-TRACE] broadcast → Pusher', [
-            'event'    => $event,
-            'channels' => $this->formatChannels($channels),
-            'host'     => $this->host,
+            'event'          => $event,
+            'channels'       => $this->formatChannels($channels),
+            'host'           => $this->host,
+            'app_id'         => $this->appId,
+            'exclude_socket' => $payload['socket'] ?? null,   // set by toOthers(); null = sent to everyone
+            'data'           => $payload,                      // FULL event payload delivered to the app/browser
         ]);
 
         $body = [
@@ -157,12 +160,19 @@ class PusherHttpBroadcaster extends Broadcaster
 
             if (! $resp->successful()) {
                 Log::warning('[RT-TRACE] [PUSHER-HTTP] trigger FAILED', [
-                    'status' => $resp->status(),
-                    'body'   => mb_substr($resp->body(), 0, 300),
-                    'event'  => $event,
+                    'status'    => $resp->status(),
+                    'body'      => mb_substr($resp->body(), 0, 300),
+                    'event'     => $event,
+                    'sent_body' => mb_substr($bodyJson, 0, 800),   // exactly what we POSTed to Pusher
+                    'url'       => $this->scheme . '://' . $this->host . $path,
                 ]);
             } else {
-                Log::info('[RT-TRACE] [PUSHER-HTTP] trigger OK', ['status' => $resp->status(), 'event' => $event]);
+                Log::info('[RT-TRACE] [PUSHER-HTTP] trigger OK', [
+                    'status'    => $resp->status(),
+                    'event'     => $event,
+                    'resp_body' => mb_substr($resp->body(), 0, 300),   // Pusher's ack (e.g. {} or event_id)
+                    'sent_body' => mb_substr($bodyJson, 0, 800),       // FULL body delivered to Pusher
+                ]);
             }
         } catch (\Throwable $e) {
             // A real-time push must NEVER break the underlying action (a message

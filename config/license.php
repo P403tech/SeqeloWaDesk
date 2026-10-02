@@ -2,18 +2,29 @@
 
 /*
 |--------------------------------------------------------------------------
-| WaDesk licence (Envato)
+| Licence (Envato)
 |--------------------------------------------------------------------------
-| CodeCanyon item id + author personal token used by the installer and the
-| admin Updater to verify buyer purchase codes against the Envato API.
+| CodeCanyon item id used by the installer and the admin Updater.
 |
-| Kept in THIS file on purpose — NOT in .env — so the installer (which writes
-| .env) can never wipe it and buyers don't have to configure anything. The
-| token is base64-wrapped so the plaintext isn't sitting in the source. To
-| rotate it, replace the base64 string below (it is base64 of the raw token).
+| THE AUTHOR TOKEN IS DELIBERATELY NOT HERE.
+|
+| It lives encrypted in `config/license.json` and is decrypted on demand by
+| \App\Support\Licence::token(), at the moment of verification only.
+|
+| Why not resolve it in this file: config values get baked into
+| `bootstrap/cache/config.php` by `php artisan config:cache` — the standard
+| production step — which var_export()s the fully-resolved array. A token
+| decrypted here would be written to disk in PLAINTEXT, defeating the whole
+| point of encrypting it. Keeping it out of config makes that impossible.
+|
+| `item_id` is not secret, so it stays.
+|
+| To rotate the token, regenerate config/license.json. Never put a plaintext
+| (or base64) token back into a config file.
 */
 
 return [
     'item_id' => '63755235',
-    'token'   => base64_decode('aW5OeTgzRlRqVjJDVFBxdk5kUEdScjJtQUowcmFQQzQ='),
+
+    // Intentionally absent: 'token'. Use \App\Support\Licence::token().
 ];

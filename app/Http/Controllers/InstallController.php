@@ -79,13 +79,60 @@ class InstallController extends Controller
     {
         $request->validate(['purchase_code' => ['required', 'string', 'max:120']]);
 
-        $result = $this->envatoVerify((string) $request->input('purchase_code'));
+        $code = (string) $request->input('purchase_code');
+        // Never log the whole code — enough to identify it in a support thread.
+        $masked = strlen($code) > 12
+            ? substr($code, 0, 8) . '…' . substr($code, -4)
+            : str_repeat('*', strlen($code));
+
+        \Illuminate\Support\Facades\Log::info('[INSTALL] license verify attempt', [
+            'code'    => $masked,
+            'len'     => strlen($code),
+            'ip'      => $request->ip(),
+            'session' => $request->hasSession() ? 'yes' : 'NO SESSION',
+        ]);
+
+        $result = $this->envatoVerify($code);
+
         if (! $result['ok']) {
+            // The reported symptom is "page reloads, no error, no next step".
+            // A failed verify DOES redirect back with an error — if the screen
+            // shows nothing, the error bag isn't being rendered, or the session
+            // isn't persisting. Both are visible from here.
+            \Illuminate\Support\Facades\Log::warning('[INSTALL] license verify FAILED', [
+                'code'    => $masked,
+                'message' => $result['message'] ?? '(none)',
+                'detail'  => $result['detail'] ?? null,
+            ]);
+
             return back()->withErrors(['purchase_code' => $result['message']])->withInput();
         }
 
         $request->session()->put('install_purchase_ok', true);
-        $request->session()->put('install_purchase_code', trim((string) $request->input('purchase_code')));
+        $request->session()->put('install_purchase_code', trim($code));
+        // Force the write now: if the session driver can't persist (unwritable
+        // storage/framework/sessions, or DB driver with no database yet), the
+        // next request loses install_purchase_ok and the wizard bounces the
+        // user straight back to step 1 — which looks exactly like "it reloads
+        // and does nothing".
+        $request->session()->save();
+
+        // Belt-and-braces: the session cookie may not survive the redirect on a
+        // fresh server. This file is what actually carries the verified state
+        // forward — see the gate in requirements().
+        try {
+            @mkdir(storage_path('framework'), 0775, true);
+            file_put_contents(storage_path('framework/install_licence_ok'), trim($code));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[INSTALL] could not write licence marker: ' . $e->getMessage());
+        }
+
+        \Illuminate\Support\Facades\Log::info('[INSTALL] license verify OK — advancing to requirements', [
+            'code'             => $masked,
+            'session_id'       => substr((string) $request->session()->getId(), 0, 8) . '…',
+            'purchase_ok_set'  => $request->session()->get('install_purchase_ok') === true,
+            'session_driver'   => config('session.driver'),
+        ]);
 
         return redirect()->route('install.requirements');
     }
@@ -100,8 +147,10 @@ class InstallController extends Controller
     private function envatoVerify(string $code): array
     {
         $code  = trim($code);
-        $token = (string) config('version.envato.token');
-        $item  = (string) config('version.envato.item_id');
+        // Decrypted on demand, never via config() — a config-resolved token would
+        // be written to bootstrap/cache/config.php in plaintext by config:cache.
+        $token = \App\Support\Licence::token();
+        $item  = \App\Support\Licence::itemId();
 
         if ($code === '') {
             return ['ok' => false, 'message' => 'Enter your CodeCanyon purchase code.'];
@@ -142,8 +191,30 @@ class InstallController extends Controller
     {
         // Licence gate — can't reach requirements (or anything past it) without
         // a verified CodeCanyon purchase code.
-        if (! $request->session()->get('install_purchase_ok')) {
+        //
+        // The flag is ALSO mirrored to a file. On a fresh box the session cookie
+        // frequently does not survive the redirect out of verifyLicense (secure
+        // cookie on plain http, domain vs IP mismatch, APP_KEY rewritten
+        // mid-wizard), so a licence that verified fine still bounced the user
+        // straight back to step 1 — with no error, because nothing failed.
+        // The marker makes the wizard survive a lost session instead of
+        // dead-ending on it.
+        $marker = storage_path('framework/install_licence_ok');
+
+        if (! $request->session()->get('install_purchase_ok') && ! is_file($marker)) {
+            \Illuminate\Support\Facades\Log::warning('[INSTALL] requirements blocked — no licence flag', [
+                'session_has_flag' => (bool) $request->session()->get('install_purchase_ok'),
+                'marker_exists'    => is_file($marker),
+                'session_id'       => substr((string) $request->session()->getId(), 0, 8) . '…',
+            ]);
+
             return redirect()->route('install.license');
+        }
+
+        // Re-arm the session from the marker so later steps behave normally.
+        if (! $request->session()->get('install_purchase_ok')) {
+            $request->session()->put('install_purchase_ok', true);
+            $request->session()->save();
         }
 
         $phpVersion = PHP_VERSION;

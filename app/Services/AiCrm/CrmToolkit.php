@@ -414,7 +414,7 @@ class CrmToolkit
         // Phone lookup uses the indexed hash; name lookup decrypts a bounded scan.
         $candidates = Contact::where('workspace_id', $wsId)->latest('id')->limit(500)->get();
         foreach ($candidates as $c) {
-            $stored = preg_replace('/\D+/', '', (string) ($c->country_code . $c->mobile));
+            $stored = Contact::canonicalizePhone($c->country_code, $c->mobile);
             $name   = (string) $c->name;
             $match  = ($digits !== '' && $stored !== '' && str_contains($stored, $digits))
                 || ($name !== '' && stripos($name, $query) !== false);
@@ -691,7 +691,7 @@ class CrmToolkit
 
     private function wsCurrency(int $wsId): string
     {
-        return strtoupper((string) (\App\Models\InvoiceSetting::forWorkspace($wsId)->currency ?? 'USD')) ?: 'USD';
+        return strtoupper((string) (\App\Models\InvoiceSetting::forWorkspace($wsId)->currency ?: (\App\Models\Workspace::find($wsId)?->currency ?: 'USD')));
     }
 
     private function expFor(string $currency): int

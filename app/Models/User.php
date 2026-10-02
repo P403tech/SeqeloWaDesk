@@ -96,6 +96,60 @@ class User extends Authenticatable
                 $u->referral_code = self::generateUniqueReferralCode();
             }
         });
+
+        /*
+         * Deleting an account must take the workspaces it OWNS with it, which
+         * in turn trashes their flows and keyword rules (see Workspace::booted).
+         *
+         * Without this, deleting a user left owned workspaces live, their flows
+         * live, and their keyword rules ACTIVE — still competing in the matcher
+         * for a customer who no longer exists.
+         *
+         * Only OWNED workspaces. A user who was merely a member of someone
+         * else's workspace must never take it down with them.
+         */
+        static::deleted(function (self $u) {
+            if (method_exists($u, 'isForceDeleting') && $u->isForceDeleting()) {
+                return;
+            }
+
+            try {
+                $owned = Workspace::where('owner_user_id', $u->id)->get();
+                foreach ($owned as $ws) {
+                    $ws->delete();   // cascades to flows + keyword rules
+                }
+
+                if ($owned->isNotEmpty()) {
+                    \Illuminate\Support\Facades\Log::info('[USER] deleted — owned workspaces trashed', [
+                        'user_id'    => $u->id,
+                        'workspaces' => $owned->pluck('id')->all(),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning(
+                    '[USER] owned-workspace cascade failed: ' . $e->getMessage(),
+                    ['user_id' => $u->id]
+                );
+            }
+        });
+
+        static::restored(function (self $u) {
+            try {
+                $owned = Workspace::withTrashed()
+                    ->where('owner_user_id', $u->id)
+                    ->whereNotNull('deleted_at')
+                    ->get();
+
+                foreach ($owned as $ws) {
+                    $ws->restore();   // Workspace::restored brings its flows back
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning(
+                    '[USER] owned-workspace restore failed: ' . $e->getMessage(),
+                    ['user_id' => $u->id]
+                );
+            }
+        });
     }
 
     public static function generateUniqueReferralCode(): string

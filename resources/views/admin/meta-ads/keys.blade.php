@@ -33,6 +33,12 @@
             @csrf
 
             <section class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
+                <p class="text-[12px] text-ink-600">
+                    {{ __('Meta Ads is available to any workspace whose plan includes Click-to-WhatsApp ads — campaigns publish to Meta automatically on save. These platform keys are only the fallback for workspaces that have not connected their own.') }}
+                </p>
+            </section>
+
+            <section class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card">
                 <h2 class="font-serif text-[22px]">{{ __('Credentials') }}</h2>
                 <p class="text-[12px] text-ink-500 mt-0.5 mb-4">
                     {{ __('From Meta Business Manager → Business Settings. The access token must be a System-User token with') }}

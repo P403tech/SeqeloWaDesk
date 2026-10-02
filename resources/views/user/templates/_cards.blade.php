@@ -93,8 +93,10 @@
                     </svg>{{ $t->provider->display_label ?: $t->provider->phone_number ?: 'WABA' }}
                 </span>
             @endif
-            {{-- Per-message cost (WhatsApp templates are billed by Meta on delivery). --}}
-            @if (in_array($engKey, ['waba', 'baileys', 'twilio'], true))
+            {{-- Per-message cost — only when this workspace is actually billed per
+                 message (pay-per-message / BSP). In classic plan mode sends are
+                 covered by the plan quota, so a "/msg" price here is misleading. --}}
+            @if (in_array($engKey, ['waba', 'baileys', 'twilio'], true) && \App\Services\MessageBillingService::payPerMessageFor(auth()->user()?->currentWorkspace))
                 @php $__cost = \App\Services\MessageCreditRate::displayForCategory($t->effectiveCategory()); @endphp
                 <span>·</span>
                 <span class="inline-flex items-center gap-1 font-semibold {{ $__cost['free'] ? 'text-wa-deep' : 'text-ink-700' }}"

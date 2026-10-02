@@ -201,6 +201,15 @@ class WaFormController extends Controller implements HasMiddleware
             ->orderByDesc('id')
             ->get();
 
+        // #29 — let the operator choose WHICH WABA to publish on. A 2-WABA
+        // workspace otherwise silently used the newest row. When a
+        // provider_config_id is passed, try it FIRST; it still falls back to
+        // the other rows if the chosen one lacks usable creds.
+        $requestedCfgId = (int) request()->input('provider_config_id', 0);
+        if ($requestedCfgId > 0) {
+            $wabaConfigs = $wabaConfigs->sortByDesc(fn ($c) => $c->id === $requestedCfgId ? 1 : 0)->values();
+        }
+
         \Log::info('[WA-FORM-PUBLISH] start', [
             'form_id'      => $id,
             'workspace_id' => $wsId,
@@ -263,7 +272,16 @@ class WaFormController extends Controller implements HasMiddleware
         \Log::info('[WA-FORM-PUBLISH] creds resolved OK', [
             'workspace_id' => $wsId,
             'waba_id_len'  => strlen($wabaId),
+            'config_id'    => $selectedCfg?->id,
         ]);
+
+        // Record which WABA this form published on so the workspace can SEE it
+        // (and a re-publish can default to it). Guarded so it's safe before the
+        // migration adding the column has run.
+        if ($selectedCfg && \Illuminate\Support\Facades\Schema::hasColumn('wa_forms', 'provider_config_id')) {
+            $form->provider_config_id = $selectedCfg->id;
+            $form->save();
+        }
         $version = (string) (env('META_GRAPH_VERSION') ?: 'v21.0');
         $base = "https://graph.facebook.com/{$version}";
 

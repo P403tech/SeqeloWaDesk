@@ -97,7 +97,7 @@ class RegistrationOtpService
         }
         $s = $this->resolveSender();
         if (!$s) {
-            return ['ok' => false, 'error' => 'No OTP sender is configured. Pick one in Admin settings.'];
+            return ['ok' => false, 'error' => setup_hint('No OTP sender is configured — pick one in Admin → Channel Settings.', 'Sign-up verification is temporarily unavailable. Please contact support.')];
         }
 
         try {
@@ -141,7 +141,7 @@ class RegistrationOtpService
         }
         $tpl = $this->template();
         if (!$tpl) {
-            return ['ok' => false, 'error' => 'OTP template is not set. Create & submit it in Admin settings.'];
+            return ['ok' => false, 'error' => setup_hint('OTP template is not set — create & submit it in Admin → Channel Settings.', 'Sign-up verification is temporarily unavailable. Please contact support.')];
         }
         $res = app(TemplateSender::class)->send($tpl, $to, ['otp' => $code], $cfg);
         return ['ok' => (bool) ($res['ok'] ?? $res['success'] ?? false), 'error' => $res['error'] ?? null];

@@ -166,6 +166,18 @@ function nextNode(flow, nodeId, port = "out") {
   }
   return port === "out" ? any : null;
 }
+/** ALL nodes wired to nodeId on `port` (edge order) — fan-out counterpart of nextNode. */
+function nextTargets(flow, nodeId, port = "out") {
+  const out = [];
+  for (const e of edgesOf(flow)) {
+    if (String(e?.source) !== String(nodeId)) continue;
+    if (String(e?.sourceHandle || "out") === port) out.push(String(e?.target || ""));
+  }
+  if (out.length === 0 && port === "out") {
+    for (const e of edgesOf(flow)) if (String(e?.source) === String(nodeId)) out.push(String(e?.target || ""));
+  }
+  return out.filter(Boolean);
+}
 
 function entryNode(flow) {
   for (const n of nodesOf(flow)) if (String(n?.type) === "trigger") return n;
@@ -213,17 +225,31 @@ function evalCondition(d, vars) {
  * customer. Delays are REAL awaits — this runs detached from any HTTP request,
  * which is the whole reason Instagram flows moved into Node.
  */
-async function walk(ctx, startId) {
+async function walk(ctx, startId, opts = {}) {
+  const nodes = indexNodes(ctx.flow);
+  const visited = new Set();
+  const state = { parked: false, steps: 0 };
+  console.log(`[IG-WALK] start flow=${ctx.flowId} igsid=${ctx.igsid} from=${startId} fan-out nodes=${nodes.size} vars=${JSON.stringify(ctx.vars || {})}`);
+  if (opts.fromPort) {
+    visited.add(String(startId));
+    for (const t of nextTargets(ctx.flow, startId, opts.fromPort)) await walkNode(ctx, nodes, t, visited, state);
+  } else {
+    await walkNode(ctx, nodes, startId, visited, state);
+  }
+  if (!state.parked) clearSession(ctx.accountId, ctx.igsid);
+}
+
+/** Run ONE node then fan out to EVERY node on its active port (see facebookFlowService for rationale). */
+async function walkNode(ctx, nodes, id, visited, state) {
+  if (!id) return;
+  if (state.steps++ > 300) { console.warn(`[IG-WALK] step guard — possible loop flow=${ctx.flowId}`); return; }
+  const key = String(id);
+  if (visited.has(key)) return;
+  visited.add(key);
+  const node = nodes.get(key);
+  if (!node) { console.warn(`[IG-WALK] node id="${id}" NOT FOUND — flow=${ctx.flowId}`); return; }
+
   const { auth, flow, igsid, appDomain, accountId, flowId, workspaceId } = ctx;
-  const nodes = indexNodes(flow);
-  let current = startId;
-  let guard = 0;
-
-  console.log(`[IG-WALK] start flow=${flowId} igsid=${igsid} from=${startId} nodes=${nodes.size} vars=${JSON.stringify(ctx.vars || {})}`);
-
-  while (current && guard++ < 100) {
-    const node = nodes.get(String(current));
-    if (!node) { console.warn(`[IG-WALK] node id="${current}" NOT FOUND — ending flow=${flowId}`); break; }
     const type = String(node.type || "");
     const d = node.data || {};
     let port = "out";
@@ -232,6 +258,7 @@ async function walk(ctx, startId) {
 
     try {
       switch (type) {
+        case "trigger": break;   // entry node — fan out only
         // ---- shared nodes (same types the WhatsApp builder uses) ----------
         case "message": {
           const body = subst(d.text, ctx.vars);
@@ -278,7 +305,7 @@ async function walk(ctx, startId) {
           // Mirror the buttons into the inbox so the operator sees the same
           // tappable card, not just "What next?" as plain text.
           await logToLaravel(appDomain, { accountId, igsid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null, buttons: opts.map((o) => ({ title: String(o.title ?? o) })) });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the tap
         }
 
@@ -288,7 +315,7 @@ async function walk(ctx, startId) {
             const r = await sendText(auth, igsid, q);
             await logToLaravel(appDomain, { accountId, igsid, workspaceId, direction: "out", body: q, source: "flow", mid: r?.message_id || null });
           }
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the answer
         }
 
@@ -361,7 +388,7 @@ async function walk(ctx, startId) {
           const body = subst(d.text, ctx.vars);
           const r = await sendQuickReplies(auth, igsid, body, (d.options || []));
           await logToLaravel(appDomain, { accountId, igsid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -371,7 +398,7 @@ async function walk(ctx, startId) {
             const r = await sendText(auth, igsid, q);
             await logToLaravel(appDomain, { accountId, igsid, workspaceId, direction: "out", body: q, source: "flow", mid: r?.message_id || null });
           }
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -380,7 +407,7 @@ async function walk(ctx, startId) {
           const btns = d.buttons || [];
           const r = await sendButtons(auth, igsid, body, btns);
           await logToLaravel(appDomain, { accountId, igsid, workspaceId, direction: "out", body, source: "flow", mid: r?.message_id || null, buttons: btns.map((b) => ({ title: String(b.title || ""), url: String(b.url || "") })) });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return;
         }
 
@@ -420,7 +447,7 @@ async function walk(ctx, startId) {
         }
 
         case "end":
-          clearSession(accountId, igsid);
+          // End THIS branch only; session cleared at the top of walk().
           console.log(`[IG-FLOW-NODE] end flow=${flowId} igsid=${igsid}`);
           return;
 
@@ -434,11 +461,10 @@ async function walk(ctx, startId) {
       // Keep walking: one bad node shouldn't strand the customer mid-conversation.
     }
 
-    current = nextNode(flow, node.id, port);
-  }
-
-  if (guard >= 100) console.warn(`[IG-FLOW-NODE] walk hit the 100-node guard — possible loop (flow=${flowId})`);
-  clearSession(accountId, igsid);
+    // Fan out to every node wired to this node's active port (edge order).
+    for (const t of nextTargets(flow, node.id, port)) {
+      await walkNode(ctx, nodes, t, visited, state);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +508,7 @@ export async function runFlow({ auth, flow, igsid, text, commentId, flowId, acco
     vars: { text: String(text || ""), igsid: String(igsid), comment_id: String(commentId || ""), ...(vars || {}) },
   };
   console.log(`[IG-FLOW-NODE] START flow=${flowId} account=${accountId} igsid=${igsid}`);
-  await walk(ctx, nextNode(flow, start.id, "out"));
+  await walk(ctx, start.id);   // fan out from the trigger
   return true;
 }
 
@@ -544,7 +570,7 @@ export async function resumeFlow({ accountId, igsid, text }) {
   IG_SESSIONS.delete(key);   // consumed
   sess.vars.text = String(text || "");
   console.log(`[IG-FLOW-NODE] RESUME flow=${sess.flowId} from=${sess.nodeId} port=${port}`);
-  await walk({ ...sess, vars: sess.vars }, nextNode(sess.flow, sess.nodeId, port));
+  await walk({ ...sess, vars: sess.vars }, sess.nodeId, { fromPort: port });
   return true;
 }
 

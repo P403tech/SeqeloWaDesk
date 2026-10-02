@@ -4,7 +4,11 @@
 // the CTA button rows (kind dropdown + add / remove, capped at 3). Logic
 // mirrors user-wa-campaigns-create.js but stands alone so the create
 // wizard's stepper / preview code never runs on the edit page.
+import { initFollowups } from './campaign-followups.js';
+
 export default function init() {
+  // Campaign Follow-ups rule builder (shared with the create wizard).
+  initFollowups();
   // -----------------------------------------------------------------
   // Attachment type → reveal the matching upload pane.
   // -----------------------------------------------------------------

@@ -82,10 +82,18 @@ Route::prefix('workspaces')->name('workspaces.')->group(function () {
     Route::get   ('/',                 [WorkspacesController::class, 'index'])->name('index');
     Route::get   ('/create',           [WorkspacesController::class, 'create'])->name('create');
     Route::post  ('/',                 [WorkspacesController::class, 'store'])->name('store');
+    // Trash / restore (#21) — /trash is static so it never collides with /{id} (number-only).
+    Route::get   ('/trash',            [WorkspacesController::class, 'trash'])->name('trash');
+    Route::post  ('/trash/empty',      [WorkspacesController::class, 'emptyTrash'])->name('trash.empty');
+    Route::post  ('/{id}/restore',     [WorkspacesController::class, 'restore'])->whereNumber('id')->name('restore');
+    Route::delete('/{id}/force',       [WorkspacesController::class, 'forceDelete'])->whereNumber('id')->name('force-delete');
     Route::get   ('/{id}',             [WorkspacesController::class, 'detail'])->whereNumber('id')->name('detail');
     Route::put   ('/{id}',             [WorkspacesController::class, 'update'])->whereNumber('id')->name('update');
+    // Change a member's role in this workspace (workspace_user pivot).
+    Route::post  ('/{id}/member-role', [WorkspacesController::class, 'updateMemberRole'])->whereNumber('id')->name('member-role');
     Route::delete('/{id}',             [WorkspacesController::class, 'destroy'])->whereNumber('id')->name('destroy');
     Route::post  ('/{id}/toggle',      [WorkspacesController::class, 'toggleStatus'])->whereNumber('id')->name('toggle');
+    Route::post  ('/{id}/verify-domain', [WorkspacesController::class, 'verifyDomain'])->whereNumber('id')->name('verify-domain');
     // #31-36 — Save per-workspace plan limit overrides.
     Route::post  ('/{id}/overrides',   [AdminPagesController::class, 'workspaceSaveOverrides'])->whereNumber('id')->name('overrides');
 });
@@ -383,6 +391,26 @@ Route::prefix('settings/realtime')->name('settings.realtime.')->group(function (
     Route::post('/test', [\App\Http\Controllers\Admin\RealtimeSettingsController::class, 'test'])->name('test');
 });
 
+// Advanced Scaling — opt-in cron + Redis queue for high-volume tenants.
+Route::prefix('settings/scaling')->name('settings.scaling.')->group(function () {
+    $sc = \App\Http\Controllers\Admin\ScalingSettingsController::class;
+    Route::get ('/',       [$sc, 'index'])->name('index');
+    Route::post('/',       [$sc, 'save'])->name('save');
+    Route::get ('/health', [$sc, 'healthJson'])->name('health');
+});
+
+// Client Support Bot — platform help-desk widget: on/off, escalation tiers
+// (AI + web), knowledge sources, appearance, and the ask log.
+Route::prefix('settings/support-bot')->name('settings.support-bot.')->group(function () {
+    $sb = \App\Http\Controllers\Admin\SupportBotSettingsController::class;
+    Route::get ('/',              [$sb, 'index'])->name('index');
+    Route::post('/',              [$sb, 'save'])->name('save');
+    Route::post('/source',        [$sb, 'addSource'])->name('source.add');
+    Route::post('/source/file',   [$sb, 'uploadFile'])->name('source.file');
+    Route::delete('/source/{id}', [$sb, 'deleteSource'])->whereNumber('id')->name('source.delete');
+    Route::post('/reindex',       [$sb, 'reindex'])->name('reindex');
+});
+
 Route::prefix('blog')->name('blog.')->group(function () {
     Route::get   ('/',                 [BlogController::class, 'index'])->name('index');
     Route::get   ('/create',           [BlogController::class, 'create'])->name('create');
@@ -453,6 +481,10 @@ Route::prefix('extensions')->name('extensions.')->group(function () {
     Route::post  ('/instaflow/connect', [$ac, 'connectInstaflow'])->name('instaflow.connect');
     // Disconnect it — clears the stored URL / secret / connection flag.
     Route::post  ('/instaflow/disconnect', [$ac, 'disconnectInstaflow'])->name('instaflow.disconnect');
+    // Connect a standalone MailTrixy deployment — same URL + shared secret shape.
+    Route::post  ('/mailtrixy/connect', [$ac, 'connectMailtrixy'])->name('mailtrixy.connect');
+    // Disconnect it — clears the stored URL / secret / connection flag.
+    Route::post  ('/mailtrixy/disconnect', [$ac, 'disconnectMailtrixy'])->name('mailtrixy.disconnect');
     Route::post  ('/{id}/toggle', [$ac, 'toggle'])->name('toggle');
     Route::delete('/{id}',        [$ac, 'destroy'])->name('destroy');
     // In-place modules (addon/<slug>/) — deactivate/re-activate without deleting files.
@@ -475,26 +507,39 @@ Route::prefix('update')->name('update.')->group(function () {
 
 Route::prefix('settings')->name('settings.')->group(function () {
     Route::get('/',                [AdminPagesController::class, 'settings'])->name('index');
+    // Feature Toggles — one page listing every user feature/card with an
+    // on/off switch; OFF hides it from the sidebar, top bar and /more grid.
+    Route::get('/features',        [AdminPagesController::class, 'settingsFeatures'])->name('features');
+    Route::post('/features',       [AdminPagesController::class, 'settingsFeaturesUpdate'])->name('features.update');
     Route::get('/export',          [AdminPagesController::class, 'settingsExport'])->name('export');
     Route::post('/affiliate',      [AdminPagesController::class, 'settingsAffiliateUpdate'])->name('affiliate.update');
     Route::post('/providers',      [AdminPagesController::class, 'settingsProvidersUpdate'])->name('providers.update');
     Route::get('/general',         [AdminPagesController::class, 'settingGeneral'])->name('general');
     Route::patch('/general',       [AdminPagesController::class, 'settingGeneralUpdate'])->name('general.update');
-    Route::get('/wadesk-message',  [AdminPagesController::class, 'settingWaDeskMessage'])->name('wadesk-message');
+    // Channel Settings hub. `{section?}` opens one channel's detail page
+    // (whatsapp / facebook / telegram / tiktok / sms / otp / templates /
+    // pacing / campaign / node); no section = the card landing. Renamed from
+    // the old /wadesk-message URL.
+    Route::get('/channel-setting/{section?}', [AdminPagesController::class, 'settingWaDeskMessage'])->name('channel-setting');
     // Quick "Update timing" — saves ONLY the sender-pacing fields (msg_gap /
     // batches_gap / bw_msg_gap / enable_batches) without re-submitting the
     // whole providers form, and pushes them to the Node bridge immediately.
-    Route::post('/wadesk-message/pacing', [AdminPagesController::class, 'settingsPacingUpdate'])->name('pacing.update');
+    Route::post('/channel-setting/pacing', [AdminPagesController::class, 'settingsPacingUpdate'])->name('pacing.update');
     // Coexistence webhook self-check — asks Meta which webhook fields the
     // platform App is subscribed to, so an admin can confirm smb_message_echoes
     // etc. are live (the usual cause of "phone-typed replies don't sync").
-    Route::post('/wadesk-message/check-webhooks', [AdminPagesController::class, 'checkCoexistenceWebhooks'])->name('coexistence.check');
+    Route::post('/channel-setting/check-webhooks', [AdminPagesController::class, 'checkCoexistenceWebhooks'])->name('coexistence.check');
     // One-click subscribe of the coexistence fields on the Meta App (union with
     // whatever is already subscribed). Meta re-verifies the callback on submit.
-    Route::post('/wadesk-message/subscribe-webhooks', [AdminPagesController::class, 'subscribeCoexistenceWebhooks'])->name('coexistence.subscribe');
+    Route::post('/channel-setting/subscribe-webhooks', [AdminPagesController::class, 'subscribeCoexistenceWebhooks'])->name('coexistence.subscribe');
     // One-click: build the registration-OTP authentication template in code and
     // submit it to Meta against the selected WABA device (no hand-crafting).
-    Route::post('/wadesk-message/otp-template', [AdminPagesController::class, 'createOtpTemplate'])->name('otp-template.create');
+    Route::post('/channel-setting/otp-template', [AdminPagesController::class, 'createOtpTemplate'])->name('otp-template.create');
+    // Global Node bridge — saved by its OWN endpoint from the hub landing panel
+    // (URL + shared X-Node-Token only), so it never touches the per-channel
+    // provider form. `node/test` pings the bridge to verify reachability + auth.
+    Route::post('/channel-setting/node', [AdminPagesController::class, 'settingsNodeBridgeUpdate'])->name('node.update');
+    Route::post('/channel-setting/node/test', [AdminPagesController::class, 'testNodeBridge'])->name('node.test');
     Route::get('/wallet-rules',    [AdminPagesController::class, 'settingWalletRules'])->name('wallet-rules');
     // Per-country × category credit rates (fair pricing) — saved separately
     // from the flat wallet-rules form so the existing save is untouched.

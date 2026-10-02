@@ -380,6 +380,7 @@
                                     <th class="py-2.5 px-3 font-semibold">{{ __('Tags') }}</th>
                                     <th class="py-2.5 px-3 font-semibold">{{ __('Email') }}</th>
                                     <th class="py-2.5 px-3 font-semibold">{{ __('Mobile') }}</th>
+                                    <th class="py-2.5 px-3 font-semibold">{{ __('On number') }}</th>
                                     <th class="py-2.5 px-3 font-semibold">{{ __('Memo') }}</th>
                                     <th class="py-2.5 pr-4 pl-3 font-semibold text-right">{{ __('Action') }}</th>
                                 </tr>
@@ -431,6 +432,25 @@
                                                         {{ $contact->name }}</div>
                                                     <div class="text-[11px] text-ink-500 truncate">
                                                         {{ $contact->language ?? '' }}</div>
+                                                    {{-- Per-contact attributes (custom_attributes) — e.g. values
+                                                         imported from a CSV. status/source are surfaced elsewhere,
+                                                         so they're excluded here to keep this to real attributes. --}}
+                                                    @php
+                                                        $allAttrs = is_array($contact->custom_attributes ?? null) ? $contact->custom_attributes : [];
+                                                        // Raw source_* keys are hidden from the generic attribute chips —
+                                                        // the number is surfaced in its own "On number" column instead.
+                                                        $rowAttrs = collect($allAttrs)
+                                                            ->reject(fn ($v, $k) => in_array(strtolower((string) $k), ['status', 'source', 'source_number', 'source_device_id', 'source_provider'], true) || !is_scalar($v) || (string) $v === '')
+                                                            ->take(4);
+                                                    @endphp
+                                                    @if ($rowAttrs->isNotEmpty())
+                                                        <div class="flex flex-wrap gap-1 mt-1" data-contact-attrs>
+                                                            @foreach ($rowAttrs as $ak => $av)
+                                                                <span class="inline-flex items-center px-1.5 py-[1px] rounded bg-paper-100 text-[9.5px] text-ink-600 max-w-[130px] truncate"
+                                                                    title="{{ $ak }}: {{ $av }}"><span class="font-semibold">{{ \Illuminate\Support\Str::of((string) $ak)->replace('_', ' ')->title() }}:</span>&nbsp;{{ \Illuminate\Support\Str::limit((string) $av, 18) }}</span>
+                                                            @endforeach
+                                                        </div>
+                                                    @endif
                                                 </div>
                                             </div>
                                         </td>
@@ -478,6 +498,17 @@
                                                     : $numDigits;
                                             @endphp
                                             {{ $fullDigits === '' ? '—' : '+' . mask_phone($fullDigits) }}</td>
+                                        {{-- Which of the workspace's numbers this contact first messaged
+                                             (stamped by RoutingEngine on the first inbound). --}}
+                                        <td class="py-2 px-3 mono font-mono text-[11.5px] truncate align-middle">
+                                            @php $srcNumber = trim((string) ($allAttrs['source_number'] ?? '')); @endphp
+                                            @if ($srcNumber !== '')
+                                                <span class="inline-flex items-center gap-1 text-wa-deep" title="{{ __('Came in on your number') }}">
+                                                    <svg viewBox="0 0 16 16" class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h5A2.5 2.5 0 0 1 13 5.5v3A2.5 2.5 0 0 1 10.5 11H8l-3.5 2v-2A2.5 2.5 0 0 1 3 8.5v-3Z"/></svg>+{{ $srcNumber }}</span>
+                                            @else
+                                                <span class="text-ink-400">—</span>
+                                            @endif
+                                        </td>
                                         <td class="py-2 px-3 text-ink-500 text-[12px] truncate align-middle">
                                             {{ $contact->msg }}</td>
                                         <td class="py-2 pr-4 pl-3 align-middle">
@@ -485,7 +516,10 @@
                                                     type="button" data-modal-open="editModal"
                                                     data-edit-contact="{{ $contact->id }}"
                                                     data-name="{{ $contact->name }}"
-                                                    data-first-name="{{ $contact->first_name }}"
+                                                    {{-- Fall back to the display name when first_name is empty
+                                                         (inbound auto-capture stores only `name`), so the edit
+                                                         modal isn't blank for chat-captured contacts. --}}
+                                                    data-first-name="{{ $contact->first_name ?: $contact->name }}"
                                                     data-middle-name="{{ $contact->middle_name }}"
                                                     data-last-name="{{ $contact->last_name }}"
                                                     data-title="{{ $contact->title }}"
@@ -497,6 +531,8 @@
                                                     data-msg="{{ $contact->msg }}"
                                                     data-status="{{ is_array($contact->custom_attributes) ? $contact->custom_attributes['status'] ?? '' : '' }}"
                                                     data-source="{{ is_array($contact->custom_attributes) ? $contact->custom_attributes['source'] ?? '' : '' }}"
+                                                    data-is-unsubscribed="{{ $contact->is_unsubscribed ? 1 : 0 }}"
+                                                    data-attributes='@json(is_array($contact->custom_attributes) ? $contact->custom_attributes : [])'
                                                     data-groups='@json($contactGroupIds)'
                                                     class="icon-btn w-7 h-7 rounded-full inline-flex items-center justify-center border border-paper-200 bg-white text-ink-600 transition hover:border-wa-deep hover:text-wa-deep hover:bg-paper-50"
                                                     title="{{ __('Edit') }}"><svg viewBox="0 0 16 16"
@@ -519,7 +555,7 @@
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="8" class="px-4 py-4">
+                                        <td colspan="9" class="px-4 py-4">
                                             @include('user.partials.empty-state', [
                                                 'message' =>
                                                     'No contacts match the current filters. Try clearing filters or add your first contact.',
@@ -778,6 +814,16 @@
                             class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
                     </div>
                 </div>
+                {{-- Opt-in / opt-out — an opted-out contact is excluded from
+                     campaigns / broadcasts / API sends (Contact::scopeSubscribed). --}}
+                <div><label
+                        class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Campaign & bulk messages') }}</label>
+                    <select name="is_unsubscribed"
+                        class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                        <option value="0" @selected(old('is_unsubscribed', '0') !== '1')>{{ __('Subscribed — can receive campaigns, broadcasts & API sends') }}</option>
+                        <option value="1" @selected(old('is_unsubscribed') === '1')>{{ __('Opted out — excluded from all bulk/campaign sends') }}</option>
+                    </select>
+                </div>
                 <div><label
                         class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Contact groups') }}</label>
                     <div class="hairline border border-paper-200 rounded-lg p-2 flex flex-wrap gap-1.5 bg-paper-0">
@@ -792,6 +838,29 @@
                         @endforelse
                     </div>
                 </div>
+                {{-- Workspace custom attributes — a value here fills {{key}} in
+                     templates/flows for THIS contact (e.g. a per-location Maps
+                     link in a URL button). --}}
+                @if (isset($attributes) && count($attributes))
+                    <div>
+                        <label class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">
+                            {{ __('Attributes') }}
+                            <span class="text-[10px] font-normal text-ink-500">{{ __('fills variables in templates & flows') }}</span>
+                        </label>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            @foreach ($attributes as $attr)
+                                <div>
+                                    <label class="block text-[10.5px] text-ink-600 mb-[3px]">{{ $attr->attribute_name }}
+                                        <span class="font-mono text-ink-400">/{{ $attr->attribute_key }}</span></label>
+                                    <input type="text" name="attributes[{{ $attr->attribute_key }}]" maxlength="1000"
+                                        value="{{ old('attributes.' . $attr->attribute_key) }}"
+                                        @if ($attr->description) placeholder="{{ $attr->description }}" @endif
+                                        class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
             </div>
             <div class="px-5 py-4 bg-paper-0 hairline-t border-t border-paper-200 flex justify-end gap-2">
                 <button type="button" data-modal-close
@@ -900,8 +969,23 @@
                             class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
                     </div>
                 </div>
+                {{-- Opt-in / opt-out. Drives is_unsubscribed — an opted-out contact
+                     is skipped by campaigns / broadcasts / API sends
+                     (Contact::scopeSubscribed). Texting STOP/START also flips it. --}}
+                <div><label
+                        class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Campaign & bulk messages') }}</label>
+                    <select name="is_unsubscribed" data-edit-field="is_unsubscribed"
+                        class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                        <option value="0">{{ __('Subscribed — can receive campaigns, broadcasts & API sends') }}</option>
+                        <option value="1">{{ __('Opted out — excluded from all bulk/campaign sends') }}</option>
+                    </select>
+                </div>
                 <div><label
                         class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Contact groups') }}</label>
+                    {{-- Marker so the backend can tell "user unchecked every group"
+                         (contact_group[] then vanishes from the POST) apart from a
+                         request that never carried the groups UI. --}}
+                    <input type="hidden" name="contact_group_submitted" value="1">
                     <div class="hairline border border-paper-200 rounded-lg p-2 flex flex-wrap gap-1.5 bg-paper-0"
                         data-edit-groups>
                         @forelse ($groups as $group)
@@ -915,6 +999,29 @@
                         @endforelse
                     </div>
                 </div>
+                {{-- Workspace custom attributes — prefilled per contact by
+                     user-contacts-index.js (data-edit-attr), saved into
+                     custom_attributes and used as {{key}} in templates/flows. --}}
+                @if (isset($attributes) && count($attributes))
+                    <div>
+                        <label class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">
+                            {{ __('Attributes') }}
+                            <span class="text-[10px] font-normal text-ink-500">{{ __('fills variables in templates & flows') }}</span>
+                        </label>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            @foreach ($attributes as $attr)
+                                <div>
+                                    <label class="block text-[10.5px] text-ink-600 mb-[3px]">{{ $attr->attribute_name }}
+                                        <span class="font-mono text-ink-400">/{{ $attr->attribute_key }}</span></label>
+                                    <input type="text" name="attributes[{{ $attr->attribute_key }}]"
+                                        data-edit-attr="{{ $attr->attribute_key }}" maxlength="1000"
+                                        @if ($attr->description) placeholder="{{ $attr->description }}" @endif
+                                        class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
                 {{-- Tags — adding one fires the flow "Audience: when a tag is added" trigger. --}}
                 <div data-contact-tags-block>
                     <label class="lbl text-[11.5px] font-semibold text-ink-700 flex items-center justify-between gap-2 mb-[5px]">{{ __('Tags') }}</label>

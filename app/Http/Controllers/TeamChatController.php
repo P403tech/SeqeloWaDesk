@@ -277,6 +277,24 @@ class TeamChatController extends Controller
         if ($sinceId > 0) $q->where('id', '>', $sinceId);
 
         $rows = $q->get();
+
+        // Two members of the same workspace opening the SAME channel must see
+        // the same messages. When one does and the other doesn't, the divergence
+        // is upstream of this query — a different current_workspace_id, hence a
+        // different #general. Log what each reader actually resolved to so the
+        // two sides can be compared directly.
+        \Illuminate\Support\Facades\Log::info('[TEAM-CHAT] read', [
+            'user_id'      => $userId,
+            'workspace_id' => $wsId,
+            'channel_id'   => $ch->id,
+            'channel_slug' => $ch->slug,
+            'channel_ws'   => $ch->workspace_id,
+            'since_id'     => $sinceId,
+            'before'       => $cursor,
+            'found'        => $rows->count(),
+            'total_in_ch'  => TeamChatMessage::where('channel_id', $ch->id)->count(),
+        ]);
+
         $authorIds = $rows->pluck('user_id')->unique()->all();
         $users = User::whereIn('id', $authorIds)
             ->get(['id', 'name', 'email', 'avatar_path'])->keyBy('id');
@@ -347,6 +365,18 @@ class TeamChatController extends Controller
         if ($body === '' && !$request->hasFile('attachment')) {
             return response()->json(['ok' => false, 'message' => 'empty'], 422);
         }
+
+        // Pair this with the [TEAM-CHAT] read line: if the writer's channel_id
+        // differs from the reader's, they are in different #general channels
+        // and no amount of polling will ever surface the message.
+        \Illuminate\Support\Facades\Log::info('[TEAM-CHAT] write', [
+            'user_id'      => $userId,
+            'workspace_id' => $wsId,
+            'channel_id'   => $ch->id,
+            'channel_slug' => $ch->slug,
+            'channel_ws'   => $ch->workspace_id,
+            'explicit_ch'  => $channelId ?: null,
+        ]);
 
         $mentions = [];
         if (preg_match_all('/@\[([^\]]+)\]\((\d+)\)/', $body, $m)) {

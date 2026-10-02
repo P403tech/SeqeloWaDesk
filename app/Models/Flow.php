@@ -149,6 +149,21 @@ class Flow extends Model
                 return;
             }
 
+            // Email flows mirror Telegram — resolved directly at runtime
+            // (flow_type='email' + trigger_device_id = the WorkspaceEmailAccount
+            // mirror row id → MailtrixyIngestService::resolveEmailKeywordFlow),
+            // and the handoff runs BEFORE the keyword dispatcher there. A
+            // keyword_replies row would double-fire the flow on the same inbound
+            // (its provider='email' rule matches in KeywordReplyDispatcher) and
+            // its device_id would carry a mirror-row id that can collide with a
+            // real devices.id. Return early.
+            if ($this->flow_type === 'email') {
+                \Illuminate\Support\Facades\Log::info('[FLOW-KW-SYNC] email flow — resolved directly at runtime', [
+                    'flow_id' => $this->id, 'mirror_row_id' => $this->trigger_device_id,
+                ]);
+                return;
+            }
+
             $keywords = trim((string) ($this->trigger_keywords ?? ''));
             if ($keywords === '' || empty($this->workspace_id)) {
                 \Illuminate\Support\Facades\Log::warning('[FLOW-KW-SYNC] skip — NO keyword rule created', [
@@ -172,6 +187,22 @@ class Flow extends Model
             // accepted as input so existing flows keep working — they just set
             // the flag now instead of producing a regex.
             $isCatchAll = in_array($keywords, ['*', '.*', '.+', 'any'], true);
+
+            // The keyword_replies.keyword column is VARCHAR(255). A trigger with
+            // more keyword text than that used to make KeywordReply::create()
+            // throw "Data too long for column 'keyword'", which the catch below
+            // silently swallowed — so the managed rule was NEVER created and the
+            // flow looked LIVE but never fired on its keyword (notallow). Fail
+            // LOUDLY with a human message instead of hiding it, so the operator
+            // sees exactly why and shortens the Trigger node's keywords.
+            if (! $isCatchAll && mb_strlen($keywords) > 255) {
+                $msg = 'Trigger keyword is too long (' . mb_strlen($keywords) . ' characters; the limit is 255). '
+                    . 'Open the flow\'s Trigger node and shorten the keywords — remove duplicates or extra phrases.';
+                \Illuminate\Support\Facades\Log::error('[FLOW-KW-SYNC] ' . $msg, [
+                    'flow_id' => $this->id, 'keyword_len' => mb_strlen($keywords),
+                ]);
+                throw new \RuntimeException($msg);
+            }
 
             // Stamp the engine on the rule. WITHOUT this the row lands with
             // provider=NULL, and the /auto-reply list's forCurrentEngine() scope
@@ -214,7 +245,16 @@ class Flow extends Model
                     : 'device_id is NULL — the inbound matcher is device-scoped; set a Device on the Trigger node or it will not match any inbound',
             ]);
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning('[FLOW] keyword-trigger sync failed: ' . $e->getMessage());
+            // Do NOT swallow. A failed keyword-rule write means the flow will
+            // NOT fire on its trigger — hiding that is exactly what let an
+            // over-long keyword silently break the flow. Log the REAL error in
+            // full, then re-throw so the save/publish response shows the operator
+            // the actual reason instead of a green "saved" that doesn't work.
+            \Illuminate\Support\Facades\Log::error('[FLOW-KW-SYNC] keyword-trigger sync FAILED for flow ' . $this->id . ': ' . $e->getMessage(), [
+                'flow_id'   => $this->id,
+                'exception' => get_class($e),
+            ]);
+            throw $e;
         }
     }
 
@@ -333,6 +373,19 @@ class Flow extends Model
         'contact_created', 'opt_in', 'order_placed', 'appointment_booked',
         // Sales Pipeline bridge — fire when a deal enters a stage (value = stage_id)
         'deal_stage_changed',
+        // CRM lifecycle triggers. trigger_value = 0 always means "any", matching
+        // the sentinel contact_created / opt_in already use:
+        //   deal_created / deal_won / deal_lost   → value = pipeline_id (0 = any)
+        //   deal_assigned / conversation_assigned → value = user_id     (0 = any)
+        //   task_due                              → value = 0 (any due task)
+        //   no_activity                           → value = HOURS of silence
+        // deal_won / deal_lost are separate from deal_stage_changed on purpose:
+        // binding to the Won stage breaks the moment someone renames or re-flags
+        // a stage, and a workspace with several pipelines would need one flow per
+        // Won stage. These fire off the deal's STATUS, which is stage-independent.
+        'deal_created', 'deal_won', 'deal_lost',
+        'deal_assigned', 'conversation_assigned',
+        'task_due', 'no_activity',
         // Inbound-condition triggers — launch on any inbound message while the
         // workspace is in Away mode (workspaces.inbox_away) or outside its
         // Business Hours. trigger_value unused (0); enrols each contact once.
@@ -341,6 +394,12 @@ class Flow extends Model
         // keyword on a post. trigger_value holds the bound keyword_replies
         // rule ids (CSV); empty = any comment_to_dm rule on the account.
         'comment_to_dm',
+        // Campaign engagement — fire when a WABA campaign recipient reaches an
+        // engagement status (read / delivered_no_read / replied / clicked / …).
+        // trigger_value = campaign_id. Fired via a linked CampaignFollowup rule
+        // (action=start_flow) so it reuses the tested follow-up engine + drain;
+        // the flow itself is inert to inbound matching.
+        'campaign_engagement',
     ];
 
     public function user()
@@ -356,6 +415,15 @@ class Flow extends Model
     public function connectedDevices()
     {
         return $this->hasMany(FlowConnectedDevice::class);
+    }
+
+    /**
+     * Retry attempts made on this flow's failed runs — the audit trail behind
+     * the Retry records tab of /flows/analytics. Written by FlowRetryService.
+     */
+    public function retryLogs()
+    {
+        return $this->hasMany(FlowRetryLog::class)->orderByDesc('id');
     }
 
     public function activeDevices()

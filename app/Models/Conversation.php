@@ -40,7 +40,7 @@ class Conversation extends Model
     // 'instagram' threads arrive from the separate Instaflow deployment and have
     // no WhatsApp engine — like the chat widget, they must always show in the
     // unified inbox regardless of which WA engine the workspace has connected.
-    public const ENGINE_AGNOSTIC_CHANNELS = ['chatbot_widget', 'instagram', 'facebook', 'tiktok', 'telegram', 'sms'];
+    public const ENGINE_AGNOSTIC_CHANNELS = ['chatbot_widget', 'instagram', 'facebook', 'tiktok', 'telegram', 'line', 'wechat', 'viber', 'sms', 'email'];
 
     protected $fillable = [
         'user_id', 'workspace_id',
@@ -295,18 +295,29 @@ class Conversation extends Model
                     $engines = array_values(array_unique(array_merge($engines, $connectedOfficial)));
                 }
 
-                // Engine-agnostic channels — each shown only while its account/bot is
-                // connected (the widget is always on). Disconnecting the last account
-                // drops that channel from the exempt list within the 5s cache window.
-                $agnostic = ['chatbot_widget'];
-                if (\App\Models\WorkspaceIgAccount::hasConnected($wsId)) $agnostic[] = 'instagram';
-                if (\App\Models\FacebookPage::hasConnected($wsId))       $agnostic[] = 'facebook';
-                if (\App\Models\TiktokAccount::hasConnected($wsId))      $agnostic[] = 'tiktok';
-                if (\App\Models\TelegramBot::hasConnected($wsId))        $agnostic[] = 'telegram';
-                if (\App\Models\WaProviderConfig::query()->where('workspace_id', $wsId)
-                        ->where('provider', 'sms')->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)->exists()) {
-                    $agnostic[] = 'sms';
-                }
+                // Engine-agnostic channels (Instagram / Facebook / TikTok /
+                // Telegram / LINE / WeChat / Viber / SMS / email / web widget) are
+                // NOT WhatsApp engines, so the enabled-engine switch must never hide
+                // their conversations.
+                //
+                // This USED to whitelist each channel only while its account was
+                // "connected" — which caused two real inbox bugs:
+                //   1. The NATIVE Instagram add-on stores accounts in
+                //      `instagram_accounts`, NOT the Instaflow-mirror
+                //      WorkspaceIgAccount this check looked at, so a natively
+                //      connected IG account's chats were EXCLUDED from the queue
+                //      entirely — they never appeared, on scroll or on clicking the
+                //      Instagram tab.
+                //   2. Briefly disconnecting a channel HID all of its existing
+                //      threads, losing access to conversation history.
+                //
+                // Fix: include the full agnostic set unconditionally. The scope
+                // adds these via `orWhereIn('channel', …)`, which only ever matches
+                // conversations that ACTUALLY EXIST — a channel the workspace never
+                // used contributes nothing, while every channel that has threads
+                // (native or mirrored, connected or momentarily disconnected) stays
+                // visible. This is exactly the "show all my chats" behaviour expected.
+                $agnostic = \App\Models\Conversation::ENGINE_AGNOSTIC_CHANNELS;
 
                 return ['engines' => $engines, 'agnostic' => $agnostic];
             }

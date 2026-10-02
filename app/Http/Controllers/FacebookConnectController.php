@@ -27,8 +27,18 @@ use Illuminate\Support\Facades\Log;
  */
 class FacebookConnectController extends Controller
 {
-    /** Page permissions requested at OAuth. */
-    private const SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,pages_read_user_content,pages_manage_metadata,pages_messaging,read_insights,business_management';
+    /**
+     * Page permissions requested at OAuth.
+     *
+     * `leads_retrieval` + `pages_manage_ads` are what make Lead Ads work:
+     * the leadgen webhook only delivers IDs, and reading the customer's actual
+     * answers needs leads_retrieval. Both are ADVANCED ACCESS permissions, so
+     * until the Meta app passes App Review they are granted only to users who
+     * hold a role on the app (admin / developer / tester). Requesting them for
+     * everyone is still correct — Meta simply omits what it will not grant, and
+     * the rest of the scopes are unaffected.
+     */
+    private const SCOPES = 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,pages_read_user_content,pages_manage_metadata,pages_messaging,read_insights,business_management,leads_retrieval,pages_manage_ads';
 
     private function redirectUri(): string
     {
@@ -57,7 +67,7 @@ class FacebookConnectController extends Controller
         }
         $appId = FacebookPageClient::appId();
         if ($appId === '') {
-            return back()->withErrors(['facebook' => __('Facebook is not configured. Ask the platform admin to enable it under Settings → WaDesk Message.')]);
+            return back()->withErrors(['facebook' => setup_hint(__('Facebook is not configured — enable it under Admin → Channel Settings.'), __('Facebook connection is currently unavailable. Please contact support for assistance.'))]);
         }
         $v = FacebookPageClient::version();
         $configId = (string) SystemSetting::get('fb_config_id', '');
@@ -161,21 +171,58 @@ class FacebookConnectController extends Controller
     public function connectManual(Request $request)
     {
         ChannelSetupReturn::remember();
+        // Log FIRST — before validation — so a submit ALWAYS leaves a trace even
+        // when the token is rejected (that was the "click connect, nothing happens,
+        // no log" case: a too-long token failed validation silently).
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
+        $rawToken = trim((string) $request->input('page_access_token', ''));
+        Log::info('[FB-CONNECT] manual token connect attempted', [
+            'workspace_id' => $wsId,
+            'token_len'    => strlen($rawToken),
+            'token_head'   => substr($rawToken, 0, 10),
+        ]);
+
         $data = $request->validate([
-            'page_access_token' => 'required|string|min:20|max:1000',
+            // System-User tokens can be long — allow up to 2048 (was 1000, which
+            // silently rejected longer tokens with no visible error).
+            'page_access_token' => 'required|string|min:20|max:2048',
         ]);
         if (! $wsId) {
             return back()->withErrors(['facebook' => __('No active workspace.')]);
         }
 
         $pageToken = trim((string) $data['page_access_token']);
+
+        \App\Services\Facebook\FacebookPageClient::$lastTokenError = '';
         $p = FacebookPageClient::pageFromToken($pageToken);
         if (empty($p['id'])) {
-            return back()->withErrors(['facebook' => __('That token did not resolve to a Facebook Page. Paste a valid Page access token.')]);
+            // Surface Meta's REAL reason (logged by pageFromToken) instead of a
+            // generic "invalid" — the usual cause is pasting a WhatsApp token or a
+            // token from a different Meta app.
+            $why = \App\Services\Facebook\FacebookPageClient::$lastTokenError;
+            $msg = str_contains(strtolower($why), 'signature')
+                ? __('That token is from a different Meta app (or is a WhatsApp token). Paste a Facebook PAGE access token generated from the same app, with pages_messaging permission.')
+                : __('That token did not resolve to a Facebook Page. Paste a Page access token (pages_messaging).')
+                    . ($why !== '' ? ' — ' . $why : '');
+            Log::warning('[FB-CONNECT] manual connect rejected — no page from token', ['workspace_id' => $wsId, 'meta_error' => $why]);
+            return back()->withErrors(['facebook' => $msg]);
+        }
+        Log::info('[FB-CONNECT] manual token → page resolved', ['workspace_id' => $wsId, 'page_id' => $p['id'], 'name' => $p['name'] ?? '']);
+
+        // When a System-User / user token was pasted, pageFromToken resolved the
+        // Page via /me/accounts and returned that Page's OWN access token — store
+        // and send with THAT, not the pasted token.
+        $storeToken = (string) ($p['page_token'] ?? $pageToken);
+
+        // Same platform-wide claim rule as the OAuth path — a pasted Page token
+        // must not be able to bypass it.
+        if (\App\Support\ChannelClaim::heldElsewhere(FacebookPage::class, 'page_id', (string) $p['id'], $wsId)) {
+            return back()->withErrors([
+                'facebook' => \App\Support\ChannelClaim::takenMessage(__('Facebook Page')),
+            ]);
         }
 
-        [$grantedScopes, $dataExp] = $this->tokenGrant($pageToken);
+        [$grantedScopes, $dataExp] = $this->tokenGrant($storeToken);
 
         $this->upsertPage($wsId, [
             'page_id'  => (string) $p['id'],
@@ -183,7 +230,7 @@ class FacebookConnectController extends Controller
             'category' => (string) ($p['category'] ?? ''),
             'username' => (string) ($p['username'] ?? ''),
             'picture'  => (string) ($p['picture']['data']['url'] ?? ''),
-            'token'    => $pageToken,
+            'token'    => $storeToken,
             'tasks'    => (array) ($p['tasks'] ?? []),
             'fan'      => isset($p['fan_count']) ? (int) $p['fan_count'] : null,
             'scopes'   => $grantedScopes,
@@ -232,7 +279,13 @@ class FacebookConnectController extends Controller
     {
         $pages = FacebookPageClient::listPages($userToken);
         if (empty($pages)) {
-            return ['ok' => false, 'count' => 0, 'message' => __('No Facebook Pages were found on this account. Make sure you granted access to at least one Page you manage.')];
+            // Surface the concrete reason the enumeration recorded (missing
+            // per-Page grant, no admin role, a Graph error) instead of the
+            // identical generic line for every different cause.
+            $reason = trim((string) FacebookPageClient::$lastEmptyReason);
+            $base = __('No Facebook Pages were found on this account. Make sure you granted access to at least one Page you manage.');
+
+            return ['ok' => false, 'count' => 0, 'message' => $reason !== '' ? $base.' — '.$reason : $base];
         }
 
         // One debug_token call on the USER token gives the actually-granted
@@ -240,10 +293,21 @@ class FacebookConnectController extends Controller
         [$grantedScopes, $dataExp] = $this->tokenGrant($userToken);
 
         $names = [];
+        $claimed = [];
         foreach ($pages as $p) {
             $pageToken = (string) ($p['access_token'] ?? '');
             $pageId = (string) ($p['id'] ?? '');
             if ($pageId === '' || $pageToken === '') {
+                continue;
+            }
+            // One Page = one workspace, platform-wide. Inbound Messenger events
+            // resolve their workspace FROM the page id, so a Page connected in
+            // two workspaces makes routing ambiguous — messages land in
+            // whichever row is found first. Skip the claimed Page rather than
+            // failing the whole connect: this account may manage several Pages
+            // and the others are still fine to add.
+            if (\App\Support\ChannelClaim::heldElsewhere(FacebookPage::class, 'page_id', $pageId, $wsId)) {
+                $claimed[] = (string) ($p['name'] ?? $pageId);
                 continue;
             }
             $this->upsertPage($wsId, [
@@ -262,7 +326,16 @@ class FacebookConnectController extends Controller
         }
 
         if (empty($names)) {
-            return ['ok' => false, 'count' => 0, 'message' => __('Could not store any Page — Meta returned no usable Page tokens.')];
+            // Distinguish "Meta gave us nothing" from "every Page you manage is
+            // already connected elsewhere" — otherwise the second case reads as
+            // a Meta failure and sends the operator down the wrong path.
+            $message = $claimed
+                ? __('Already connected on this platform: :list. Disconnect there first, or pick a different Page.', [
+                    'list' => implode(', ', array_slice($claimed, 0, 5)) . (count($claimed) > 5 ? '…' : ''),
+                ])
+                : __('Could not store any Page — Meta returned no usable Page tokens.');
+
+            return ['ok' => false, 'count' => 0, 'message' => $message];
         }
 
         $n = count($names);

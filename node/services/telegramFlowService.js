@@ -125,6 +125,18 @@ function nextNode(flow, nodeId, port = "out") {
   }
   return port === "out" ? any : null;
 }
+/** ALL nodes wired to nodeId on `port` (edge order) — fan-out counterpart of nextNode. */
+function nextTargets(flow, nodeId, port = "out") {
+  const out = [];
+  for (const e of edgesOf(flow)) {
+    if (String(e?.source) !== String(nodeId)) continue;
+    if (String(e?.sourceHandle || "out") === port) out.push(String(e?.target || ""));
+  }
+  if (out.length === 0 && port === "out") {
+    for (const e of edgesOf(flow)) if (String(e?.source) === String(nodeId)) out.push(String(e?.target || ""));
+  }
+  return out.filter(Boolean);
+}
 function entryNode(flow) { for (const n of nodesOf(flow)) if (String(n?.type) === "trigger") return n; return null; }
 const subst = (s, vars) => String(s ?? "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, k) => String(vars?.[k] ?? ""));
 export function delayMsOf(d) {
@@ -139,28 +151,85 @@ const chatOptions = (d) =>
     .map((o, i) => ({ title: String(typeof o === "object" ? (o.title ?? o.label ?? "") : o).trim(), payload: `OPT_${i}` }))
     .filter((o) => o.title !== "")
     .slice(0, 12);
-function evalCondition(d, vars) {
-  const left = subst(d?.variable ?? d?.left ?? "{{text}}", vars).toLowerCase().trim();
-  const right = subst(d?.value ?? d?.right ?? "", vars).toLowerCase().trim();
-  switch (String(d?.operator ?? d?.op ?? "contains")) {
-    case "equals": case "=": case "==": return left === right;
-    case "not_equals": case "!=": return left !== right;
-    case "starts_with": return left.startsWith(right);
-    default: return right === "" ? true : left.includes(right);
+// Evaluate a condition node. Rows live under `d.conditions[]`, joined by
+// `d.operators[]` ("and"/"or"). The earlier version read d.variable/operator/value
+// directly off the node — but they live inside d.conditions[0], so all were
+// undefined: operator fell back to "contains", value to "", and the default
+// `right === "" ? true` made EVERY condition return true (every input took the
+// first "yes" port). Mirrors _flowEvalCondition in flowService.js.
+export function evalCondition(d, vars) {
+  const rows    = Array.isArray(d?.conditions) && d.conditions.length ? d.conditions : [d];
+  const joiners = Array.isArray(d?.operators) ? d.operators : [];
+
+  const resolveVar = (name) => {
+    const raw = String(name ?? "").trim();
+    if (raw === "") return "";
+    if (raw.includes("{{")) return subst(raw, vars);
+    return String(vars?.[raw] ?? "");
+  };
+
+  const evalOne = (c) => {
+    const op = String(c?.operator ?? c?.op ?? "equals").toLowerCase().trim().replace(/\s+/g, "_");
+    const resolvedRaw = resolveVar(c?.variable ?? c?.left);
+    if (op === "exists" || op === "is_set")         return String(resolvedRaw).trim() !== "";
+    if (op === "not_exists" || op === "is_not_set") return String(resolvedRaw).trim() === "";
+    let userRaw = resolvedRaw;
+    if (!userRaw) userRaw = String(vars?.text ?? vars?.user_message ?? "");
+    const checkRaw = c?.value ?? c?.right ?? "";
+    const u = String(userRaw).toLowerCase().trim();
+    const v = String(checkRaw).toLowerCase().trim();
+    switch (op) {
+      case "equals": case "=": case "==":  return u === v;
+      case "not_equals": case "!=":        return u !== v;
+      case "contains":                     return u.includes(v);
+      case "not_contains":                 return !u.includes(v);
+      case "gt": case "greater_than":      return parseFloat(userRaw) > parseFloat(checkRaw);
+      case "lt": case "less_than":         return parseFloat(userRaw) < parseFloat(checkRaw);
+      case "is_empty":                     return u === "";
+      case "is_not_empty":                 return u !== "";
+      case "starts_with":                  return u.startsWith(v);
+      case "ends_with":                    return u.endsWith(v);
+      default:
+        console.warn(`[TG-COND] unknown operator "${c?.operator}" → FALSE`);
+        return false;
+    }
+  };
+
+  let result = evalOne(rows[0]);
+  for (let i = 1; i < rows.length; i++) {
+    const join = String(joiners[i - 1] || "AND").toUpperCase();
+    const next = evalOne(rows[i]);
+    result = join === "OR" ? (result || next) : (result && next);
   }
+  return result;
 }
 
 // ── The walker ───────────────────────────────────────────────────────────────
-async function walk(ctx, startId) {
-  const { auth, flow, chatId, appDomain, botId, flowId, workspaceId } = ctx;
-  const nodes = indexNodes(flow);
-  let current = startId;
-  let guard = 0;
-  console.log(`[TG-WALK] start flow=${flowId} chat=${chatId} from=${startId} nodes=${nodes.size}`);
+async function walk(ctx, startId, opts = {}) {
+  const nodes = indexNodes(ctx.flow);
+  const visited = new Set();
+  const state = { parked: false, steps: 0 };
+  console.log(`[TG-WALK] start flow=${ctx.flowId} chat=${ctx.chatId} from=${startId} fan-out nodes=${nodes.size}`);
+  if (opts.fromPort) {
+    visited.add(String(startId));
+    for (const t of nextTargets(ctx.flow, startId, opts.fromPort)) await walkNode(ctx, nodes, t, visited, state);
+  } else {
+    await walkNode(ctx, nodes, startId, visited, state);
+  }
+  if (!state.parked) clearSession(ctx.botId, ctx.chatId);
+}
 
-  while (current && guard++ < 100) {
-    const node = nodes.get(String(current));
-    if (!node) { console.warn(`[TG-WALK] node id="${current}" NOT FOUND — ending flow=${flowId}`); break; }
+/** Run ONE node then fan out to EVERY node on its active port (see facebookFlowService for the rationale). */
+async function walkNode(ctx, nodes, id, visited, state) {
+  if (!id) return;
+  if (state.steps++ > 300) { console.warn(`[TG-WALK] step guard — possible loop flow=${ctx.flowId}`); return; }
+  const key = String(id);
+  if (visited.has(key)) return;
+  visited.add(key);
+  const node = nodes.get(key);
+  if (!node) { console.warn(`[TG-WALK] node id="${id}" NOT FOUND — flow=${ctx.flowId}`); return; }
+
+  const { auth, flow, chatId, appDomain, botId, flowId, workspaceId } = ctx;
     const type = String(node.type || "");
     const d = node.data || {};
     let port = "out";
@@ -168,6 +237,7 @@ async function walk(ctx, startId) {
 
     try {
       switch (type) {
+        case "trigger": break;   // entry node — fan out only
         case "message": {
           const body = subst(d.text, ctx.vars);
           if (body.trim() !== "") {
@@ -198,7 +268,7 @@ async function walk(ctx, startId) {
           const opts = chatOptions(d);
           const r = await sendChoices(auth, chatId, body, opts);
           await logToLaravel(appDomain, { botId, chatId, workspaceId, direction: "out", body, source: "flow", mid: midOf(r), buttons: opts.map((o) => ({ title: String(o.title ?? o) })) });
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the tap
         }
         case "ask": {
@@ -207,7 +277,7 @@ async function walk(ctx, startId) {
             const r = await sendText(auth, chatId, q);
             await logToLaravel(appDomain, { botId, chatId, workspaceId, direction: "out", body: q, source: "flow", mid: midOf(r) });
           }
-          park(ctx, node.id);
+          if (!state.parked) { park(ctx, node.id); state.parked = true; }
           return; // wait for the answer
         }
         case "delay": {
@@ -271,13 +341,14 @@ async function walk(ctx, startId) {
           // webhook to resume us (only that signal advances — see resumeFlow).
           if (providerToken && amount > 0 && (d.wait === true || d.wait === "1" || d.wait === 1)) {
             ctx.vars.invoice_payload = payload;
-            park(ctx, node.id);
+            if (!state.parked) { park(ctx, node.id); state.parked = true; }
             return;
           }
           break; // fire-and-forget: the payment lands on Laravel's webhook
         }
         case "end":
-          clearSession(botId, chatId);
+          // End THIS branch only; the session is cleared at the top of walk()
+          // once all branches settle and none parked.
           console.log(`[TG-FLOW-NODE] end flow=${flowId} chat=${chatId}`);
           return;
         default:
@@ -287,11 +358,10 @@ async function walk(ctx, startId) {
       console.error(`[TG-FLOW-NODE] node ${node.id} (${type}) failed: ${e?.message}`);
     }
 
-    current = nextNode(flow, node.id, port);
-  }
-
-  if (guard >= 100) console.warn(`[TG-FLOW-NODE] walk hit the 100-node guard (flow=${flowId})`);
-  clearSession(botId, chatId);
+    // Fan out to every node wired to this node's active port (edge order).
+    for (const t of nextTargets(flow, node.id, port)) {
+      await walkNode(ctx, nodes, t, visited, state);
+    }
 }
 
 // ── Session state ────────────────────────────────────────────────────────────
@@ -322,7 +392,7 @@ export async function runFlow({ auth, flow, chatId, text, flowId, botId, workspa
     vars: { text: String(text || ""), chat_id: String(chatId), ...(vars || {}) },
   };
   console.log(`[TG-FLOW-NODE] START flow=${flowId} bot=${botId} chat=${chatId}`);
-  await walk(ctx, nextNode(flow, start.id, "out"));
+  await walk(ctx, start.id);   // fan out from the trigger's connections
   return true;
 }
 
@@ -376,7 +446,7 @@ export async function resumeFlow({ botId, chatId, text, vars }) {
   TG_SESSIONS.delete(key);
   sess.vars.text = String(text || "");
   console.log(`[TG-FLOW-NODE] RESUME flow=${sess.flowId} from=${sess.nodeId} port=${port}`);
-  await walk({ ...sess, vars: sess.vars }, nextNode(sess.flow, sess.nodeId, port));
+  await walk({ ...sess, vars: sess.vars }, sess.nodeId, { fromPort: port });   // fan out from the parked node's chosen port
   return true;
 }
 

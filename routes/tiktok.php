@@ -65,6 +65,15 @@ Route::post('/webhooks/tiktok', [TiktokWebhookController::class, 'handle']);
 Route::post('/webhooks/tiktok/business', [TiktokWebhookController::class, 'business']);
 // Ads "New Lead" webhook — lead-gen Instant Form submissions → Contacts.
 Route::post('/webhooks/tiktok/leads', [TiktokWebhookController::class, 'leads']);
+// GET health-check. TikTok delivers webhooks ONLY as POST (+ TikTok-Signature)
+// — it has no GET verification/challenge. But operators (and uptime checks)
+// often open the URL in a browser, which would otherwise hit a scary
+// "405 Method Not Allowed" page and look broken. Answer GET with a plain 200
+// so visiting the URL simply confirms the endpoint is live.
+Route::get('/webhooks/tiktok{suffix?}', fn () => response(
+    'TikTok webhook endpoint is live. This URL accepts POST from TikTok only (signed with TikTok-Signature); there is nothing to see here in a browser.',
+    200,
+))->where('suffix', '(/business|/leads)?');
 
 // ── Node → Laravel flow-engine bridge (raw, X-Node-Token guarded, no session). ──
 // The ported TikTok flow engine (node/services/tiktokFlowService.js) runs every

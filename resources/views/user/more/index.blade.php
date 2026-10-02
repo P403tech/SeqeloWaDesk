@@ -156,7 +156,8 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-more-tools>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-more-tools
+                    data-hidden-features="{{ json_encode(\App\Support\FeatureRegistry::hiddenPaths()) }}">
                     {{-- Unified Inbox moved to the main header nav — its hero card
                          used to live here, removed to avoid duplicating the entry. --}}
 
@@ -180,6 +181,28 @@
                         <div class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
                             <span class="font-mono">{{ __('click-to-chat') }}</span>
                             <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open Meta Ads') }}</span>
+                        </div>
+                    </a>
+
+                    {{-- OpenAI (ChatGPT) Ads — the workspace connects its own Ads API
+                         key and manages campaigns on its own ad account. --}}
+                    <a href="{{ url('/openai-ads') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-wa-mint text-wa-deep grid place-items-center">
+                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v11M2.5 8h11" />
+                                </svg>
+                            </span>
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-wa-mint text-wa-deep text-[10px] font-mono">ADS</span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('OpenAI Ads') }}</h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Run advertising campaigns on OpenAI (ChatGPT) with your own ad account — connect your Ads API key, then manage campaigns, budgets and conversions.') }}
+                        </p>
+                        <div class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ __('ChatGPT ads') }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open OpenAI Ads') }}</span>
                         </div>
                     </a>
 
@@ -281,6 +304,33 @@
                             <div class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
                                 <span class="font-mono">{{ __('growth tools') }}</span>
                                 <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open setup') }}</span>
+                            </div>
+                        </a>
+                    @endif
+
+                    {{-- Lead Ads — Instant Form leads from Facebook/Instagram ads,
+                         mapped into contacts and deals. Still gated on
+                         facebook_enabled because it runs on a connected Page, but
+                         the route is plan-gated on its OWN feature
+                         (access_lead_ads) — it is sold separately from Pages. --}}
+                    @if ($fbAvailable)
+                        <a href="{{ url('/lead-ads') }}"
+                            class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                            <div class="flex items-start justify-between gap-3">
+                                <span class="w-11 h-11 rounded-xl grid place-items-center" style="background:#1877F2">
+                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.9">
+                                        <path d="M5 3.5h10L19 7v13.5H5z"/><path d="M8.5 10h7M8.5 14h4.5"/>
+                                    </svg>
+                                </span>
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono" style="background:#E7F0FF;color:#1877F2">FB</span>
+                            </div>
+                            <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('Lead Ads') }}</h2>
+                            <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                                {{ __('Turn Instant Form submissions into contacts and deals — map each answer, pick the pipeline, and choose who follows up.') }}
+                            </p>
+                            <div class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                                <span class="font-mono">{{ __('growth tools') }}</span>
+                                <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open leads') }}</span>
                             </div>
                         </a>
                     @endif
@@ -571,7 +621,11 @@
                             {{ __('Ramp each number\'s daily send budget with human-like gaps + active hours to reduce ban risk.') }}</p>
                         <div
                             class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
-                            <span class="font-mono">{{ __('Unofficial API') }}</span>
+                            @if (\App\Services\WorkspaceEngine::unofficialEnabled())
+                                <span class="font-mono">{{ __('Unofficial API') }}</span>
+                            @else
+                                <span></span>
+                            @endif
                             <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
                         </div>
                     </a>
@@ -597,6 +651,31 @@
                             class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
                             <span class="font-mono">{{ $s['scheduledQueued'] ?? 0 }} queued / next
                                 {{ $s['nextScheduled'] ?? '—' }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
+                        </div>
+                    </a>
+
+                    <a href="{{ url('/drip-campaigns') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-[#DFF1ED] text-wa-deep grid place-items-center">
+                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    stroke-width="1.5">
+                                    <path d="M8 1.5s3.5 4 3.5 6.5a3.5 3.5 0 0 1-7 0C4.5 5.5 8 1.5 8 1.5Z" />
+                                    <path d="M6.6 9.2a1.6 1.6 0 0 0 1.6 1.5" />
+                                </svg>
+                            </span>
+                            <span class="font-mono text-[10px] text-ink-500">03</span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">
+                            {{ __('Drip Campaigns') }}<x-plan-crown feature="access_drip_campaigns" :link="false"
+                                size="sm" /></h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Timed follow-up sequences — send, wait days, send again. Stops the moment they reply.') }}
+                        </p>
+                        <div
+                            class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ __('durable waits') }}</span>
                             <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
                         </div>
                     </a>
@@ -1009,6 +1088,45 @@
                         </div>
                     </a>
 
+                    {{-- Flow Analytics — execution history, error logs and retry
+                         records for the automations built in Flows. Auto-tabs into
+                         Automation from its /flows href in user-more-index.js. --}}
+                    @php
+                        // Real count only — the failed runs the page opens on. No
+                        // estimate: if it cannot be read, the footer stays at zero.
+                        $faFailedRuns = 0;
+                        try {
+                            $faFlowIds = \App\Models\Flow::query()->forCurrentWorkspace()->pluck('id');
+                            if ($faFlowIds->isNotEmpty()) {
+                                $faFailedRuns = (int) \App\Models\FlowSubscriber::whereIn('flow_id', $faFlowIds)
+                                    ->where('status', 'failed')->count();
+                            }
+                        } catch (\Throwable $e) {
+                        }
+                    @endphp
+                    <a href="{{ route('user.flows.analytics') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-wa-mint text-wa-deep grid place-items-center">
+                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M2 13V3M2 13h12M5 11V8M8 11V5M11 11V9.5" />
+                                    <circle cx="8" cy="4" r="1.2" />
+                                </svg>
+                            </span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('Flow Analytics') }}<x-plan-crown
+                                feature="autoflow" :link="false" size="sm" /></h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Every automation run end to end — execution history, the errors that stopped a run, and the retry records for the ones you re-ran.') }}
+                        </p>
+                        <div
+                            class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ number_format($faFailedRuns) }} {{ __('failed runs') }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
+                        </div>
+                    </a>
+
                     {{-- Lead Finder — pull businesses from the map, add to CRM / campaign. --}}
                     <a href="{{ url('/lead-finder') }}"
                         class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
@@ -1073,6 +1191,31 @@
                             class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
                             <span class="font-mono">{{ $s['webhookEndpoints'] ?? 0 }}
                                 endpoints{{ $s['webhookUptimePct'] !== null ? ' / ' . $s['webhookUptimePct'] . '% up' : '' }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
+                        </div>
+                    </a>
+
+                    <a href="{{ url('/n8n') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-[#E8F5E9] text-wa-deep grid place-items-center">
+                                <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    stroke-width="1.5">
+                                    <circle cx="4" cy="8" r="1.8" />
+                                    <circle cx="12" cy="4" r="1.8" />
+                                    <circle cx="12" cy="12" r="1.8" />
+                                    <path d="M5.8 8h2.4M10.3 5 8.2 8M10.3 11 8.2 8" />
+                                </svg>
+                            </span>
+                            <span class="font-mono text-[10px] text-ink-500">11</span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">n8n<x-plan-crown
+                                feature="access_outbound_webhooks" :link="false" size="sm" /></h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Connect your own n8n and automate with 400+ apps — triggers and actions.') }}</p>
+                        <div
+                            class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ __('Automation') }}</span>
                             <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open') }}</span>
                         </div>
                     </a>
@@ -1254,29 +1397,25 @@
                     </span>
 
                     <h2 class="font-serif text-[22px] leading-tight tracking-[-0.01em] mt-4 relative z-10">
-                        {{ __('Affiliate history') }}</h2>
+                        {{ __('Refer & Earn') }}</h2>
                     <p class="mt-1.5 text-[12.5px] text-paper-0/85 leading-snug relative z-10">
-                        {{ __("Track every signup that came through your code, the credits earned, and your share link's performance.") }}
+                        {{ __('Invite friends on WhatsApp. When they join and make their first paid top-up, you both earn wallet money.') }}
                     </p>
 
                     <div class="mt-4 space-y-2 relative z-10">
                         <div class="flex items-center justify-between text-[11.5px] font-mono">
-                            <span class="text-paper-0/70">{{ __('Referrals') }}</span>
+                            <span class="text-paper-0/70">{{ __('Friends joined') }}</span>
                             <span>{{ number_format($s['affiliateReferrals'] ?? 0) }}</span>
                         </div>
                         <div class="flex items-center justify-between text-[11.5px] font-mono">
-                            <span class="text-paper-0/70">{{ __('Credits earned') }}</span>
+                            <span class="text-paper-0/70">{{ __('Rewards earned') }}</span>
                             <span>{{ number_format($s['affiliateCredits'] ?? 0) }}</span>
-                        </div>
-                        <div class="flex items-center justify-between text-[11.5px] font-mono">
-                            <span class="text-paper-0/70">{{ __('Payouts') }}</span>
-                            <span class="text-paper-0/60">{{ __('view in /affiliate-history') }}</span>
                         </div>
                     </div>
 
                     <div
                         class="mt-auto pt-4 border-t border-paper-0/15 flex items-center justify-between text-[11px] text-paper-0/80 relative z-10">
-                        <span class="font-mono">{{ __('referrals · credits · payouts') }}</span>
+                        <span class="font-mono">{{ __('share · they join · you both earn') }}</span>
                         <span class="text-paper-0 font-semibold inline-flex items-center gap-1.5">{{ __('Open') }}
                             <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor"
                                 stroke-width="1.7">

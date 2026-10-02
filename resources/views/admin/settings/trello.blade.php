@@ -90,7 +90,7 @@
                                     <span class="w-7 h-7 rounded-full text-paper-0 grid place-items-center font-mono text-[12px] font-semibold shrink-0" style="background:#0079BF">{{ $i + 1 }}</span>
                                     <div class="min-w-0 flex-1">
                                         <div class="font-semibold text-[13px]">{{ __($s[0]) }}</div>
-                                        <p class="text-[12px] text-ink-600 mt-1 leading-relaxed break-words">{!! $s[1] !!}</p>
+                                        <p class="text-[12px] text-ink-600 mt-1 leading-relaxed break-words">{!! __($s[1]) !!}</p>
                                     </div>
                                 </li>
                             @endforeach

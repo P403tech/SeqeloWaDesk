@@ -25,7 +25,11 @@ class WaConnectWabaController extends Controller
     {
         $data = $request->validate([
             'code'             => 'required|string|max:1024',
-            'phone_number_id'  => 'required|string|max:64',
+            // NULLABLE — a coexistence onboard often returns only waba_id in the
+            // postMessage; the Cloud-API registration of the existing Business
+            // App number is asynchronous, so phone_number_id is resolved below
+            // from the WABA's phone_numbers edge when it is absent.
+            'phone_number_id'  => 'nullable|string|max:64',
             'waba_id'          => 'required|string|max:64',
             'business_id'      => 'nullable|string|max:64',
             // Coexistence onboard (number stays live on the WhatsApp Business
@@ -40,6 +44,10 @@ class WaConnectWabaController extends Controller
         // break the whole point. So we skip registration for coexistence and
         // let the number keep running on both.
         $coexistence = (bool) ($data['coexistence'] ?? false);
+        // Resolved phone_number_id — starts from the payload, filled from the
+        // WABA edge below when the coexistence flow omitted it.
+        $pnid   = (string) ($data['phone_number_id'] ?? '');
+        $wabaId = (string) $data['waba_id'];
 
         $appId     = (string) SystemSetting::get('waba_app_id', '');
         $appSecret = (string) SystemSetting::get('waba_app_secret', '');
@@ -84,6 +92,48 @@ class WaConnectWabaController extends Controller
             $errors['subscribe'] = $e->getMessage();
         }
 
+        // 2b. Resolve the phone_number_id when the (coexistence) postMessage
+        //     returned only the waba_id. The existing Business App number is
+        //     registered on Cloud API asynchronously, so pull it from the WABA's
+        //     phone_numbers edge and flag coexistence from platform_type. Mirrors
+        //     DevicesController::wabaConnectEmbedded so both connect surfaces
+        //     behave identically.
+        if ($pnid === '') {
+            try {
+                $edge = Http::withToken($accessToken)
+                    ->timeout(10)
+                    ->get("https://graph.facebook.com/{$gv}/{$wabaId}/phone_numbers", [
+                        'fields' => 'id,display_phone_number,platform_type,verified_name',
+                    ]);
+                $rows = (array) ($edge->json('data') ?? []);
+                // Meta's current docs report "COEXISTENCE"; older payloads use
+                // "SMB_APP". Prefer a Business App number, else the first row.
+                $coexTypes = ['COEXISTENCE', 'SMB_APP'];
+                $pick = null;
+                foreach ($rows as $r) {
+                    if (in_array($r['platform_type'] ?? '', $coexTypes, true)) { $pick = $r; break; }
+                }
+                $pick = $pick ?: ($rows[0] ?? null);
+                if ($pick && !empty($pick['id'])) {
+                    $pnid = (string) $pick['id'];
+                    $coexistence = $coexistence || in_array($pick['platform_type'] ?? '', $coexTypes, true);
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('[COEX-STORE] phone_numbers lookup threw', ['waba_id' => $wabaId, 'error' => $e->getMessage()]);
+            }
+        }
+
+        // The number can still be genuinely absent if Meta has not finished the
+        // async Cloud-API registration of the Business App number. Ask the user
+        // to retry shortly rather than failing opaquely.
+        if ($pnid === '') {
+            \Log::warning('[COEX-STORE] no phone number on WABA yet', ['waba_id' => $wabaId, 'coexistence' => $coexistence]);
+            return response()->json([
+                'ok'      => false,
+                'message' => __('Meta has not finished preparing this number yet. Please wait a minute and try Connect again.'),
+            ], 422);
+        }
+
         // 3. Register the phone number on Cloud API — SKIPPED for coexistence
         //    (registering would migrate the number fully onto the API and
         //    remove it from the WhatsApp Business app). Coexistence numbers
@@ -94,7 +144,7 @@ class WaConnectWabaController extends Controller
             try {
                 $reg = Http::withToken($accessToken)
                     ->timeout(10)
-                    ->post("https://graph.facebook.com/{$gv}/{$data['phone_number_id']}/register", [
+                    ->post("https://graph.facebook.com/{$gv}/{$pnid}/register", [
                         'messaging_product' => 'whatsapp',
                         'pin'               => $pin,
                     ]);
@@ -111,7 +161,7 @@ class WaConnectWabaController extends Controller
         try {
             $info = Http::withToken($accessToken)
                 ->timeout(10)
-                ->get("https://graph.facebook.com/{$gv}/{$data['phone_number_id']}", [
+                ->get("https://graph.facebook.com/{$gv}/{$pnid}", [
                     'fields' => 'display_phone_number,verified_name',
                 ]);
             $displayPhone = $info->json('display_phone_number');
@@ -153,6 +203,22 @@ class WaConnectWabaController extends Controller
             return response()->json(['ok' => false, 'message' => 'No active workspace.'], 422);
         }
 
+        // One WABA number = one workspace, platform-wide. Meta delivers a
+        // phone_number_id's webhooks to a single app, and inbound routing
+        // resolves the workspace FROM that id — so a second workspace claiming
+        // it would make routing ambiguous and steal the first one's messages.
+        if (\App\Support\ChannelClaim::heldElsewhere(
+            WaProviderConfig::class,
+            'meta_json->phone_number_id',
+            $pnid,
+            (int) $workspaceId
+        )) {
+            return response()->json([
+                'ok'      => false,
+                'message' => \App\Support\ChannelClaim::takenMessage(__('WhatsApp number')),
+            ], 422);
+        }
+
         // Multi-engine + multi-WABA: match an EXISTING WABA row by its Meta
         // phone_number_id (the account's true identity) so reconnecting the
         // same number updates it, connecting a NEW WABA number adds its own
@@ -160,7 +226,7 @@ class WaConnectWabaController extends Controller
         $config = WaProviderConfig::query()
             ->where('workspace_id', $workspaceId)
             ->where('provider', WaProvider::Waba->value)
-            ->where('meta_json->phone_number_id', $data['phone_number_id'])
+            ->where('meta_json->phone_number_id', $pnid)
             ->first()
             ?? new WaProviderConfig([
                 'workspace_id' => $workspaceId,
@@ -170,12 +236,12 @@ class WaConnectWabaController extends Controller
             'provider'      => WaProvider::Waba->value,
             'status'        => empty($errors) ? WaProviderConfig::STATUS_CONNECTED : WaProviderConfig::STATUS_FAILED,
             'phone_number'  => $displayPhone,
-            'display_label' => 'WABA · ' . ($displayPhone ?: $data['phone_number_id']),
+            'display_label' => 'WABA · ' . ($displayPhone ?: $pnid),
             'connected_at'  => now(),
             'is_primary'    => true,
             'meta_json'     => array_filter([
-                'waba_id'         => $data['waba_id'],
-                'phone_number_id' => $data['phone_number_id'],
+                'waba_id'         => $wabaId,
+                'phone_number_id' => $pnid,
                 'business_id'     => $data['business_id'] ?? null,
                 'catalog_id'      => $catalogId,
                 'coexistence'     => $coexistence ?: null, // badge + skip-register marker
@@ -184,8 +250,8 @@ class WaConnectWabaController extends Controller
         ]);
         $config->setCreds([
             'access_token'         => $accessToken,
-            'phone_number_id'      => $data['phone_number_id'],
-            'waba_id'              => $data['waba_id'],
+            'phone_number_id'      => $pnid,
+            'waba_id'              => $wabaId,
             'business_id'          => $data['business_id'] ?? null,
             'register_pin'         => $pin,
             'catalog_id'           => $catalogId,

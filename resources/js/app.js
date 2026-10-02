@@ -172,6 +172,7 @@ const PAGE_INITIALIZERS = {
     'admin-settings-hubspot':     () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
     'admin-settings-salesforce':  () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
     'admin-settings-social-login': () => import('./charts/admin-settings-hubspot.js').then((m) => m.default()),
+    'admin-settings-features':     () => import('./charts/admin-settings-features.js').then((m) => m.default()),
     'admin-languages-index':      () => import('./charts/packages-index.js').then((m) => m.default()),
     'admin-payment-gateways-index': () => import('./charts/admin-payment-gateways-index.js').then((m) => m.default()),
     'admin-support-index':         () => import('./charts/admin-support-index.js').then((m) => m.default()),
@@ -183,11 +184,13 @@ const PAGE_INITIALIZERS = {
     'user-facebook-posts': () => import('./charts/user-facebook-posts.js').then((m) => m.default()),
     'user-facebook-posts-grid': () => import('./charts/user-facebook-posts.js').then((m) => m.default()),
     'user-facebook-insights': () => import('./charts/user-facebook-insights.js').then((m) => m.default()),
+    'user-lead-ads': () => import('./charts/user-lead-ads.js').then((m) => m.default()),
     'user-tiktok-create': () => import('./charts/user-tiktok-create.js').then((m) => m.default()),
     'user-telegram-broadcasts': () => import('./charts/user-telegram-broadcasts.js').then((m) => m.default()),
     'user-telegram-broadcasts-create': () => import('./charts/user-telegram-broadcasts.js').then((m) => m.default()),
     'user-facebook-broadcasts': () => import('./charts/user-facebook-broadcasts.js').then((m) => m.default()),
     'user-social-posts': () => import('./charts/user-social-posts.js').then((m) => m.default()),
+    'user-sdr-index': () => import('./charts/user-sdr-index.js').then((m) => m.default()),
     'user-social-calendar': () => import('./charts/user-social-calendar.js').then((m) => m.default()),
     'user-telegram-index': () => import('./charts/user-telegram-index.js').then((m) => m.default()),
     'user-booking-type-wizard': () => import('./charts/user-booking-type-wizard.js').then((m) => m.default()),
@@ -235,6 +238,7 @@ const PAGE_INITIALIZERS = {
     'user-connect-index': () => import('./charts/user-connect-index.js').then((m) => m.default()),
     'user-connect-wa-store': () => import('./charts/user-connect-wa-store.js').then((m) => m.default()),
     'user-developers-index': () => import('./charts/user-developers-index.js').then((m) => m.default()),
+    'user-n8n-index': () => import('./charts/user-n8n.js').then((m) => m.default()),
     'user-store-index': () => import('./charts/user-store-index.js').then((m) => m.default()),
     'user-store-products-create': () => import('./charts/user-store-products-create.js').then((m) => m.default()),
     'user-store-products-edit': () => import('./charts/user-store-products-edit.js').then((m) => m.default()),
@@ -251,6 +255,7 @@ const PAGE_INITIALIZERS = {
     'user-flows-index':   () => import('./charts/user-flows-index.js').then((m) => m.default()),
     'user-flows-analytics': () => import('./charts/user-flows-analytics.js').then((m) => m.default()),
     'user-flows-builder': () => import('./charts/user-flows-builder.js').then((m) => m.default()),
+    'user-flows-analytics': () => import('./charts/user-flows-analytics.js').then((m) => m.default()),
     'user-ai-assistants-wizard': () => import('./charts/user-ai-assistants-wizard.js').then((m) => m.default()),
     'user-wa-forms-builder': () => import('./charts/user-wa-forms-builder.js').then((m) => m.default()),
     'user-wa-links-index':          () => import('./charts/user-wa-links-index.js').then((m) => m.default()),
@@ -265,14 +270,19 @@ const PAGE_INITIALIZERS = {
     'user-affiliate-history-index': () => import('./charts/user-affiliate-history-index.js').then((m) => m.default()),
     'user-message-history-index': () => import('./charts/user-message-history-index.js').then((m) => m.default()),
     'user-meta-ads-analytics': () => import('./charts/user-meta-ads-analytics.js').then((m) => m.default()),
+    'user-openai-ads-analytics': () => import('./charts/user-openai-ads-analytics.js').then((m) => m.default()),
+    'user-openai-ads-create': () => import('./charts/user-openai-ads-create.js').then((m) => m.default()),
     'user-more-index': () => import('./charts/user-more-index.js').then((m) => m.default()),
     'user-notifications-index': () => import('./charts/user-notifications-index.js').then((m) => m.default()),
     'user-scheduled-index': () => import('./charts/user-scheduled-index.js').then((m) => m.default()),
+    // Drip campaigns — only the builder needs JS; the index is plain Blade.
+    'user-drip-campaigns-edit': () => import('./charts/user-drip-campaigns-edit.js').then((m) => m.default()),
     'user-scheduled-create': () => import('./charts/user-scheduled-create.js').then((m) => m.default()),
     'user-scheduled-detail': () => import('./charts/user-scheduled-detail.js').then((m) => m.default()),
     'user-settings-index': () => import('./charts/user-settings-index.js').then((m) => m.default()),
     'user-shopify-dashboard': () => import('./charts/user-shopify-dashboard.js').then((m) => m.default()),
     'user-support-index': () => import('./charts/user-support-index.js').then((m) => m.default()),
+    'admin-support-bot-index': () => import('./charts/admin-support-bot.js').then((m) => m.default()),
     'user-team-inbox-index':   () => import('./charts/user-team-inbox-index.js').then((m) => m.default()),
     'user-team-inbox-members': () => import('./charts/user-team-inbox-members.js').then((m) => m.default()),
     'user-team-chat':          () => import('./charts/user-team-chat.js').then((m) => m.default()),
@@ -858,6 +868,116 @@ function initInstagramConnect() {
     });
 }
 
+// ===== Add Email account (via linked MailTrixy) =====
+// The /devices "Email" card opens #email-connect-modal. Opening it fetches
+// /devices/email/available (mailboxes connected on the linked mail install
+// that this workspace hasn't linked yet); each row's Link button POSTs
+// /devices/email/link to create the mirror row. Linked rows (refresh/unlink)
+// are server-rendered inside the modal. No-op on pages without the modal.
+function initEmailConnect() {
+    const modal = document.getElementById('email-connect-modal');
+    if (!modal) return;
+
+    const base = (document.querySelector('meta[name=app-base]')?.content || '').replace(/\/$/, '');
+    const csrf = () => document.querySelector('meta[name=csrf-token]')?.content || '';
+    const listEl = modal.querySelector('[data-email-available]');
+    const emptyEl = modal.querySelector('[data-email-empty]');
+    const loadingEl = modal.querySelector('[data-email-loading]');
+    // The blade renders the translated default; the fetch may overwrite it with
+    // a server-provided reason, so keep the original to restore on re-open.
+    const emptyDefault = emptyEl ? emptyEl.textContent : '';
+
+    function openModal() {
+        // Close the channel chooser if it's open underneath.
+        const chooser = document.getElementById('add-device-chooser');
+        if (chooser) { chooser.classList.add('hidden'); chooser.classList.remove('flex'); }
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        loadAvailable();
+    }
+    function closeModal() {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+
+    async function loadAvailable() {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        loadingEl?.classList.remove('hidden');
+        emptyEl?.classList.add('hidden');
+        try {
+            const res = await fetch(base + '/devices/email/available', {
+                headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store',
+            });
+            const data = await res.json().catch(() => ({}));
+            const rows = Array.isArray(data.accounts) ? data.accounts : [];
+            loadingEl?.classList.add('hidden');
+            if (!rows.length) {
+                if (emptyEl) { emptyEl.textContent = data.error || emptyDefault; emptyEl.classList.remove('hidden'); }
+                return;
+            }
+            rows.forEach((a) => listEl.appendChild(renderRow(a)));
+        } catch (e) {
+            loadingEl?.classList.add('hidden');
+            if (emptyEl) { emptyEl.textContent = 'Could not load email accounts.'; emptyEl.classList.remove('hidden'); }
+        }
+    }
+
+    function renderRow(a) {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-paper-200 bg-paper-0';
+        const av = document.createElement('span');
+        av.className = 'w-9 h-9 rounded-lg bg-paper-100 grid place-items-center shrink-0 text-ink-600';
+        av.innerHTML = '<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="m3 7 9 6 9-6"/></svg>';
+        const meta = document.createElement('div');
+        meta.className = 'min-w-0 flex-1';
+        meta.innerHTML = '<div class="text-[12.5px] font-semibold text-ink-900 truncate"></div>'
+            + '<div class="text-[11px] font-mono text-ink-500 truncate"></div>';
+        meta.children[0].textContent = a.name || a.email || '';
+        meta.children[1].textContent = a.email || '';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'px-3 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[11.5px] font-semibold hover:bg-wa-teal shrink-0';
+        btn.textContent = 'Link';
+        btn.addEventListener('click', () => link(a, btn));
+        row.appendChild(av); row.appendChild(meta); row.appendChild(btn);
+        return row;
+    }
+
+    async function link(a, btn) {
+        btn.disabled = true;
+        try {
+            const res = await fetch(base + '/devices/email/link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf(), Accept: 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    account_id: a.id,
+                    mtx_workspace_id: a.mtx_workspace_id,
+                    email: a.email,
+                    name: a.name,
+                    provider: a.provider,
+                }),
+            });
+            if (res.ok) {
+                window.WaToaster?.success?.('Email account linked.');
+                setTimeout(() => location.reload(), 600);
+            } else {
+                const data = await res.json().catch(() => ({}));
+                btn.disabled = false;
+                window.WaToaster?.error?.(data?.error || 'Could not link that account.');
+            }
+        } catch (e) { btn.disabled = false; window.WaToaster?.error?.('Could not link that account.'); }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('[data-email-connect]')) { e.preventDefault(); openModal(); return; }
+        if (e.target.closest('[data-email-modal-close]')) { e.preventDefault(); closeModal(); }
+    });
+    // Click the dimmed backdrop (but not the panel) to close.
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+}
+
 // ── Instagram embedded signup (ManyChat-style) ──────────────────────────
 // Facebook-Login-for-Business JS SDK popup with the business-asset picker
 // (business portfolio + Instagram account). Config comes from #ig-fb-embed,
@@ -931,17 +1051,64 @@ function initIgEmbeddedSignup() {
     });
 }
 
+// Global admin row "…" (kebab) action menus. Per-page chart chunks
+// (workspaces-index.js, packages-index.js, …) wire these directly and call
+// stopPropagation(), so this DELEGATED fallback is skipped when they run — but it
+// keeps the menus working on ANY page (e.g. announcements) or when a per-page
+// chunk fails to load (stale build), with the same overflow-escaping fixed panel.
+function initRowMenus() {
+    if (document.__rowMenusWired) return;
+    document.__rowMenusWired = true;
+    const place = (btn, panel) => {
+        const r = btn.getBoundingClientRect();
+        const w = panel.offsetWidth || 210;
+        let left = Math.round(r.right - w);
+        if (left < 8) left = 8;
+        let top = Math.round(r.bottom + 4);
+        const h = panel.offsetHeight || 0;
+        if (top + h > window.innerHeight - 8 && r.top - h - 4 > 8) top = Math.round(r.top - h - 4);
+        panel.style.position = 'fixed';
+        panel.style.top = top + 'px';
+        panel.style.left = left + 'px';
+        panel.style.right = 'auto';
+        panel.style.zIndex = '9999';
+    };
+    const closeAll = () => {
+        document.querySelectorAll('[data-row-menu-panel]').forEach((p) => {
+            p.classList.add('hidden');
+            p.style.position = p.style.top = p.style.left = p.style.right = p.style.zIndex = '';
+        });
+    };
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-row-menu-toggle]');
+        if (btn) {
+            const panel = btn.closest('[data-row-menu]')?.querySelector('[data-row-menu-panel]');
+            if (!panel) return;
+            const willOpen = panel.classList.contains('hidden');
+            closeAll();
+            if (willOpen) { panel.classList.remove('hidden'); place(btn, panel); }
+            return;
+        }
+        if (!e.target.closest('[data-row-menu-panel]')) closeAll();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+    window.addEventListener('scroll', closeAll, true);
+    window.addEventListener('resize', closeAll);
+}
+
 function boot() {
     if (document.body.hasAttribute('data-admin')) {
         initAdminSidebar();
     }
 
+    initRowMenus();
     wireConfirmForms();
     initListGridToggles();
     initQuickAccessDrawer();
     initQuickAccessModal();
     initConnectDevice();
     initInstagramConnect();
+    initEmailConnect();
     initIgEmbeddedSignup();
     initIgThemeToggle();
 
@@ -951,6 +1118,13 @@ function boot() {
     // instead of four that could drift.
     if (document.querySelector('[data-tlm-root]')) {
         import('./charts/template-live-mapping.js').then((m) => m.default());
+    }
+
+    // Client Support Bot — floating help widget. Mounted by presence (it can
+    // appear on every authenticated page), not by a page name. The blade only
+    // renders its root when the admin has the bot enabled.
+    if (document.getElementById('support-bot-widget')) {
+        import('./support-bot-widget.js').then((m) => m.default());
     }
 
     const page = document.body.dataset.page;

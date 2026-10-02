@@ -66,7 +66,7 @@
 @if (!empty($rest))
     {{-- Hidden checkbox is the peer; the rest-list + both labels are its siblings. --}}
     <input type="checkbox" id="feat-more-{{ $p->id }}" class="peer sr-only" aria-hidden="true">
-    <ul class="space-y-2 text-[12px] {{ $textCls }} mt-2 hidden peer-checked:block">
+    <ul class="space-y-2 text-[12px] {{ $textCls }} mt-2 hidden peer-checked:block" style="max-height:340px;overflow-y:auto">
         @foreach ($rest as $li)
             {!! $li !!}
         @endforeach

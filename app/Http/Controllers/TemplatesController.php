@@ -118,10 +118,51 @@ class TemplatesController extends Controller
             $all = $all->filter(fn ($t) => $t->engineKey() !== 'telegram')->values();
         }
 
+        // LINE templates follow the Telegram rule: a LOCAL reusable OA message,
+        // available only while the channel is on AND a LINE channel is connected.
+        $lineTplAvailable = (bool) SystemSetting::get('line_enabled', false)
+            && class_exists(\App\Models\LineChannel::class)
+            && \App\Models\LineChannel::hasConnected($wsId);
+        if (!$lineTplAvailable) {
+            $all = $all->filter(fn ($t) => $t->engineKey() !== 'line')->values();
+        }
+
+        // WeChat templates follow the same rule: a LOCAL reusable OA message,
+        // available only while the channel is on AND a WeChat channel is connected.
+        $wechatTplAvailable = (bool) SystemSetting::get('wechat_enabled', false)
+            && class_exists(\App\Models\WeChatChannel::class)
+            && \App\Models\WeChatChannel::hasConnected($wsId);
+        if (!$wechatTplAvailable) {
+            $all = $all->filter(fn ($t) => $t->engineKey() !== 'wechat')->values();
+        }
+
+        // Viber templates follow the same rule: a LOCAL reusable message, available
+        // only while the channel is on AND a Viber channel is connected.
+        $viberTplAvailable = (bool) SystemSetting::get('viber_enabled', false)
+            && class_exists(\App\Models\ViberChannel::class)
+            && \App\Models\ViberChannel::hasConnected($wsId);
+        if (!$viberTplAvailable) {
+            $all = $all->filter(fn ($t) => $t->engineKey() !== 'viber')->values();
+        }
+
         // Status tabs in the sidebar use generic names (approved /
         // pending / rejected). On WABA those map to Meta's enum; on
         // Baileys/Twilio they map to the local synthetic state.
+        // #52 — filter the library by the WABA number a template lives on
+        // (templates carry provider_config_id). Picker options are the
+        // workspace's connected WABA numbers.
+        $providerConfigId = (int) $request->input('provider_config_id', 0);
+        $wabaNumbers = WaProviderConfig::query()
+            ->where('workspace_id', $wsId)->where('provider', 'waba')
+            ->orderByDesc('is_primary')->orderByDesc('id')->get()
+            ->map(function ($c) {
+                $meta = (array) ($c->meta_json ?? []);
+                $num  = (string) ($c->phone_number ?: ($meta['display_phone_number'] ?? '') ?: $c->display_label ?: ('WABA #' . $c->id));
+                return ['id' => (int) $c->id, 'label' => $num];
+            })->values()->all();
+
         $templates = $all
+            ->when($providerConfigId > 0, fn ($c) => $c->filter(fn ($t) => (int) ($t->provider_config_id ?? 0) === $providerConfigId)->values())
             ->when($category !== 'all', fn ($c) => $c->where('meta_category', $category))
             ->when($status !== 'all', function ($c) use ($status, $isWaba) {
                 if ($isWaba) {
@@ -137,7 +178,10 @@ class TemplatesController extends Controller
             ->when($channel === 'instagram', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'instagram')->values())
             ->when($channel === 'facebook', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'facebook')->values())
             ->when($channel === 'telegram', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'telegram')->values())
-            ->when($channel === 'whatsapp', fn ($c) => $c->filter(fn ($t) => !in_array($t->engineKey(), ['instagram', 'facebook', 'telegram'], true))->values());
+            ->when($channel === 'line', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'line')->values())
+            ->when($channel === 'wechat', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'wechat')->values())
+            ->when($channel === 'viber', fn ($c) => $c->filter(fn ($t) => $t->engineKey() === 'viber')->values())
+            ->when($channel === 'whatsapp', fn ($c) => $c->filter(fn ($t) => !in_array($t->engineKey(), ['instagram', 'facebook', 'telegram', 'line', 'wechat', 'viber'], true))->values());
         $templates = WaTemplate::filterByName($templates, $search);
         $templates = $this->applySort($templates, $sort);
         $templates = $this->paginateCollection($templates, $request, 8);
@@ -146,10 +190,13 @@ class TemplatesController extends Controller
         // whose engineKey() resolves to 'instagram' (synced from Instaflow).
         $channelCounts = [
             'all'       => $all->count(),
-            'whatsapp'  => $all->filter(fn ($t) => !in_array($t->engineKey(), ['instagram', 'facebook', 'telegram'], true))->count(),
+            'whatsapp'  => $all->filter(fn ($t) => !in_array($t->engineKey(), ['instagram', 'facebook', 'telegram', 'line', 'wechat', 'viber'], true))->count(),
             'instagram' => $all->filter(fn ($t) => $t->engineKey() === 'instagram')->count(),
             'facebook'  => $all->filter(fn ($t) => $t->engineKey() === 'facebook')->count(),
             'telegram'  => $all->filter(fn ($t) => $t->engineKey() === 'telegram')->count(),
+            'line'      => $all->filter(fn ($t) => $t->engineKey() === 'line')->count(),
+            'wechat'    => $all->filter(fn ($t) => $t->engineKey() === 'wechat')->count(),
+            'viber'     => $all->filter(fn ($t) => $t->engineKey() === 'viber')->count(),
         ];
 
         $payload = [
@@ -163,6 +210,8 @@ class TemplatesController extends Controller
             'currentChannel'   => $channel,
             'currentSearch'    => $search,
             'currentSort'      => $sort,
+            'wabaNumbers'          => $wabaNumbers,
+            'currentProviderConfig'=> $providerConfigId,
             // Show the "Sync from Meta" button whenever this workspace has a
             // Meta Cloud-API (WABA) account connected to pull from. (Not gated
             // on $isWaba — a multi-engine workspace whose default engine isn't
@@ -224,6 +273,26 @@ class TemplatesController extends Controller
             && class_exists(\App\Models\TelegramBot::class)
             && \App\Models\TelegramBot::hasConnected($wsId)) {
             $channels[] = 'telegram';
+        }
+        // LINE templates are LOCAL reusable OA messages (no Meta approval, like
+        // Telegram) — offer the channel when LINE is on and a channel is connected.
+        if ($wsId && !in_array('line', $channels, true)
+            && (bool) SystemSetting::get('line_enabled', false)
+            && class_exists(\App\Models\LineChannel::class)
+            && \App\Models\LineChannel::hasConnected($wsId)) {
+            $channels[] = 'line';
+        }
+        if ($wsId && !in_array('wechat', $channels, true)
+            && (bool) SystemSetting::get('wechat_enabled', false)
+            && class_exists(\App\Models\WeChatChannel::class)
+            && \App\Models\WeChatChannel::hasConnected($wsId)) {
+            $channels[] = 'wechat';
+        }
+        if ($wsId && !in_array('viber', $channels, true)
+            && (bool) SystemSetting::get('viber_enabled', false)
+            && class_exists(\App\Models\ViberChannel::class)
+            && \App\Models\ViberChannel::hasConnected($wsId)) {
+            $channels[] = 'viber';
         }
         // SMS templates are LOCAL reusable plain-text messages (no Meta approval,
         // like Telegram) — offer the channel when SMS is on and a number is connected.
@@ -415,6 +484,26 @@ class TemplatesController extends Controller
             && \App\Models\TelegramBot::hasConnected($wsId)) {
             $available[] = 'telegram';
         }
+        // LINE is a valid LOCAL-template channel when the channel is on and an OA
+        // is connected (never submitted to Meta — a saved reusable OA message).
+        if (!in_array('line', $available, true)
+            && (bool) SystemSetting::get('line_enabled', false)
+            && class_exists(\App\Models\LineChannel::class)
+            && \App\Models\LineChannel::hasConnected($wsId)) {
+            $available[] = 'line';
+        }
+        if (!in_array('wechat', $available, true)
+            && (bool) SystemSetting::get('wechat_enabled', false)
+            && class_exists(\App\Models\WeChatChannel::class)
+            && \App\Models\WeChatChannel::hasConnected($wsId)) {
+            $available[] = 'wechat';
+        }
+        if (!in_array('viber', $available, true)
+            && (bool) SystemSetting::get('viber_enabled', false)
+            && class_exists(\App\Models\ViberChannel::class)
+            && \App\Models\ViberChannel::hasConnected($wsId)) {
+            $available[] = 'viber';
+        }
         // SMS is a valid LOCAL-template channel when the channel is on and a
         // number is connected (never submitted to Meta — a saved plain-text message).
         if (!in_array('sms', $available, true)
@@ -422,10 +511,10 @@ class TemplatesController extends Controller
             && WaProviderConfig::query()->forWorkspace($wsId)->connected()->where('provider', 'sms')->exists()) {
             $available[] = 'sms';
         }
-        if (!in_array($channel, ['baileys', 'waba', 'twilio', 'instagram', 'facebook', 'telegram', 'sms'], true) || !in_array($channel, $available, true)) {
+        if (!in_array($channel, ['baileys', 'waba', 'twilio', 'instagram', 'facebook', 'telegram', 'line', 'wechat', 'viber', 'sms'], true) || !in_array($channel, $available, true)) {
             $channel = $this->wabaSubmitEnabled() ? 'waba' : 'baileys';
         }
-        $submitWaba = ($channel === 'waba'); // Instagram + Facebook + Telegram never submit to Meta
+        $submitWaba = ($channel === 'waba'); // Instagram + Facebook + Telegram + LINE never submit to Meta
 
         // Catalog template = WhatsApp Cloud API (Meta official) ONLY. The CATALOG
         // button can only be created + approved on a WABA number, so force the
@@ -819,6 +908,12 @@ class TemplatesController extends Controller
             ? 'No templates found on this WhatsApp Business account yet.'
             : sprintf('Synced %d template(s) from Meta — %d new, %d updated.', $res['total'], $res['imported'], $res['updated']);
 
+        // Local templates Meta no longer has were reset to pending so they can be
+        // re-submitted — tell the operator that's an action they can now take.
+        if (($res['orphaned'] ?? 0) > 0) {
+            $msg .= sprintf(' %d template(s) are no longer on Meta — set back to Pending; open each and click "Submit to Meta" to recreate them.', $res['orphaned']);
+        }
+
         return redirect()->route('user.templates.index')->with('status', $msg);
     }
 
@@ -1045,6 +1140,18 @@ class TemplatesController extends Controller
         $t = WaTemplate::query()->forCurrentWorkspace()->findOrFail($id);
         $data = $this->validateTemplate($request, updating: true);
 
+        // Meta identifies a template by its NAME + LANGUAGE and does NOT allow
+        // changing either once the template exists — its edit endpoint only
+        // updates components/category. Letting the operator rename (or change
+        // the language of) a template already on Meta silently DIVERGED the
+        // local record from Meta: the send then goes out under the new local
+        // name Meta never had → 132001 "template name does not exist" (the
+        // reported flow failure). So lock both to their stored values for any
+        // template already pushed to Meta. To change them, create a new template.
+        if ($t->meta_template_id) {
+            unset($data['template_name'], $data['language']);
+        }
+
         // LOCATION header — tied to the Attachment dropdown. The edit form
         // always submits attachment_type, so honour it: Location → store the
         // pin (and clear any file); anything else → clear the pin.
@@ -1114,9 +1221,148 @@ class TemplatesController extends Controller
         );
         if ($variableMap) $data['variable_map'] = $variableMap;
 
-        $t->fill($data)->save();
-        return redirect()->route('user.templates.index')
-            ->with('status', 'Template "' . $t->template_name . '" updated.');
+        // Did anything Meta actually REVIEWS change? Meta only knows the
+        // template's content — body, header, footer, buttons, media, category,
+        // language. It does NOT know `variable_map` (which contact attribute
+        // fills each {{n}} slot) — that's a LOCAL send-time mapping. So a
+        // variable-map-only save (e.g. mapping {{1}} → Full name) must NOT push
+        // an edit to Meta, else an APPROVED template is needlessly sent back to
+        // PENDING re-review.
+        //
+        // We compare a signature of the DECRYPTED / DECODED content before vs
+        // after the fill — NOT wasChanged(): `header` and `template_name` are
+        // ENCRYPTED casts whose ciphertext changes on every save (fresh IV), so
+        // wasChanged() reports them dirty EVERY time and would re-submit a
+        // mapping-only save. Reading via the model accessors decrypts/decodes, so
+        // identical content produces an identical signature.
+        $contentSig = static function ($m): string {
+            return (string) json_encode([
+                'body'             => (string) ($m->template_body ?? ''),
+                'header'           => (string) ($m->header ?? ''),
+                'footer'           => (string) ($m->footer ?? ''),
+                'buttons'          => $m->buttons ?? null,
+                'attachment_type'  => (string) ($m->attachment_type ?? ''),
+                'attachment_file'  => (string) ($m->attachment_file ?? ''),
+                'category'         => (string) ($m->category ?? ''),
+                'language'         => (string) ($m->language ?? ''),
+                'carousel_data'    => $m->carousel_data ?? null,
+                'template_type'    => (string) ($m->template_type ?? ''),
+                'template_name'    => (string) ($m->template_name ?? ''),
+                'parameter_format' => (string) ($m->parameter_format ?? ''),
+            ]);
+        };
+        $sigBefore = $contentSig($t);          // original DB content
+        $t->fill($data);
+        $metaRelevantChanged = $contentSig($t) !== $sigBefore;
+        $t->save();
+
+        // Push the edit to Meta ONLY when reviewable content changed. Without
+        // this the local row updated but Meta never saw the change, so an
+        // APPROVED template kept sending its old content ("edit + save doesn't
+        // submit to Meta"). Only for templates already live on Meta
+        // (meta_template_id set) on a WABA channel with templates-v2 on. Meta
+        // rejects an edit while a template is IN REVIEW (PENDING) — skip those;
+        // the row is saved locally regardless. A successful edit sends the
+        // template back to PENDING for re-review.
+        $metaEdit = null;
+        if ($metaRelevantChanged
+            && $t->meta_template_id
+            && (string) $t->channel === 'waba'
+            && \App\Models\SystemSetting::get('waba_templates_v2_enabled', false)) {
+            if (strtoupper((string) $t->meta_status) === 'PENDING') {
+                $metaEdit = ['skipped', 'This template is still in review on Meta — edits can only be sent once it is approved or rejected. Your changes are saved here.'];
+            } else {
+                [$ok, $err] = $this->editOnMeta($t, $request);
+                $metaEdit = $ok ? ['ok', null] : ['error', $err];
+            }
+        }
+
+        $flash = 'Template "' . $t->template_name . '" updated.';
+        if ($metaEdit && $metaEdit[0] === 'ok') {
+            return redirect()->route('user.templates.index')
+                ->with('status', $flash . ' Changes submitted to Meta for re-review.');
+        }
+        if ($metaEdit && $metaEdit[0] === 'error') {
+            return redirect()->route('user.templates.index')
+                ->with('status', $flash)
+                ->with('error', 'Saved locally, but Meta rejected the edit: ' . $metaEdit[1]);
+        }
+        if ($metaEdit && $metaEdit[0] === 'skipped') {
+            return redirect()->route('user.templates.index')
+                ->with('status', $flash)->with('warning', $metaEdit[1]);
+        }
+        return redirect()->route('user.templates.index')->with('status', $flash);
+    }
+
+    /**
+     * Push an EDIT of an already-on-Meta template to Meta's edit endpoint
+     * (POST /{meta_template_id}). Mirrors submitToMeta()'s WABA resolution +
+     * media upload + payload build, but calls edit() instead of submit(), and
+     * flips the row back to PENDING on success (Meta re-reviews every edit).
+     * Returns [bool $ok, ?string $error].
+     */
+    private function editOnMeta(WaTemplate $t, Request $request): array
+    {
+        $cfg = $this->resolveTemplateConfig($t, $request);
+        if (!$cfg || $cfg->provider !== 'waba') {
+            return [false, 'No WABA connected for this workspace.'];
+        }
+
+        $lint = (new TemplateLinter())->check($t);
+        if (!empty($lint['errors'])) {
+            return [false, "Meta would reject the edit:\n• " . implode("\n• ", $lint['errors'])];
+        }
+        if (!empty($lint['warnings'])) {
+            session()->flash('lint_warnings', $lint['warnings']);
+        }
+
+        $mediaHandles = [];
+        $tmpMedia     = [];
+        try {
+            $client  = new TemplateClient($cfg);
+            $builder = new TemplatePayloadBuilder();
+
+            if ($t->attachment_type && $t->attachment_type !== 'none' && $t->attachment_file) {
+                [$localPath, $isTmp] = $this->materializeTemplateMedia($t->attachment_file);
+                if ($localPath === null) {
+                    return [false, 'Header media file is missing from storage. Re-upload it, then save again.'];
+                }
+                if ($isTmp) $tmpMedia[] = $localPath;
+                $mime = $this->guessMime($t->attachment_type, $t->attachment_file);
+                $mediaHandles['header'] = $client->uploadHeaderMedia($localPath, $mime);
+            }
+
+            if ($t->template_type === 'carousel' && is_array($t->carousel_data)) {
+                foreach ($t->carousel_data as $idx => $card) {
+                    if (empty($card['image'])) continue;
+                    [$localPath, $isTmp] = $this->materializeTemplateMedia($card['image']);
+                    if ($localPath === null) continue;
+                    if ($isTmp) $tmpMedia[] = $localPath;
+                    $mime = $this->guessMime('image', $card['image']);
+                    $mediaHandles['card_' . $idx] = $client->uploadHeaderMedia($localPath, $mime);
+                }
+            }
+
+            $payload = $builder->build($t, $mediaHandles);
+            $client->edit((string) $t->meta_template_id, $payload);
+        } catch (\Throwable $e) {
+            return [false, $e->getMessage()];
+        } finally {
+            foreach ($tmpMedia as $f) { if (is_file($f)) @unlink($f); }
+        }
+
+        // A Meta edit re-enters review — reflect that so the UI + send gate
+        // (which only fast-paths APPROVED templates) don't ship the edit as if
+        // Meta had already approved it.
+        $t->update([
+            'provider_config_id' => $cfg->id,
+            'meta_status'        => 'PENDING',
+            'status'             => 'pending',
+            'submitted_at'       => now(),
+            'last_synced_at'     => now(),
+        ]);
+
+        return [true, null];
     }
 
     public function destroy(int $id): JsonResponse
@@ -1852,6 +2098,10 @@ class TemplatesController extends Controller
         foreach ($rows as $r) {
             $label = $providerLabel[$r->provider] ?? ucfirst($r->provider);
             $default = (string) ($r->default_model ?? '');
+            // An active key with a blank default_model used to be dropped
+            // silently, so the provider disappeared from the picker with no
+            // hint why. Fall back to a current model id for that brand.
+            if ($default === '') $default = \App\Services\AiAgentService::fallbackModel($r->provider);
             if ($default === '') continue;
             $extra = json_decode((string) ($r->extra_config ?? '[]'), true) ?: [];
             $extraModels = is_array($extra['models'] ?? null) ? $extra['models'] : [];
@@ -1908,7 +2158,7 @@ class TemplatesController extends Controller
     {
         $data = $request->validate([
             'model'         => 'required|string|max:120',
-            'provider'      => 'required|string|in:openai,anthropic,gemini,mistral,muse',
+            'provider'      => ['required', 'string', \Illuminate\Validation\Rule::in(\App\Services\AiAgentService::supportedProviders())],
             'type'          => 'nullable|string|in:standard,carousel',
             'category'      => 'nullable|string|in:marketing,utility,authentication',
             'language'      => 'nullable|string|max:16',
@@ -1965,7 +2215,7 @@ class TemplatesController extends Controller
             return response()->json([
                 'ok'      => false,
                 'error'   => 'provider_failed',
-                'message' => 'AI provider returned no content — check API key + model id.',
+                'message' => $ai->lastProviderError() ?: 'AI provider returned no content — check API key + model id.',
             ], 502);
         }
 

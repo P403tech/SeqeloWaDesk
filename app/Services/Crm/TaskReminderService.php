@@ -43,6 +43,16 @@ class TaskReminderService
             } catch (\Throwable $e) {
                 Log::warning('[CRM] task reminder failed (task ' . $task->id . '): ' . $e->getMessage());
             }
+            // Follow-up date reached → fire the `task_due` flow trigger, so a
+            // due task can message the customer, not just ping the agent. This
+            // rides the sweep's EXISTING once-per-task guarantee: `reminded_at`
+            // is stamped just below, so the next sweep can never re-select this
+            // row and re-enrol the contact.
+            try {
+                app(\App\Services\Flow\FlowEnrollmentService::class)->onTaskDue($task);
+            } catch (\Throwable $e) {
+                Log::warning('[CRM] task_due flow-trigger failed (task ' . $task->id . '): ' . $e->getMessage());
+            }
             // Stamp regardless so a notify glitch never re-fires the same task.
             $task->forceFill(['reminded_at' => now()])->save();
             $count++;

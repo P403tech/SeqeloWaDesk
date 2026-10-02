@@ -1,4 +1,4 @@
-<x-layouts.user :title="__('Shopify')" nav-key="more" page="user-shopify-dashboard">
+<x-layouts.user :title="__('Shopify')" nav-key="shopify" page="user-shopify-dashboard">
 
     @php
         $isConnected = $integration && $integration->isConnected();
@@ -16,6 +16,43 @@
         ];
         $activeTab = array_key_exists($activeTab ?? 'overview', $tabs) ? $activeTab : 'overview';
         $currency = $currency ?? ($integration?->shop_currency ?? 'USD');
+        // Only dashboardData() supplies $eventsByType, and the controller merges
+        // that in ONLY when the store is connected. This @php block runs on EVERY
+        // render, including the not-connected screen, so the $testable filter
+        // below blew up with "Undefined variable $eventsByType" and 500'd the
+        // whole page. The `?? []` inside that closure could never save it: a
+        // `use (...)` clause is bound when the closure is CREATED, so the
+        // undefined read happens first. Default it here instead.
+        $eventsByType = $eventsByType ?? collect();
+
+        // Automation labels + the list the merchant can test right now (active +
+        // a template chosen). Computed here — not inside the Automations tab —
+        // because the Send-test-order modal renders outside that tab and must
+        // work on every tab.
+        $autoNames = [
+            'orders/create' => 'Order confirmation',
+            'orders/paid' => 'Payment received',
+            'orders/fulfilled' => 'Shipped / Out for delivery',
+            'order/delivered' => 'Delivered',
+            'orders/cancelled' => 'Order cancelled',
+            'refunds/create' => 'Refund issued',
+            'orders/updated' => 'Order updated',
+            'checkouts/create' => 'Abandoned cart · step 1',
+            'cart/step2' => 'Abandoned cart · step 2',
+            'cart/step3' => 'Abandoned cart · step 3',
+            'cod/confirm' => 'COD order confirmation',
+            'cod/prepaid' => 'COD → Prepaid offer',
+            'stock/back' => 'Back-in-stock alert',
+            'customers/create' => 'Welcome new customer',
+            'customers/update' => 'Customer updated',
+            'products/update' => 'Product updated',
+        ];
+        $testable = collect(array_keys($autoNames))
+            ->filter(function ($t) use ($eventsByType) {
+                $e = ($eventsByType ?? [])[$t] ?? null;
+                return $e && $e->is_active && $e->template_id;
+            })
+            ->values();
     @endphp
 
     @if (!$isConnected)
@@ -28,7 +65,7 @@
             <div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
 
                 <!-- ===== LEFT RAIL ===== -->
-                <aside class="space-y-3">
+                <aside data-keep-rail class="space-y-3">
                     <!-- Platform info card -->
                     <div class="border border-paper-200 rounded-2xl bg-paper-0 p-4 shadow-card">
                         <div class="w-12 h-12 rounded-xl mb-3 grid place-items-center" style="background:#F1F9EC">
@@ -146,8 +183,78 @@
                         </div>
                     @endif
 
+                    {{-- ── Use your own Shopify app (self-serve BYO — owner only) ──
+                         The workspace owner pastes their OWN Shopify app's API key +
+                         secret and connects through their own app: no admin config or
+                         approval. Members don't see the keys. --}}
+                    @if (!empty($shopifyIsOwner) && !empty($shopifyManualAllowed))
+                        <div class="bg-paper-0 border {{ $appEnabled ? 'border-paper-200' : 'border-wa-deep/40' }} rounded-2xl shadow-card overflow-hidden mb-5">
+                            <div class="px-5 py-3.5 border-b border-paper-200 flex items-center justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Your Shopify app') }}</div>
+                                    <div class="text-[13px] text-ink-900 mt-0.5">{{ !empty($shopifyOwnApp) ? __('Connecting through your own Shopify app') : __('Connect with your own Shopify app') }}</div>
+                                </div>
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono shrink-0 {{ !empty($shopifyOwnApp) ? 'bg-wa-mint text-wa-deep border border-wa-green/40' : 'bg-paper-100 text-ink-500 border border-paper-200' }}">
+                                    <span class="w-1.5 h-1.5 rounded-full {{ !empty($shopifyOwnApp) ? 'bg-wa-green' : 'bg-paper-200' }}"></span>{{ !empty($shopifyOwnApp) ? __('keys saved') : __('not set') }}
+                                </span>
+                            </div>
+                            <div class="p-5 space-y-3.5">
+                                @if (!$appEnabled)
+                                    <p class="text-[12.5px] text-ink-600 leading-relaxed">
+                                        {{ __('Create a Shopify app in your Partner dashboard and paste its API key + secret here, then enter your store domain below. No approval needed — you use your own app.') }}
+                                    </p>
+                                @endif
+                                <form method="POST" action="{{ route('user.shopify.own-app') }}" class="space-y-3" autocomplete="off">
+                                    @csrf
+                                    <label class="block">
+                                        <span class="text-[11.5px] text-ink-700">{{ __('API key (Client ID)') }}</span>
+                                        <input type="text" name="shopify_client_id" value="{{ old('shopify_client_id', $shopifyOwnApp['id'] ?? '') }}"
+                                            placeholder="a1b2c3…"
+                                            class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-[11.5px] text-ink-700">{{ __('API secret key (Client secret)') }}</span>
+                                        <input type="password" name="shopify_client_secret" value="" autocomplete="new-password"
+                                            placeholder="{{ ($shopifyOwnApp['secret'] ?? '') !== '' ? __('saved — leave blank to keep') : 'shpss_…' }}"
+                                            class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[12px] font-mono focus:outline-none focus:border-wa-deep">
+                                        <span class="block mt-1 text-[11px] text-ink-500">{{ __('Stored encrypted. Leave blank to keep the saved secret.') }}</span>
+                                    </label>
+                                    <div class="rounded-xl border border-paper-200 bg-paper-50/60 px-3 py-2.5">
+                                        <div class="text-[11px] text-ink-600">{{ __('In your Shopify app, add this exact Allowed redirection URL:') }}</div>
+                                        <code class="block mt-1 text-[11px] font-mono text-wa-deep break-all">{{ $shopifyRedirectUri }}</code>
+                                    </div>
+
+                                    {{-- In-app step-by-step: where to get the keys. --}}
+                                    <details class="rounded-xl border border-paper-200 bg-paper-50/60 px-4 py-3">
+                                        <summary class="cursor-pointer text-[12px] font-semibold text-wa-deep list-none flex items-center justify-between">
+                                            {{ __('Where do I get these keys?') }}
+                                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5 text-ink-500" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4" /></svg>
+                                        </summary>
+                                        <ol class="mt-3 space-y-1.5 text-[11.5px] text-ink-600 list-decimal pl-4 leading-relaxed">
+                                            <li>{{ __('Open') }} <span class="font-mono">partners.shopify.com</span> → {{ __('Apps → Create app → Create app manually.') }}</li>
+                                            <li>{{ __('In the app: Configuration → set the Allowed redirection URL to the URI shown above.') }}</li>
+                                            <li>{{ __('Open API access / Overview → copy the Client ID (API key) and Client secret (API secret key).') }}</li>
+                                            <li>{{ __('Paste them here and Save. To connect your own store, install the app on it once from the Partner dashboard (Test your app → select store).') }}</li>
+                                        </ol>
+                                    </details>
+
+                                    <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12.5px] font-semibold hover:bg-wa-teal">{{ __('Save Shopify app') }}</button>
+                                </form>
+                                @if (!empty($shopifyOwnApp))
+                                    <form method="POST" action="{{ route('user.shopify.own-app') }}"
+                                        onsubmit="return confirm('{{ __('Clear your Shopify app keys? Shopify will use the platform app instead, if one is configured.') }}');">
+                                        @csrf
+                                        <input type="hidden" name="shopify_client_id" value="">
+                                        <input type="hidden" name="shopify_client_secret" value="">
+                                        <button type="submit" class="text-[11.5px] text-accent-coral hover:underline">{{ __('Clear keys') }}</button>
+                                    </form>
+                                @endif
+                            </div>
+                        </div>
+                    @endif
+
                     @if (!$appEnabled)
-                        {{-- Admin hasn't configured Shopify yet --}}
+                        {{-- No Shopify app yet (neither this workspace's own nor a platform one). --}}
                         <div
                             class="bg-paper-0 border border-paper-200 rounded-2xl p-6 shadow-card flex items-start gap-5">
                             <div class="w-12 h-12 rounded-xl bg-accent-amber/20 grid place-items-center shrink-0">
@@ -158,11 +265,16 @@
                                 </svg>
                             </div>
                             <div class="flex-1 min-w-0">
-                                <div class="font-serif text-[22px] leading-tight">{{ __("Shopify isn't enabled yet") }}
+                                <div class="font-serif text-[22px] leading-tight">{{ __("Add your Shopify app to start") }}
                                 </div>
                                 <p class="text-[12.5px] text-ink-600 mt-1.5 max-w-2xl">
-                                    {{ __("An administrator needs to add the Shopify app credentials before any workspace can connect a store.
-                                     Once that's done, the form below will activate.") }}
+                                    @if (!empty($shopifyManualAllowed) && !empty($shopifyIsOwner))
+                                        {{ __("Enter your Shopify app's API key and secret in the panel above, then the store-connect form will activate.") }}
+                                    @elseif (!empty($shopifyManualAllowed))
+                                        {{ __('Ask the workspace owner to add the Shopify app keys on this page, then you can connect a store.') }}
+                                    @else
+                                        {{ __("Shopify isn't available for this workspace yet.") }}
+                                    @endif
                                 </p>
                             </div>
                         </div>
@@ -298,11 +410,54 @@
             </div>
         @endif
 
+        {{-- Live-connection failure. Everything on this page is read straight
+             from Shopify, so when Shopify refuses a call there are no numbers
+             to show — say exactly what Shopify returned and how to fix it,
+             rather than falling back to a stale snapshot that looks healthy. --}}
+        @if (!empty($shopifyError))
+            <div class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 pt-4">
+                <div class="bg-paper-0 border border-accent-coral/40 rounded-2xl shadow-card p-5 flex items-start gap-4">
+                    <span class="w-10 h-10 rounded-xl bg-accent-coral/15 grid place-items-center shrink-0">
+                        <svg viewBox="0 0 16 16" class="w-5 h-5 text-accent-coral" fill="none" stroke="currentColor"
+                            stroke-width="1.7">
+                            <path d="M8 5v3.5M8 11v.01" />
+                            <circle cx="8" cy="8" r="6" />
+                        </svg>
+                    </span>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-serif text-[19px] leading-tight">{{ $shopifyError['title'] }}</span>
+                            <span class="font-mono text-[10px] px-2 py-0.5 rounded-full bg-accent-coral/15 text-accent-coral">
+                                HTTP {{ $shopifyError['status'] }} · {{ $shopifyError['resource'] }}</span>
+                        </div>
+                        <p class="text-[12.5px] text-ink-600 mt-1.5 max-w-3xl leading-relaxed">
+                            {{ $shopifyError['cause'] }}</p>
+
+                        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mt-3 mb-1.5">
+                            {{ __('How to fix it') }}</div>
+                        <ol class="space-y-1.5 text-[12.5px] text-ink-700 max-w-3xl">
+                            @foreach ($shopifyError['fix'] as $i => $step)
+                                <li class="flex items-start gap-2">
+                                    <span
+                                        class="w-5 h-5 rounded-full bg-paper-100 text-ink-700 grid place-items-center font-mono text-[10px] shrink-0 mt-0.5">{{ $i + 1 }}</span>
+                                    <span class="leading-relaxed">{{ $step }}</span>
+                                </li>
+                            @endforeach
+                        </ol>
+
+                        <p class="text-[11.5px] text-ink-500 mt-3">
+                            {{ __('Figures below read 0 because Shopify would not return them — this is not an empty store.') }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        @endif
+
         <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7">
             <div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
 
                 <!-- =============== SIDEBAR =============== -->
-                <aside class="space-y-3">
+                <aside data-keep-rail class="space-y-3">
 
                     <!-- Store info card -->
                     <div class="border border-paper-200 rounded-2xl bg-paper-0 p-4 shadow-card">
@@ -318,10 +473,11 @@
                                         d="M16.4 11.7l-.9 3.4s-1-.5-2.2-.4c-1.8.1-1.8 1.2-1.8 1.5.1 1.5 4.1 1.9 4.3 5.5.2 2.8-1.5 4.7-3.9 4.9-2.9.2-4.5-1.5-4.5-1.5l.6-2.6s1.6 1.2 2.9 1.1c.8-.1 1.1-.7 1.1-1.2-.1-2-3.4-1.9-3.6-5.1-.2-2.7 1.6-5.5 5.5-5.7 1.5-.1 2.5.2 2.5.2z" />
                                 </svg>
                             </span>
+                            @php $__ok = empty($shopifyError) && $integration->status === 'active'; @endphp
                             <span
-                                class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-wa-mint text-wa-deep border border-wa-green/40">
+                                class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono {{ $__ok ? 'bg-wa-mint text-wa-deep border border-wa-green/40' : 'bg-accent-coral/15 text-accent-coral border border-accent-coral/40' }}">
                                 <span
-                                    class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ ucfirst($integration->status) }}
+                                    class="w-1.5 h-1.5 rounded-full {{ $__ok ? 'bg-wa-green' : 'bg-accent-coral' }}"></span>{{ $__ok ? ucfirst($integration->status) : __('Error') }}
                             </span>
                         </div>
                         <div class="font-serif text-[18px] leading-tight mt-3">
@@ -602,6 +758,7 @@
                                         <tr>
                                             <th class="px-4 py-2.5">{{ __('Order') }}</th>
                                             <th class="px-4 py-2.5">{{ __('Customer') }}</th>
+                                            <th class="px-4 py-2.5">{{ __('Phone') }}</th>
                                             <th class="px-4 py-2.5">{{ __('Status') }}</th>
                                             <th class="px-4 py-2.5 text-right">{{ __('Total') }}</th>
                                             <th class="px-4 py-2.5 text-right">{{ __('Placed') }}</th>
@@ -616,11 +773,31 @@
                                                         ($cust['first_name'] ?? '') . ' ' . ($cust['last_name'] ?? ''),
                                                     ) ?:
                                                     $o['email'] ?? '—';
+                                                // Same source + normalization as ShopifyController::resolveRecipient
+                                                $rawPhone =
+                                                    $cust['phone'] ??
+                                                    ($o['phone'] ??
+                                                        ($o['shipping_address']['phone'] ??
+                                                            ($o['billing_address']['phone'] ?? null)));
+                                                $phoneIso =
+                                                    $o['shipping_address']['country_code'] ??
+                                                    ($o['billing_address']['country_code'] ??
+                                                        ($cust['default_address']['country_code'] ?? null));
+                                                $phoneE164 = $rawPhone
+                                                    ? \App\Support\Woo\WooPhone::e164($rawPhone, $phoneIso)
+                                                    : null;
                                             @endphp
                                             <tr class="hover:bg-paper-50">
                                                 <td class="px-4 py-2.5 font-mono text-ink-700">
                                                     {{ $o['name'] ?? '#' . ($o['order_number'] ?? '?') }}</td>
                                                 <td class="px-4 py-2.5">{{ $name }}</td>
+                                                <td class="px-4 py-2.5 font-mono text-[11px] text-ink-700">
+                                                    @if ($phoneE164)
+                                                        +{{ $phoneE164 }}
+                                                    @else
+                                                        <span class="text-ink-400">—</span>
+                                                    @endif
+                                                </td>
                                                 <td class="px-4 py-2.5">
                                                     <span
                                                         class="font-mono text-[10px] px-2 py-0.5 rounded-full bg-paper-100 text-ink-700">{{ ucfirst((string) ($o['financial_status'] ?? '—')) }}</span>
@@ -634,7 +811,7 @@
                                             </tr>
                                         @empty
                                             <tr>
-                                                <td colspan="5" class="px-4 py-8 text-center text-[12px] text-ink-500">
+                                                <td colspan="6" class="px-4 py-8 text-center text-[12px] text-ink-500">
                                                     {{ __('No orders found.') }}</td>
                                             </tr>
                                         @endforelse
@@ -1087,6 +1264,20 @@
                                 ];
                                 $shown = collect(array_keys($AUTO));
                             @endphp
+
+                            <div class="flex flex-wrap items-center justify-between gap-3 mb-1">
+                                <p class="text-[12px] text-ink-500 max-w-xl">
+                                    {{ __('Send yourself a dummy order to confirm a live automation actually reaches WhatsApp — it runs through the exact same path a real Shopify order does.') }}
+                                </p>
+                                <button type="button" id="shopify-test-open" data-id="{{ $integration->id }}"
+                                    class="shrink-0 px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-2">
+                                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
+                                        <path d="M3 8h8M8 4l4 4-4 4" />
+                                    </svg>
+                                    <span>{{ __('Send test order') }}</span>
+                                </button>
+                            </div>
+
                             <form id="shopify-events-form" data-id="{{ $integration->id }}" class="space-y-5">
                                 @csrf
                                 @foreach ($groups as $gKey => $g)
@@ -1435,6 +1626,57 @@
                                         subscription{{ $webhookCount === 1 ? '' : 's' }}</div>
                                 </div>
                             </div>
+
+                            {{-- Chat widget on the storefront — inject the WaDesk widget onto
+                                 the Shopify store so visitors chat (AI can reply) into the inbox,
+                                 toggled here. Uses a Shopify ScriptTag under the hood. --}}
+                            <div class="bg-paper-0 border {{ !empty($widgetEnabled) ? 'border-wa-green/40' : 'border-paper-200' }} rounded-2xl shadow-card p-5 space-y-4">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <h3 class="font-serif text-[19px] leading-tight">{{ __('Chat widget on your store') }}</h3>
+                                        <p class="text-[12px] text-ink-500 mt-1 max-w-xl leading-relaxed">
+                                            {{ __('Show your :brand chat widget on your Shopify storefront. Visitors chat from any page, your AI can reply, and every conversation lands in the team inbox — same as your normal website widget.', ['brand' => (function_exists('brand_name') ? brand_name() : 'your')]) }}
+                                        </p>
+                                    </div>
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono shrink-0 {{ !empty($widgetEnabled) ? 'bg-wa-mint text-wa-deep border border-wa-green/40' : 'bg-paper-100 text-ink-500 border border-paper-200' }}">
+                                        <span class="w-1.5 h-1.5 rounded-full {{ !empty($widgetEnabled) ? 'bg-wa-green' : 'bg-paper-200' }}"></span>{{ !empty($widgetEnabled) ? __('live on store') : __('off') }}
+                                    </span>
+                                </div>
+
+                                @error('widget')
+                                    <div class="rounded-lg bg-accent-coral/10 border border-accent-coral/40 px-3 py-2 text-[12px] text-[#A1431F]">{{ $message }}</div>
+                                @enderror
+
+                                @if (($chatWidgets ?? collect())->isEmpty())
+                                    <div class="rounded-lg bg-paper-50 border border-paper-200 px-3 py-2.5 text-[12.5px] text-ink-600">
+                                        {{ __('You have no active chat widget yet. Create one in') }}
+                                        <a href="{{ url('/chatbot-widgets') }}" class="text-wa-deep font-semibold hover:underline">{{ __('Chat Widget') }}</a>,
+                                        {{ __('then come back and turn it on here.') }}
+                                    </div>
+                                @else
+                                    <form method="POST" action="{{ url('/shopify/' . $integration->id . '/widget') }}" class="space-y-3">
+                                        @csrf
+                                        <label class="block">
+                                            <span class="text-[12px] font-semibold text-ink-700">{{ __('Which widget') }}</span>
+                                            <select name="widget_id" class="mt-1 w-full sm:w-80 rounded-lg border border-paper-200 bg-paper-0 px-3 py-2 text-[12.5px] focus:outline-none focus:border-wa-deep">
+                                                @foreach ($chatWidgets as $w)
+                                                    <option value="{{ $w->id }}" @selected((int) ($widgetId ?? 0) === (int) $w->id)>{{ $w->name }}</option>
+                                                @endforeach
+                                            </select>
+                                        </label>
+                                        <label class="flex items-center gap-2.5 cursor-pointer">
+                                            <input type="hidden" name="widget_enabled" value="0">
+                                            <input type="checkbox" name="widget_enabled" value="1" @checked(!empty($widgetEnabled)) class="w-5 h-5 accent-wa-deep">
+                                            <span class="text-[12.5px] text-ink-700">{{ __('Show this widget on my Shopify storefront') }}</span>
+                                        </label>
+                                        <div class="flex items-center gap-2 pt-1">
+                                            <button type="submit" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">{{ __('Save') }}</button>
+                                            <span class="text-[11px] text-ink-400">{{ __('Placed instantly — no theme editing.') }}</span>
+                                        </div>
+                                    </form>
+                                    <p class="text-[11px] text-ink-500">{{ __('If it says a permission is needed, Disconnect and reconnect the store once (a new scope is required to place the widget), then enable again.') }}</p>
+                                @endif
+                            </div>
                         @break
 
                     @endswitch
@@ -1442,6 +1684,52 @@
                 </section>
             </div>
         </main>
+
+        {{-- Send-test-order modal — fires a dummy order through the real automation path. --}}
+        <div id="shopify-test-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div class="absolute inset-0 bg-ink-900/40" data-test-close></div>
+            <div class="relative w-full max-w-md bg-paper-0 border border-paper-200 rounded-2xl shadow-soft overflow-hidden">
+                <div class="px-5 py-4 border-b border-paper-100 flex items-center justify-between">
+                    <h3 class="font-serif text-[18px] leading-tight">{{ __('Send a test order') }}</h3>
+                    <button type="button" data-test-close class="text-ink-400 hover:text-ink-700">
+                        <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                </div>
+                <div class="px-5 py-4 space-y-4">
+                    <p class="text-[12px] text-ink-500">
+                        {{ __('We place a dummy order and run it through the same automation your customers trigger. Enter the WhatsApp number to receive the test message.') }}
+                    </p>
+
+                    <label class="block">
+                        <span class="text-[11.5px] font-medium text-ink-700">{{ __('Automation to test') }}</span>
+                        <select id="shopify-test-event" class="mt-1 w-full rounded-lg border border-paper-200 bg-paper-0 px-3 py-2 text-[12.5px] focus:outline-none focus:border-wa-deep">
+                            @forelse ($testable as $t)
+                                <option value="{{ $t }}">{{ $autoNames[$t] ?? $t }}</option>
+                            @empty
+                                <option value="" disabled selected>{{ __('No active automation — enable one below first') }}</option>
+                            @endforelse
+                        </select>
+                    </label>
+
+                    <label class="block">
+                        <span class="text-[11.5px] font-medium text-ink-700">{{ __('WhatsApp number') }}</span>
+                        <input id="shopify-test-phone" type="tel" inputmode="tel"
+                            placeholder="{{ __('e.g. 9876543210 or +91 98765 43210') }}"
+                            class="mt-1 w-full rounded-lg border border-paper-200 bg-paper-0 px-3 py-2 text-[12.5px] focus:outline-none focus:border-wa-deep">
+                        <span class="mt-1 block text-[10.5px] text-ink-400">{{ __('Local numbers get the store country code added automatically.') }}</span>
+                    </label>
+
+                    <div id="shopify-test-result" class="hidden text-[12px] rounded-lg px-3 py-2"></div>
+                </div>
+                <div class="px-5 py-4 border-t border-paper-100 flex items-center justify-end gap-2">
+                    <button type="button" data-test-close class="px-4 py-2 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('Cancel') }}</button>
+                    <button type="button" id="shopify-test-send" data-id="{{ $integration->id }}"
+                        class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-2 disabled:opacity-60">
+                        <span>{{ __('Place test order') }}</span>
+                    </button>
+                </div>
+            </div>
+        </div>
 
         <script>
             (function() {
@@ -1462,16 +1750,81 @@
                                 },
                             });
                             const data = await r.json();
-                            if (data.ok) location.reload();
-                            else {
-                                alert(data.message || 'Sync failed.');
-                                syncBtn.disabled = false;
-                                syncBtn.querySelector('span').textContent = 'Sync now';
-                            }
+                            // Reload either way. On failure the page re-reads
+                            // Shopify and renders the diagnosis banner, which
+                            // explains the cause and the fix — far more use
+                            // than an alert() showing a bare status code.
+                            location.reload();
                         } catch (e) {
                             alert('Sync request failed.');
                             syncBtn.disabled = false;
                             syncBtn.querySelector('span').textContent = 'Sync now';
+                        }
+                    });
+                }
+
+                /* ── Send test order ── fires a dummy order through the real automation. */
+                const testModal = document.getElementById('shopify-test-modal');
+                if (testModal) {
+                    const openBtn = document.getElementById('shopify-test-open');
+                    const sendBtn = document.getElementById('shopify-test-send');
+                    const phoneEl = document.getElementById('shopify-test-phone');
+                    const eventEl = document.getElementById('shopify-test-event');
+                    const resEl = document.getElementById('shopify-test-result');
+
+                    const showResult = (ok, msg) => {
+                        resEl.className = 'text-[12px] rounded-lg px-3 py-2 ' +
+                            (ok ? 'bg-wa-mint text-wa-deep' : 'bg-accent-coral/15 text-accent-coral');
+                        resEl.textContent = msg;
+                        resEl.classList.remove('hidden');
+                    };
+                    const closeModal = () => testModal.classList.add('hidden');
+
+                    openBtn?.addEventListener('click', () => {
+                        resEl.classList.add('hidden');
+                        testModal.classList.remove('hidden');
+                        setTimeout(() => phoneEl?.focus(), 50);
+                    });
+                    testModal.querySelectorAll('[data-test-close]').forEach((el) =>
+                        el.addEventListener('click', closeModal));
+                    document.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape' && !testModal.classList.contains('hidden')) closeModal();
+                    });
+
+                    sendBtn?.addEventListener('click', async () => {
+                        const id = sendBtn.dataset.id;
+                        const phone = (phoneEl.value || '').trim();
+                        const eventType = eventEl.value || '';
+                        if (!phone) { showResult(false, 'Enter a WhatsApp number first.'); return; }
+                        if (!eventType) { showResult(false, 'Enable an automation below, then test it.'); return; }
+
+                        sendBtn.disabled = true;
+                        sendBtn.querySelector('span').textContent = 'Sending…';
+                        resEl.classList.add('hidden');
+                        try {
+                            const r = await fetch(`/shopify/${id}/test-order`, {
+                                method: 'POST',
+                                headers: {
+                                    'X-CSRF-TOKEN': CSRF,
+                                    'Accept': 'application/json',
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({ phone, event_type: eventType }),
+                            });
+                            const data = await r.json();
+                            if (data.ok) {
+                                const to = data.recipient ? ' to +' + data.recipient : '';
+                                showResult(true, data.status === 'scheduled'
+                                    ? `Test order queued${to}. It will arrive shortly.`
+                                    : `Test order sent${to}. Check WhatsApp on that number.`);
+                            } else {
+                                showResult(false, data.error || 'Could not send the test order.');
+                            }
+                        } catch (e) {
+                            showResult(false, 'Request failed. Please try again.');
+                        } finally {
+                            sendBtn.disabled = false;
+                            sendBtn.querySelector('span').textContent = 'Place test order';
                         }
                     });
                 }
@@ -1487,33 +1840,52 @@
                         });
                     });
 
-                    // Per-event variable mapping. When a template with positional
-                    // {{ 1 }}/{{ 2 }}… params is chosen, render one order-field picker per
-                    // param so the merchant decides which order field fills each slot.
-                    const TPL_PARAMS = @json($templateParamCounts ?? []);
+                    // Per-event variable mapping. For EVERY placeholder a template
+                    // declares — positional (@{{ 1 }}) and named (@{{ City }}) alike —
+                    // render one order-field picker so the merchant links an order
+                    // field (customer name, price/amount, order number …) to it.
+                    const TPL_TOKENS = @json($templateTokens ?? []);
                     const VAR_FIELDS = [
                         ['', '— blank —'],
                         ['name', 'Customer name'],
                         ['first_name', 'First name'],
                         ['order_name', 'Order # (e.g. #1001)'],
                         ['order_number', 'Order number'],
-                        ['total', 'Total + currency'],
-                        ['total_price', 'Total (amount only)'],
+                        ['total', 'Total + currency (amount)'],
+                        ['total_price', 'Total / price (amount only)'],
                         ['currency', 'Currency'],
                         ['email', 'Customer email'],
                         ['store_name', 'Store name'],
                         ['financial_status', 'Payment status'],
                         ['fulfillment_status', 'Fulfilment status'],
+                        ['tracking_url', 'Tracking link'],
+                        ['tracking_number', 'Tracking number'],
+                        ['order_url', 'Order status link'],
                     ];
+                    const FIELD_KEYS = VAR_FIELDS.map(([v]) => v);
                     const optionsHtml = (selected) => VAR_FIELDS.map(([v, l]) =>
                         `<option value="${v}" ${v === selected ? 'selected' : ''}>${l}</option>`).join('');
+
+                    // Sensible default when nothing is saved: match the token's own
+                    // name to a field, else fall back to the classic name/order/total.
+                    const guessField = (tok, i) => {
+                        if (tok.key && FIELD_KEYS.includes(tok.key)) return tok.key;
+                        const k = (tok.key || '').toLowerCase();
+                        if (/(price|amount|total|value)/.test(k)) return 'total';
+                        if (/(order).*(id|no|num)|^orderid$/.test(k)) return 'order_name';
+                        if (/(name|customer)/.test(k)) return 'name';
+                        if (/(track)/.test(k)) return 'tracking_url';
+                        return ['name', 'order_name', 'total'][i] || '';
+                    };
+                    const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) =>
+                        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
                     const renderVarMap = (topic) => {
                         const sel = form.querySelector(`[data-tpl-select][data-topic="${topic}"]`);
                         const row = form.querySelector(`[data-shopify-varmap-row][data-topic="${topic}"]`);
                         if (!sel || !row) return;
-                        const count = TPL_PARAMS[sel.value] || 0;
-                        if (count < 1) {
+                        const tokens = TPL_TOKENS[sel.value] || [];
+                        if (!tokens.length) {
                             row.classList.add('hidden');
                             row.innerHTML = '';
                             return;
@@ -1522,21 +1894,22 @@
                         try {
                             saved = JSON.parse(row.dataset.saved || '[]') || [];
                         } catch (e) {}
-                        const pickers = [];
                         const lb = '{' + '{',
                             rb = '}' + '}'; // build literal braces without tripping Blade
-                        for (let i = 0; i < count; i++) {
-                            pickers.push(
-                                `<label class="block">
- <span class="font-mono text-[9.5px] uppercase text-ink-500 tracking-wide">{{ __('Param') }} ${lb}${i + 1}${rb}</span>
+                        const pickers = tokens.map((tok, i) => {
+                            const label = tok.numeric ? `${lb}${tok.raw}${rb}` : escapeHtml(tok.raw);
+                            const chosen = (saved[i] !== undefined && saved[i] !== null && saved[i] !== '') ?
+                                saved[i] : guessField(tok, i);
+                            return `<label class="block">
+ <span class="font-mono text-[9.5px] uppercase text-ink-500 tracking-wide">${label}</span>
  <select name="events[${topic}][var_map][]" class="mt-1 w-full px-3 py-1.5 border border-paper-200 rounded-lg bg-paper-0 text-[12px] focus:outline-none focus:border-wa-deep">
- ${optionsHtml(saved[i] || '')}
+ ${optionsHtml(chosen)}
  </select>
- </label>`);
-                        }
+ </label>`;
+                        });
                         row.innerHTML =
                             `<div class="rounded-xl border border-paper-200 bg-paper-50/50 p-3">
- <div class="font-mono text-[9.5px] uppercase text-ink-500 tracking-wide mb-2">{{ __('Map template variables → order fields') }}</div>
+ <div class="font-mono text-[9.5px] uppercase text-ink-500 tracking-wide mb-2">{{ __('Link template variables → order data') }}</div>
  <div class="grid grid-cols-2 md:grid-cols-3 gap-3">${pickers.join('')}</div>
  </div>`;
                         row.classList.remove('hidden');

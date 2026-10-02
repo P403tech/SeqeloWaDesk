@@ -32,7 +32,7 @@ import { updateStatusInLaravel, formatPhoneNumber, laravelHeaders } from "../uti
 // outbound call from this file to ${appDomainName} must spread it into
 // its `headers` so the Laravel route's X-Node-Token gate (added 2026)
 // doesn't 401 us.
-import { executeFlowNode, handleFlowResponse } from "../services/flowService.js";
+import { executeFlowNode, handleFlowResponse, rehydrateParkedSession, syncParkedSession } from "../services/flowService.js";
 import { handleCampaignMessageUpdate, trackCampaignResponse, fetchWorkspaceAttributes, mergeFlowVariables } from '../services/campaignService.js';
 // Per-device send serialization. Wrapping the socket here makes EVERY
 // sock.sendMessage call on this device run one-at-a-time, which stops
@@ -457,7 +457,12 @@ export class BaileysClientManager {
         // duplicates. 30s resolves the send far sooner AND stays under the
         // raised Laravel HTTP ceiling, so a slow send reports honestly instead
         // of falsely failing. The message still delivers exactly as before.
-        defaultQueryTimeoutMs: 30000,
+        // Set to 120s (2 min) per operator request to suppress the "timed out
+        // waiting for message" warnings. WARNING: this is ABOVE the note above —
+        // a hung query can now block a send for up to 2 minutes, so Laravel's
+        // send HTTP timeout MUST be >= 120s or a slow send false-fails and the
+        // operator retries → duplicate messages. Lower this if duplicates return.
+        defaultQueryTimeoutMs: 120000,
         // Tightened from 30s → 15s. WhatsApp Web's official client pings
         // every ~10s; 30s often left the server thinking we'd died and
         // closing the socket with statusCode 408 (timeout) right when the
@@ -624,9 +629,10 @@ export class BaileysClientManager {
       fetchAgent: this.proxyAgent || undefined,
       browser: Browsers.macOS("Desktop"),
       connectTimeoutMs: 60000,
-      // See the note on the primary socket above: 60s → 30s so a hung query
-      // can't block a send for a full minute past Laravel's HTTP timeout.
-      defaultQueryTimeoutMs: 30000,
+      // 120s (2 min) per operator request — kept in step with the primary
+      // socket. See its warning: Laravel's send HTTP timeout must be >= 120s or
+      // slow sends false-fail into duplicates.
+      defaultQueryTimeoutMs: 120000,
       keepAliveIntervalMs: 30000,
       retryRequestDelayMs: 3000,
       maxMsgRetryCount: 5,
@@ -663,33 +669,37 @@ export class BaileysClientManager {
         await new Promise(resolve => setTimeout(resolve, 2000));
         
         try {
-          // 🔥 FIX 3: Format phone number correctly (remove all non-digits)
+          // Format phone number: digits only AND it MUST include the country
+          // code (WhatsApp rejects a bare local number — this is the #1 reason
+          // pairing fails while QR works, since QR needs no number).
           const cleanNumber = this.phoneNumber.replace(/\D/g, "");
-          
-          if (cleanNumber.length === 0) {
-            throw new Error("Invalid phone number for pairing code");
+
+          if (cleanNumber.length < 8) {
+            throw new Error(`Invalid phone number for pairing code: "${this.phoneNumber}" → "${cleanNumber}" (need country code + number, digits only)`);
           }
 
-          
-          // 🔥 FIX 4: Use the correct method and await it. Pass our OWN random
-          // code as the 2nd arg — the fork otherwise defaults every code to a
-          // hardcoded "SUK1CH4N" (see randomPairingCode() above).
-          if (typeof this.sock.requestPairingCode === "function") {
-            const code = await this.sock.requestPairingCode(cleanNumber, randomPairingCode());
-            this.pairingCode = code;
-            pairingCodeRequested = true;
-
-            await updateStatusInLaravel(
-              "Code generated", 
-              0, 
-              this.phoneNumber, 
-              this.appDomainName
-            );
-          } else {
-
+          if (typeof this.sock.requestPairingCode !== "function") {
+            throw new Error("requestPairingCode is not available on this Baileys build");
           }
+
+          // Pass our OWN random code as the 2nd arg — the @itsukichan fork
+          // otherwise defaults every code to a hardcoded "SUK1CH4N".
+          const code = await this.sock.requestPairingCode(cleanNumber, randomPairingCode());
+          this.pairingCode = code;
+          this.pairingCodeAt = Date.now();   // freshness stamp — lets the endpoint reuse this code instead of regenerating
+          pairingCodeRequested = true;
+          console.log(`[PAIR] ${this.phoneNumber} (${cleanNumber}) → pairing code: ${code}`);
+          await updateStatusInLaravel("Code generated", 0, this.phoneNumber, this.appDomainName);
         } catch (err) {
-
+          // NEVER swallow this — an empty catch here is exactly why pairing
+          // "silently" failed before. Log it AND surface it to Laravel, and
+          // allow one retry on the next "connecting" update.
+          console.error(`[PAIR] requestPairingCode FAILED for ${this.phoneNumber}: ${err?.message}`);
+          if (err?.stack) console.error(err.stack);
+          pairingCodeRequested = false;
+          try {
+            await updateStatusInLaravel(`Pairing failed: ${err?.message || "unknown error"}`, 0, this.phoneNumber, this.appDomainName);
+          } catch (_) { /* status update is best-effort */ }
         }
       }
       
@@ -1386,29 +1396,38 @@ export class BaileysClientManager {
       let mediaMime = '';
       let mediaFilename = '';
       if (mediaType && mediaType !== 'location' && mediaType !== 'contact') {
-        try {
-          const buf = await downloadMediaMessage(message, 'buffer', {}, {
-            reuploadRequest: this.sock.updateMediaMessage,
-          });
-          if (buf && buf.length <= 16 * 1024 * 1024) {
-            mediaBase64 = buf.toString('base64');
-            const m = message.message;
-            mediaMime =
-              m?.imageMessage?.mimetype    ||
-              m?.videoMessage?.mimetype    ||
-              m?.audioMessage?.mimetype    ||
-              m?.documentMessage?.mimetype ||
-              m?.stickerMessage?.mimetype  ||
-              '';
-            mediaFilename =
-              m?.documentMessage?.fileName ||
-              m?.documentMessage?.title    ||
-              '';
-          } else if (buf) {
-            console.warn(`[${this.phoneNumber}] [OUTBOUND-MEDIA] file too large (${buf.length} bytes), skipping`);
+        // Retry once. The usual reason a download fails is WhatsApp's CDN having
+        // already evicted the blob a few seconds after the send; reuploadRequest
+        // asks the sending device to re-upload, but that round-trip can miss the
+        // first attempt. A single 1.5s-delayed retry recovers most of the "Media
+        // could not be downloaded" cases at the source (#35).
+        let buf = null;
+        for (let attempt = 1; attempt <= 2 && !buf; attempt++) {
+          try {
+            buf = await downloadMediaMessage(message, 'buffer', {}, {
+              reuploadRequest: this.sock.updateMediaMessage,
+            });
+          } catch (mediaErr) {
+            console.error(`[${this.phoneNumber}] [OUTBOUND-MEDIA] download attempt ${attempt} failed: ${mediaErr?.message}`);
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
           }
-        } catch (mediaErr) {
-          console.error(`[${this.phoneNumber}] [OUTBOUND-MEDIA] download failed: ${mediaErr?.message}`);
+        }
+        if (buf && buf.length <= 16 * 1024 * 1024) {
+          mediaBase64 = buf.toString('base64');
+          const m = message.message;
+          mediaMime =
+            m?.imageMessage?.mimetype    ||
+            m?.videoMessage?.mimetype    ||
+            m?.audioMessage?.mimetype    ||
+            m?.documentMessage?.mimetype ||
+            m?.stickerMessage?.mimetype  ||
+            '';
+          mediaFilename =
+            m?.documentMessage?.fileName ||
+            m?.documentMessage?.title    ||
+            '';
+        } else if (buf) {
+          console.warn(`[${this.phoneNumber}] [OUTBOUND-MEDIA] file too large (${buf.length} bytes), skipping`);
         }
       }
 
@@ -1512,7 +1531,16 @@ export class BaileysClientManager {
         // a status@broadcast leaking through).
         if (!rawJid) continue;
         if (rawJid === 'status@broadcast') continue;
-        if (rawJid.endsWith('@g.us')) continue;
+        // GROUPS take a separate, deliberately narrow path: store the message
+        // so the thread is readable and repliable in /team-inbox, then stop.
+        // They must NOT fall through to the 1-on-1 pipeline below — that runs
+        // flows, keyword auto-replies and the AI agent, and a single 800-member
+        // group would fan those out on every message and burn credits. Reading
+        // and replying is what a group needs; automation is not.
+        if (rawJid.endsWith('@g.us')) {
+          this.forwardGroupInbound(message, rawJid).catch(() => {});
+          continue;
+        }
         if (rawJid.endsWith('@newsletter')) continue;
         if (rawJid.endsWith('@broadcast')) continue;
 
@@ -1778,7 +1806,18 @@ export class BaileysClientManager {
 
         const sessionKey = `${this.phoneNumber}_${userNumber}`;
 
-        const activeSession = this.appLocals.activeFlowSessions[sessionKey];
+        let activeSession = this.appLocals.activeFlowSessions[sessionKey];
+
+        // DURABLE SESSIONS: no live session (e.g. Node restarted) but a real
+        // inbound reply/tap — rehydrate a parked flow from Laravel so the reply
+        // resumes it instead of being dropped. Empty system events don't qualify.
+        if (!activeSession) {
+          const _mm0 = message.message || {};
+          const _isTap0 = !!(_mm0.buttonsResponseMessage || _mm0.templateButtonReplyMessage || _mm0.listResponseMessage || _mm0.interactiveResponseMessage);
+          if (String(messageText || "").trim() !== "" || _isTap0) {
+            activeSession = await rehydrateParkedSession(this.appLocals, sessionKey);
+          }
+        }
 
         if (activeSession && activeSession.status === "active" && activeSession.waitingForInput) {
           console.log(`[${this.phoneNumber}] [FLOW-RESP] active session found key=${sessionKey} nextNodeType=${activeSession.waitingForInput?.nextNodeType}`);
@@ -1848,6 +1887,9 @@ export class BaileysClientManager {
             });
           }
 
+          // Durable sessions: mirror the settled state (re-parked → upsert;
+          // advanced past / ended → clear).
+          await syncParkedSession(this.appLocals, sessionKey);
           this.setFlowTimeout(sessionKey, activeSession);
           continue;
         } else if (activeSession) {
@@ -2172,6 +2214,8 @@ export class BaileysClientManager {
         sessionKey
       );
 
+      // Durable sessions: if the first node parked on a question, snapshot it.
+      await syncParkedSession(this.appLocals, sessionKey);
       this.setFlowTimeout(sessionKey, activeSession);
       console.log(`[FLOW] handleFlowAutoReply DONE — session=${sessionKey} status=${activeSession.status}`);
 
@@ -2306,6 +2350,115 @@ export class BaileysClientManager {
       console.log(`[${this.phoneNumber}] [AUTO-REPLY-MIRROR] outbound → inbox recipient=${recipientNumber} body="${String(text || '').substring(0, 40)}"`);
     } catch (err) {
       console.error(`[${this.phoneNumber}] [AUTO-REPLY-MIRROR] failed: ${err?.response?.status || ''} ${err?.message}`);
+    }
+  }
+
+  /**
+   * Store one GROUP message in the Laravel team inbox.
+   *
+   * Groups were dropped outright by the inbound filter, so group threads
+   * existed (created by the wa_groups sync) but never held a single message —
+   * the operator saw an empty chat they could not follow.
+   *
+   * This path is STORAGE ONLY. It deliberately does not touch flows, keyword
+   * auto-replies or the AI agent: those are built around one customer per
+   * thread, and firing them per group message would spam the group and burn
+   * credits. Outbound replies still work normally — the operator sends from
+   * the inbox and InboxDispatcher routes on the @g.us jid.
+   *
+   * Attribution: in a group `remoteJid` is the GROUP, so the actual author is
+   * on key.participant / key.participantPn. That phone is what we report as
+   * the sender, which is what makes "who said this" correct in the thread.
+   */
+  async forwardGroupInbound(message, rawJid) {
+    try {
+      const jid = String(rawJid || '');
+      if (!jid.endsWith('@g.us')) return;
+
+      const participant = message.key.participantPn || message.key.participant || '';
+      const senderPhone = String(participant)
+        .replace(/@s\.whatsapp\.net$/, '')
+        .replace(/@lid$/, '')
+        .replace(/[^\d]/g, '');
+
+      const m = message.message || {};
+      let body = m.conversation || m.extendedTextMessage?.text || '';
+      let mediaType = null;
+      let mediaMime = '';
+      let mediaFilename = '';
+
+      if (m.imageMessage) {
+        mediaType = 'image'; mediaMime = m.imageMessage.mimetype || '';
+        body = body || m.imageMessage.caption || '';
+      } else if (m.videoMessage) {
+        mediaType = 'video'; mediaMime = m.videoMessage.mimetype || '';
+        body = body || m.videoMessage.caption || '';
+      } else if (m.audioMessage) {
+        mediaType = 'audio'; mediaMime = m.audioMessage.mimetype || '';
+      } else if (m.documentMessage) {
+        mediaType = 'document'; mediaMime = m.documentMessage.mimetype || '';
+        mediaFilename = m.documentMessage.fileName || '';
+        body = body || m.documentMessage.caption || '';
+      } else if (m.stickerMessage) {
+        mediaType = 'sticker'; mediaMime = m.stickerMessage.mimetype || '';
+      }
+
+      // Reactions, receipts, group system events (add/remove/subject change)
+      // carry neither text nor media — storing them would just add empty rows.
+      if (!body && !mediaType) return;
+
+      // Pull the bytes so the bubble shows the real attachment rather than a
+      // placeholder. Same call + reupload fallback the 1-on-1 path uses; a
+      // failure downgrades to a text-only row instead of losing the message.
+      let mediaBase64;
+      if (mediaType) {
+        try {
+          const buf = await downloadMediaMessage(message, 'buffer', {}, {
+            reuploadRequest: this.sock.updateMediaMessage,
+          });
+          if (buf && buf.length <= 16 * 1024 * 1024) {
+            mediaBase64 = buf.toString('base64');
+          }
+        } catch (e) {
+          console.warn(`[${this.phoneNumber}] [GROUP-IN] media download failed: ${e?.message}`);
+        }
+      }
+
+      // Group subject for the thread title. The conversation usually already
+      // exists from the wa_groups sync; this covers a group that messaged
+      // before its first sync, so the thread is not titled after whoever
+      // happened to speak first.
+      let groupSubject = '';
+      try {
+        const meta = await this.sock.groupMetadata(jid);
+        groupSubject = String(meta?.subject || '');
+      } catch (e) { /* not fatal — Laravel falls back to its own title rules */ }
+
+      await axios.post(`${this.appDomainName}/api/inbound-message`, {
+        device_phone:   this.phoneNumber,
+        sender_phone:   senderPhone,
+        sender_name:    message.pushName || '',
+        body,
+        media_type:     mediaType || undefined,
+        media_mime:     mediaMime || undefined,
+        media_filename: mediaFilename || undefined,
+        media_base64:   mediaBase64 || undefined,
+        wa_message_id:  message.key.id,
+        raw_jid:        jid,
+        group_subject:  groupSubject || undefined,
+        // A message the operator sent from their own phone shows as outbound.
+        direction:      message.key.fromMe ? 'out' : 'in',
+        timestamp:      typeof message.messageTimestamp === 'number'
+                          ? message.messageTimestamp
+                          : (message.messageTimestamp?.toNumber?.() ?? Math.floor(Date.now() / 1000)),
+      }, {
+        timeout: mediaBase64 ? 60000 : 15000,
+        headers: { 'Accept': 'application/json', ...laravelHeaders() },
+      });
+
+      console.log(`[${this.phoneNumber}] [GROUP-IN] ${jid} from=${senderPhone} type=${mediaType || 'text'} body="${String(body).substring(0, 40)}"`);
+    } catch (err) {
+      console.error(`[${this.phoneNumber}] [GROUP-IN] failed: ${err?.response?.status || ''} ${err?.message}`);
     }
   }
 

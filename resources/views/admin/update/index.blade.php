@@ -48,6 +48,15 @@
             </div>
         </section>
 
+        {{-- Read-the-changelog warning --}}
+        <div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 flex items-start gap-3">
+            <svg viewBox="0 0 24 24" class="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4m0 4h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.42 0z"/></svg>
+            <p class="text-[12.5px] font-medium text-red-700 leading-relaxed">
+                {{ __('Read the changelog first, then update.') }}
+                <span class="font-normal text-red-600">{{ __('Each release may include breaking changes, new migrations or manual steps — review what this version changes before you run the update.') }}</span>
+            </p>
+        </div>
+
         {{-- Steps 1–5 --}}
         <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden" id="wd-up-steps">
             <div class="px-5 py-4 border-b border-paper-200">

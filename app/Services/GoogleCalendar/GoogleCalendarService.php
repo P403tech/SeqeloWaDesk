@@ -78,8 +78,30 @@ class GoogleCalendarService
         . ' https://www.googleapis.com/auth/drive'
         . ' https://www.googleapis.com/auth/forms.body.readonly';
 
-    public function clientId(): string     { return (string) SystemSetting::get('google_calendar_client_id', ''); }
-    public function clientSecret(): string { return (string) SystemSetting::get('google_calendar_client_secret', ''); }
+    /**
+     * OAuth client_id / client_secret. Prefers the workspace's OWN Google app
+     * (self-serve BYO app) and falls back to the platform/admin app.
+     *
+     * In-session callers (connect start, OAuth callback, pickers) omit
+     * $workspace → the current auth workspace resolves it. Background callers
+     * (token refresh in the flow runtime, no session) MUST pass $workspace so
+     * the client's own secret is used without an auth context.
+     */
+    public function clientId(?Workspace $workspace = null): string
+    {
+        return $this->ownApp($workspace)['id'] ?? (string) SystemSetting::get('google_calendar_client_id', '');
+    }
+    public function clientSecret(?Workspace $workspace = null): string
+    {
+        return $this->ownApp($workspace)['secret'] ?? (string) SystemSetting::get('google_calendar_client_secret', '');
+    }
+
+    /** Resolve the workspace's own Google app: explicit arg, else auth workspace. */
+    private function ownApp(?Workspace $workspace = null): ?array
+    {
+        $ws = $workspace ?: (auth()->user()?->currentWorkspace);
+        return $ws?->ownGoogleApp();
+    }
     public function scopes(): string
     {
         $s = trim((string) SystemSetting::get('google_calendar_scopes', self::DEFAULT_SCOPES));
@@ -89,7 +111,15 @@ class GoogleCalendarService
         return ($s === '' || !str_contains($s, 'googleapis.com')) ? self::DEFAULT_SCOPES : $s;
     }
     public function redirectUri(): string  { return (string) (SystemSetting::get('google_calendar_redirect_uri') ?: url('/appointments/oauth/google/callback')); }
-    public function isEnabled(): bool      { return (bool) SystemSetting::get('google_calendar_enabled', false); }
+    /**
+     * Enabled when the admin turned Google on globally, OR the workspace brought
+     * its OWN Google app (self-serve — no admin approval needed).
+     */
+    public function isEnabled(?Workspace $workspace = null): bool
+    {
+        if ($this->ownApp($workspace)) return true;
+        return (bool) SystemSetting::get('google_calendar_enabled', false);
+    }
 
     public function authorizeUrl(string $state): string
     {
@@ -105,13 +135,19 @@ class GoogleCalendarService
         ]);
     }
 
-    public function exchangeCode(string $code): array
+    /**
+     * Exchange an auth code for tokens. Pass the workspace that STARTED the
+     * OAuth (the callback reads it from the session) so the exchange uses that
+     * workspace's own Google app secret — the authenticated user's current
+     * workspace can differ if it was switched mid-flow.
+     */
+    public function exchangeCode(string $code, ?Workspace $workspace = null): array
     {
         try {
             $r = Http::asForm()->timeout(self::HTTP_TIMEOUT_SECONDS)->post(self::TOKEN_URL, [
                 'code'          => $code,
-                'client_id'     => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
+                'client_id'     => $this->clientId($workspace),
+                'client_secret' => $this->clientSecret($workspace),
                 'redirect_uri'  => $this->redirectUri(),
                 'grant_type'    => 'authorization_code',
             ]);
@@ -145,8 +181,10 @@ class GoogleCalendarService
         try {
             $r = Http::asForm()->timeout(self::HTTP_TIMEOUT_SECONDS)->post(self::TOKEN_URL, [
                 'refresh_token' => $rt,
-                'client_id'     => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
+                // Pass the workspace so a background refresh (flow runtime, no
+                // session) uses THIS workspace's own Google app secret.
+                'client_id'     => $this->clientId($workspace),
+                'client_secret' => $this->clientSecret($workspace),
                 'grant_type'    => 'refresh_token',
             ]);
             if (!$r->successful()) {

@@ -26,6 +26,10 @@ class AiCallAssistant extends Model
         'greeting_text', 'status', 'is_active',
         'ai_provider', 'ai_model', 'ai_api_key_encrypted',
         'ai_system_prompt', 'knowledge_base_url', 'natural_conciseness',
+        // Optional AI-Training assistant whose trained knowledge is stitched
+        // into this voice agent's system prompt at call start (see
+        // FlowNodeActionsController::wabaCallAssistant).
+        'knowledge_assistant_id',
         'voice_provider', 'voice_api_key_encrypted', 'voice_id', 'voice_settings_json',
         'stt_provider', 'stt_settings_json',
         'record_agent', 'record_user', 'auto_logging',

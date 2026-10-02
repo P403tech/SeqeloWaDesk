@@ -410,9 +410,9 @@ $nav = [
 
 $sys = [
     [
-        'key' => 'wadesk-message',
-        'href' => url('/admin/settings/wadesk-message'),
-        'label' => __('System Message Setting'),
+        'key' => 'channel-setting',
+        'href' => url('/admin/settings/channel-setting'),
+        'label' => __('Channel Settings'),
         'icon' =>
             '<path d="M3 4.5A2.5 2.5 0 0 1 5.5 2h5A2.5 2.5 0 0 1 13 4.5v4A2.5 2.5 0 0 1 10.5 11H8l-3.5 2v-2A2.5 2.5 0 0 1 3 8.5v-4Z"/><path d="M5.5 6.5h5M5.5 8.5h3"/>',
         'sw' => 1.6,
@@ -422,6 +422,13 @@ $sys = [
     // System rail to keep that rail short and focused on what's
     // genuinely "system": WaDesk message provider, Security, and
     // the Settings hub itself.
+    [
+        'key' => 'features',
+        'href' => url('/admin/settings/features'),
+        'label' => __('Feature toggles'),
+        'icon' => '<path d="M4 4.5h8M4 8h8M4 11.5h8"/><circle cx="6" cy="4.5" r="1.6"/><circle cx="10" cy="8" r="1.6"/><circle cx="6" cy="11.5" r="1.6"/>',
+        'sw' => 1.6,
+    ],
     [
         'key' => 'frontend',
         'href' => url('/admin/frontend'),
@@ -451,6 +458,20 @@ $sys = [
         'sw' => 1.6,
     ],
     [
+        'key' => 'scaling',
+        'href' => url('/admin/settings/scaling'),
+        'label' => __('Advanced Scaling'),
+        'icon' => '<path d="M2 12V7m4 5V4m4 8V8m4 4V6"/>',
+        'sw' => 1.6,
+    ],
+    [
+        'key' => 'support-bot',
+        'href' => url('/admin/settings/support-bot'),
+        'label' => __('Support Bot'),
+        'icon' => '<path d="M3 4.5h10v6H8l-3 2.5V10.5H3z"/><path d="M6 7h.01M8 7h.01M10 7h.01"/>',
+        'sw' => 1.4,
+    ],
+    [
         'key' => 'blog',
         'href' => url('/admin/blog'),
         'label' => __('Blog'),
@@ -478,6 +499,11 @@ $sys = [
 // here rather than hardcoded above so the entry appears when the extension is
 // installed and disappears when it is disabled — no core edit either way.
 foreach (\App\Services\ExtensionRegistry::nav('admin') as $extItem) {
+    // Instagram's admin entry now lives on the Channel Settings hub as a card
+    // (moved out of the System rail), so skip it here to avoid a duplicate.
+    if (($extItem['key'] ?? '') === 'instagram') {
+        continue;
+    }
     $sys[] = $extItem;
 }
 

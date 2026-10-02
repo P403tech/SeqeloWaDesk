@@ -62,7 +62,7 @@ class AiVoiceReplyService
             return null;
         }
 
-        $audioPath = $this->resolveAudioPath($inboundMsg);
+        $audioPath = $this->downloadAudioToTemp($inboundMsg);
         if (!$audioPath) {
             Log::warning('[VOICE-AI] audio file missing', ['message_id' => $inboundMsg->id]);
             return null;
@@ -70,8 +70,14 @@ class AiVoiceReplyService
 
         // 1. ASR — transcribe and cache on the row before anything else
         // so partial failures still leave the operator with readable text.
-        $transcript = $this->factory->asrFor($agent)
-            ->transcribe($audioPath, $agent->asr_language ?: $agent->voice_language);
+        // The rest of the pipeline works from the transcript TEXT only, so
+        // drop the scratch file the moment ASR is done (success or not).
+        try {
+            $transcript = $this->factory->asrFor($agent)
+                ->transcribe($audioPath, $agent->asr_language ?: $agent->voice_language);
+        } finally {
+            if (is_file($audioPath)) @unlink($audioPath);
+        }
 
         $inboundMsg->forceFill([
             'voice_transcript'      => $transcript->text,
@@ -168,26 +174,55 @@ class AiVoiceReplyService
     }
 
     /**
-     * The audio file path on disk. Inbound media is written via
-     * `Storage::disk('public')->put(...)` in WaInboundController, which
-     * lands under `storage/app/public/<media_path>`. So we read from
-     * the SAME disk root that InboxDispatcher uses, not from public_path()
-     * (which would point at the symlink target — same files, but
-     * resolving via the canonical disk root keeps us aligned with
-     * however the deploy is set up).
+     * Materialise the inbound audio as a LOCAL file Whisper can read.
+     *
+     * Inbound media may live on the LOCAL disk OR on cloud storage
+     * (Cloudflare R2, S3, …). The old version only looked under
+     * `storage/app/public`, so on any workspace with cloud storage enabled
+     * the file was reported "missing" and the whole voice-reply pipeline
+     * silently bailed — no transcript, no voice reply. That was the bug.
+     *
+     * Read the bytes through the ACTIVE media disk (`media_storage()` — R2
+     * when cloud storage is on, local otherwise) into a scratch file, since
+     * Whisper needs a real file handle. Whisper also picks the audio format
+     * from the filename EXTENSION and only accepts a fixed set, so a mangled
+     * mime slug (e.g. "oggcod" from "audio/ogg; codecs=opus") is normalised
+     * to a supported extension — the bytes are ogg regardless.
+     *
+     * Returns a temp path the CALLER MUST unlink, or null when the object is
+     * genuinely absent.
      */
-    private function resolveAudioPath(InboxMessage $msg): ?string
+    private function downloadAudioToTemp(InboxMessage $msg): ?string
     {
-        $path = $msg->media_path ?? null;
-        if (!$path) return null;
+        $path = ltrim((string) ($msg->media_path ?? ''), '/\\');
+        if ($path === '') return null;
 
-        $abs = storage_path('app' . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR . ltrim($path, '/\\'));
-        if (is_file($abs)) return $abs;
+        try {
+            $disk  = media_storage();
+            $bytes = null;
 
-        // Defensive fallback: some legacy installs may have run media
-        // through the public symlink directly. Check there before giving up.
-        $fallback = public_path('storage/' . ltrim($path, '/\\'));
-        return is_file($fallback) ? $fallback : null;
+            if ($disk->exists($path)) {
+                $bytes = $disk->get($path);
+            } else {
+                // Legacy fallback: some installs wrote straight to the public
+                // symlink target without registering it on the media disk.
+                $legacy = public_path('storage/' . $path);
+                if (is_file($legacy)) {
+                    $bytes = @file_get_contents($legacy);
+                }
+            }
+            if ($bytes === null || $bytes === '') return null;
+
+            $rawExt = strtolower(pathinfo($path, PATHINFO_EXTENSION) ?: 'ogg');
+            $ext = in_array($rawExt, ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm'], true) ? $rawExt : 'ogg';
+            $tmp = tempnam(sys_get_temp_dir(), 'voice_asr_') . '.' . $ext;
+            file_put_contents($tmp, $bytes);
+
+            return is_file($tmp) ? $tmp : null;
+        } catch (\Throwable $e) {
+            Log::warning('[VOICE-AI] audio fetch failed: ' . $e->getMessage(), ['message_id' => $msg->id]);
+            return null;
+        }
     }
 
     private function usedToday(AiAgent $agent): int

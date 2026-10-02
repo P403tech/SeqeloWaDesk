@@ -39,3 +39,20 @@ Route::middleware(['api', 'throttle:240,1'])->group(function () {
     Route::post('/api/sms/inbound', [SmsWebhookController::class, 'ingest'])->name('sms.inbound');
     Route::post('/api/sms/status', [SmsStatusController::class, 'handle'])->name('sms.status');
 });
+
+// ── SIM-gateway API — a linked Android phone sends SMS via its own SIM.
+//    Device-facing; each call authenticates with its device_token in the
+//    X-Gateway-Token header (no session/CSRF). Lives under api/sms/* so it
+//    inherits the same CSRF exemption. Higher throttle: many phones poll here.
+Route::middleware(['api', 'throttle:600,1'])
+    ->prefix('api/sms/gateway')
+    ->name('sms.gateway.')
+    ->group(function () {
+        $c = \App\Http\Controllers\Sms\DeviceGatewayController::class;
+        Route::post('/register',  [$c, 'register'])->name('register');
+        Route::get('/pull',       [$c, 'pull'])->name('pull');
+        Route::post('/report',    [$c, 'report'])->name('report');
+        Route::post('/heartbeat', [$c, 'heartbeat'])->name('heartbeat');
+        Route::post('/inbound',   [$c, 'inbound'])->name('inbound');
+        Route::post('/send',      [$c, 'send'])->name('send');
+    });

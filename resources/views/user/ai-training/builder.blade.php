@@ -258,6 +258,26 @@
                                     <option value="gemini">{{ __('Google · Gemini') }}</option>
                                     <option value="muse">{{ __('Muse · Meta Spark') }}</option>
                                     <option value="mistral">{{ __('Mistral') }}</option>
+                                    <option value="openai">{{ __('OpenAI (GPT)') }}</option>
+                                    <option value="anthropic">{{ __('Anthropic (Claude)') }}</option>
+                                    <option value="gemini">{{ __('Google (Gemini)') }}</option>
+                                    <option value="mistral">{{ __('Mistral') }}</option>
+                                    <option value="deepseek">{{ __('DeepSeek') }}</option>
+                                    <option value="xai">{{ __('xAI (Grok)') }}</option>
+                                    <option value="perplexity">{{ __('Perplexity') }}</option>
+                                    <option value="groq">{{ __('Groq') }}</option>
+                                    <option value="qwen">{{ __('Alibaba Qwen') }}</option>
+                                    <option value="moonshot">{{ __('Moonshot (Kimi)') }}</option>
+                                    <option value="zai">{{ __('Z.ai (GLM)') }}</option>
+                                    <option value="cohere">{{ __('Cohere') }}</option>
+                                    <option value="nvidia">{{ __('NVIDIA') }}</option>
+                                    <option value="llama">{{ __('Meta Llama') }}</option>
+                                    <option value="huggingface">{{ __('Hugging Face') }}</option>
+                                    <option value="baidu">{{ __('Baidu (Ernie)') }}</option>
+                                    <option value="ai21">{{ __('AI21 (Jamba)') }}</option>
+                                    <option value="reka">{{ __('Reka') }}</option>
+                                    <option value="yi">{{ __('01.AI (Yi)') }}</option>
+                                    <option value="openrouter">{{ __('OpenRouter') }}</option>
                                 </select>
                                 <div class="text-[10.5px] text-ink-500 mt-1">
                                     {{ __('Platform key first, or your own key from') }}
@@ -375,7 +395,7 @@
                             <span class="font-mono text-[10px] text-ink-500">{{ __('knowledge') }}</span>
                         </div>
 
-                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+                        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
                             <button type="button" data-add-source="url"
                                 class="rounded-lg border border-paper-200 hover:border-wa-deep bg-paper-50 p-3 text-left transition">
                                 <svg viewBox="0 0 16 16" class="w-4 h-4 text-wa-deep" fill="none"
@@ -424,6 +444,32 @@
                                 </div>
                                 <div class="text-[11px] text-ink-500 leading-snug">
                                     {{ __('Upload a spreadsheet or file — the agent reads the extracted text.') }}</div>
+                            </button>
+                            <button type="button" data-add-source="catalog"
+                                class="rounded-lg border border-paper-200 hover:border-wa-deep bg-paper-50 p-3 text-left transition">
+                                <svg viewBox="0 0 16 16" class="w-4 h-4 text-wa-deep" fill="none"
+                                    stroke="currentColor" stroke-width="1.6">
+                                    <path d="M2 3h12v3H2z" />
+                                    <path d="M2 6v7h12V6" />
+                                    <path d="M6 9h4" />
+                                </svg>
+                                <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">{{ __('Product catalog') }}
+                                </div>
+                                <div class="text-[11px] text-ink-500 leading-snug">
+                                    {{ __('Let the agent answer from your live products, prices and stock.') }}</div>
+                            </button>
+                            <button type="button" data-add-source="catalog"
+                                class="rounded-lg border border-paper-200 hover:border-wa-deep bg-paper-50 p-3 text-left transition">
+                                <svg viewBox="0 0 16 16" class="w-4 h-4 text-wa-deep" fill="none"
+                                    stroke="currentColor" stroke-width="1.6">
+                                    <path d="M2 3h12v3H2z" />
+                                    <path d="M2 6v7h12V6" />
+                                    <path d="M6 9h4" />
+                                </svg>
+                                <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">{{ __('Product catalog') }}
+                                </div>
+                                <div class="text-[11px] text-ink-500 leading-snug">
+                                    {{ __('Let the agent answer from your live products, prices and stock.') }}</div>
                             </button>
                         </div>
 

@@ -12,7 +12,18 @@ import { performClientCleanup } from "./utils/cleanup.js";
 import { laravelHeaders, logLaravelError } from "./utils/helpers.js";
 import { syncCampaignSchedules } from "./controllers/campaignController.js";
 import { syncScheduledMessages } from "./controllers/scheduleController.js";
-import { startInstagramScheduler } from "./services/instagram/igScheduler.js";
+import instagramFlowController from "./controllers/instagramFlowController.js";
+import facebookFlowController from "./controllers/facebookFlowController.js";
+import tiktokFlowController from "./controllers/tiktokFlowController.js";
+import telegramFlowController from "./controllers/telegramFlowController.js";
+import webchatFlowController from "./controllers/webchatFlowController.js";
+import {
+  sendCode as tgSendCode, signIn as tgSignIn, status as tgStatus, logOut as tgLogOut,
+  startQrLogin as tgQrStart, pollQrLogin as tgQrPoll, setApiCredentials as tgSetCreds,
+} from "./services/telegramAccountService.js";
+import {
+  createBot as tgCreateBot, checkUsername as tgCheckUsername,
+} from "./services/telegramBotFatherService.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,14 +33,6 @@ const app = express();
 const port = config.application.port || 3000;
 const appDomainName = config.application.appDomainName || "localhost";
 
-// ── cPanel / Passenger base-path normalize ────────────────────────────
-// On cPanel "Setup Node.js App" the bridge is served under a sub-path
-// (e.g. https://client.com/node). Some Passenger setups STRIP that "/node"
-// prefix before the request reaches Express, some DON'T — when they don't,
-// every route 404s ("Cannot GET /node/health"). Strip ONE leading "/node"
-// segment here so EVERY route (/, /health, /api/...) works whether the app
-// is mounted under "/node" or at the root, and direct port access
-// (Laravel -> Node on the LAN/localhost) keeps working unchanged.
 app.use((req, res, next) => {
   if (req.url === '/node' || req.url === '/node/') {
     req.url = '/';
@@ -38,7 +41,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
 // ── DYNAMIC CORS ──────────────────────────────────────────────────────
 // The bridge is deployed to many hosts/IPs, so the allow-list is NEVER
 // hardcoded — it derives from the env the installer writes:
@@ -220,6 +222,62 @@ app.get("/", async (req, res) => {
 });
 
 // Health check route
+// ── Instagram flow engine (ported from Instaflow) — inbound handoff + health.
+//    PURELY ADDITIVE: the WhatsApp flow path (flowService.js) is untouched.
+app.post("/api/instagram-flow/inbound", instagramFlowController.instagramInbound);
+app.get("/api/instagram-flow/health", instagramFlowController.instagramFlowHealth);
+
+// ── Facebook Messenger flow engine (ported from the IG runtime) — inbound
+//    handoff + health. Same PURELY ADDITIVE contract: WhatsApp/IG untouched.
+app.post("/api/facebook-flow/inbound", facebookFlowController.facebookInbound);
+app.get("/api/facebook-flow/health", facebookFlowController.facebookFlowHealth);
+
+// ── TikTok Business-Messaging flow engine (ported from the FB runtime) — inbound
+//    handoff + health. PURELY ADDITIVE: WhatsApp/IG/FB untouched. Partner-gated.
+app.post("/api/tiktok-flow/inbound", tiktokFlowController.tiktokInbound);
+app.get("/api/tiktok-flow/health", tiktokFlowController.tiktokFlowHealth);
+
+// ── Telegram (Bot API) flow engine (ported from the FB/TikTok runtime). Same
+//    PURELY ADDITIVE contract: WhatsApp/IG/FB/TikTok untouched.
+app.post("/api/telegram-flow/inbound", telegramFlowController.telegramInbound);
+app.get("/api/telegram-flow/health", telegramFlowController.telegramFlowHealth);
+// ── Embedded chat-widget flow engine (Email pattern: the widget has NO external
+//    API, so every send delegates back to PHP, which writes the outbound row the
+//    visitor's widget polls for). PURELY ADDITIVE.
+app.post("/api/webchat-flow/inbound", webchatFlowController.webchatInbound);
+app.get("/api/webchat-flow/health", webchatFlowController.webchatFlowHealth);
+
+// ── Telegram MTProto account login + @BotFather bot creation. The ONLY MTProto
+//    path in the app — needed because Telegram has no API to create a bot (only
+//    @BotFather can). X-Node-Token guarded; never logs the exception message
+//    (MTProto errors can echo the credential back). Requires TELEGRAM_API_ID /
+//    TELEGRAM_API_HASH env (from my.telegram.org).
+const tgAccount = (handler) => async (req, res) => {
+  const expected = process.env.NODE_WEBHOOK_TOKEN || "";
+  if (!expected || (req.headers["x-node-token"] || "") !== expected) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  try {
+    const body = req.body || {};
+    // Admin-configured api_id/hash ride along on every request (see the Laravel
+    // bridge); remember them before the handler reads apiCredentials().
+    if (body.apiId || body.apiHash) tgSetCreds(body.apiId, body.apiHash);
+    const out = await handler(body);
+    return res.status(out && out.ok ? 200 : 422).json(out);
+  } catch (e) {
+    console.error("[TG-ACCOUNT] route failed:", e && e.code ? e.code : "error");
+    return res.status(500).json({ ok: false, error: "Telegram account request failed." });
+  }
+};
+app.post("/api/telegram-account/send-code",     tgAccount((b) => tgSendCode(b.phone)));
+app.post("/api/telegram-account/sign-in",       tgAccount((b) => tgSignIn(b.loginId, b.code, b.password)));
+app.post("/api/telegram-account/qr-start",      tgAccount((b) => tgQrStart(b.loginId || "")));
+app.post("/api/telegram-account/qr-poll",       tgAccount((b) => tgQrPoll(b.loginId, b.password)));
+app.post("/api/telegram-account/status",        tgAccount((b) => tgStatus(b.accountId, b.session)));
+app.post("/api/telegram-account/log-out",       tgAccount((b) => tgLogOut(b.accountId, b.session)));
+app.post("/api/telegram-account/create-bot",    tgAccount((b) => tgCreateBot(b.accountId, b.session, b.name, b.username)));
+app.post("/api/telegram-account/check-username", tgAccount((b) => tgCheckUsername(b.accountId, b.session, b.username)));
+
 app.get("/health", (req, res) => {
   const stats = {
     status: "healthy",
@@ -432,6 +490,12 @@ app.listen(port, async () => {
   console.log(`Timeout & Cooldown system active`);
   console.log(`API Domain: ${appDomainName}`);
 
+  // The Instagram scheduler lives in the Instagram ADDON, not in core. Its
+  // files (services/instagram/igScheduler.js) only exist once that addon is
+  // installed, so importing them here crashed the whole bridge with
+  // ERR_MODULE_NOT_FOUND on any install that never had them — taking WhatsApp
+  // down with it. The addon wires its own scheduler.
+
 // Restore sessions function
 async function restoreSessions() {
   console.log("\nRestoring active sessions...");
@@ -562,28 +626,28 @@ function startSettingsRefreshLoop() {
 // leaves Laravel showing "connected" forever.
 function startDeviceHeartbeat() {
   const HEARTBEAT_MS = 30 * 1000;
-  const axios = (typeof globalThis.axios !== 'undefined') ? globalThis.axios : null;
-  setInterval(async () => {
+  // Campaign draining used to piggy-back this heartbeat (an adaptive fast re-tick
+  // on campaigns_active). That is now a DEDICATED loop — startCampaignDrainLoop()
+  // below — so this stays a plain 30s device-liveness ping and never runs a send
+  // chunk. The timeout is kept generous only because nodeHeartbeat still runs the
+  // other cache-gated sweeps (scheduled-message / broadcast retry, appointments,
+  // etc.); a calm tick still returns in milliseconds.
+  const HB_TIMEOUT_MS = 90 * 1000;
+
+  async function sendHeartbeat() {
     try {
       const phones = Object.keys(app.locals.clients || {});
       // NOTE: the heartbeat (and therefore the scheduled-campaign sweeper)
       // only runs when at least one device is CONNECTED. If no device is
       // live, no heartbeat is sent and scheduled campaigns will NOT fire.
-      if (phones.length === 0) { console.warn('[heartbeat] skip — no clients registered'); return; }
+      if (phones.length === 0) console.warn('[heartbeat] no Baileys clients — sending scheduler heartbeat');
       const live = phones
         .filter((p) => app.locals.client_ready?.[p])
         .map((p) => ({ wid: p, status: 'connected' }));
-      if (live.length === 0) { console.warn(`[heartbeat] skip — ${phones.length} client(s) but none ready/connected`); return; }
+      if (live.length === 0 && phones.length > 0) console.warn(`[heartbeat] ${phones.length} client(s) but none ready — sending scheduler heartbeat`);
       const { default: ax } = await import('axios');
       const { laravelHeaders } = await import('./utils/helpers.js');
 
-      // ----------------------------------------------------------------
-      // DEEP HEARTBEAT DEBUG LOGGING — temporary, for diagnosing why
-      // scheduled campaigns don't fire. The heartbeat drives the Laravel
-      // CampaignScheduleSweeper, so a 403 here means the sweeper never runs.
-      // Quiet this block (back to one console.warn) once scheduling is
-      // confirmed working.
-      // ----------------------------------------------------------------
       const hbHeaders = laravelHeaders();
       const hbToken   = hbHeaders['X-Node-Token'];
       const tokenInfo = hbToken
@@ -593,12 +657,15 @@ function startDeviceHeartbeat() {
 
       const hbRes = await ax.post(`${appDomainName}/api/node-heartbeat`,
         { devices: live },
-        { headers: hbHeaders, timeout: 5000 }
+        { headers: hbHeaders, timeout: HB_TIMEOUT_MS }
       );
       console.warn(`[heartbeat] OK ${hbRes.status} | resp=${JSON.stringify(hbRes.data)}`);
+      // Campaign fast-draining is now startCampaignDrainLoop()'s job; this
+      // return is kept only for logging/back-compat and is otherwise unused.
+      return !!(hbRes.data && hbRes.data.campaigns_active);
     } catch (e) {
       // 404 means the route isn't deployed yet on the Laravel side — ignore.
-      if (e?.response?.status === 404) return;
+      if (e?.response?.status === 404) return false;
       // Everything else -> console.error so it lands in wadesk-node-error.log
       // with the FULL status + response body for inspection.
       const st   = e?.response?.status;
@@ -608,8 +675,60 @@ function startDeviceHeartbeat() {
       if (st === 401 || st === 403) {
         console.error('[heartbeat]   -> 401/403 = X-Node-Token did NOT match Laravel. Set NODE_WEBHOOK_TOKEN to the SAME value in BOTH the Laravel .env and the Node env, then `php artisan config:clear` + `pm2 restart 41 --update-env`. SCHEDULED CAMPAIGNS WILL NOT FIRE until this heartbeat returns 200.');
       }
+      return false;
     }
-  }, HEARTBEAT_MS);
+  }
+
+  // Plain liveness cadence. Campaign fast-draining lives in
+  // startCampaignDrainLoop(), not here.
+  setInterval(() => { sendHeartbeat().catch(() => {}); }, HEARTBEAT_MS);
+}
+
+// Dedicated campaign drain loop — decoupled from the device-liveness heartbeat
+// above. POSTs to /api/campaigns/drain, which runs ONLY the campaign sweep and
+// reports whether a campaign is still draining. While active it re-ticks every
+// DRAIN_FAST_MS so a multi-thousand blast runs back-to-back, server-side, with
+// no browser and no cron; when idle it settles to the calm interval. Runs
+// REGARDLESS of device connectivity so WABA / scheduled campaigns drain even
+// with no Baileys device registered. Long timeout so the ~20s paced chunk that
+// runs inside the request completes instead of aborting.
+function startCampaignDrainLoop() {
+  const DRAIN_CALM_MS    = 30 * 1000;
+  const DRAIN_FAST_MS    = 4 * 1000;
+  const DRAIN_TIMEOUT_MS = 90 * 1000;
+  let fastTimer = null;
+
+  async function drainOnce() {
+    try {
+      const { default: ax } = await import('axios');
+      const { laravelHeaders } = await import('./utils/helpers.js');
+      const res = await ax.post(`${appDomainName}/api/campaigns/drain`, {},
+        { headers: laravelHeaders(), timeout: DRAIN_TIMEOUT_MS });
+      const fired = res?.data?.campaigns_fired ?? 0;
+      if (fired > 0) console.warn(`[campaign-drain] fired ${fired} due campaign(s)`);
+      return !!(res.data && res.data.campaigns_active);
+    } catch (e) {
+      // 404 = /campaigns/drain not deployed yet on Laravel; the 30s heartbeat
+      // sweep still drains campaigns, so just stay calm until it ships.
+      if (e?.response?.status === 404) return false;
+      const st = e?.response?.status;
+      console.error(`[campaign-drain] FAILED status=${st ?? 'n/a'} | msg=${e?.message || e}`);
+      return false;
+    }
+  }
+
+  async function tick() {
+    const active = await drainOnce();
+    if (active) {
+      // clearTimeout keeps a SINGLE fast chain even if the calm interval also
+      // fires tick() — the Laravel sweep is cache-locked, so an overlapping tick
+      // can never double-fire a campaign anyway.
+      clearTimeout(fastTimer);
+      fastTimer = setTimeout(tick, DRAIN_FAST_MS);
+    }
+  }
+
+  setInterval(tick, DRAIN_CALM_MS);
 }
 
   // Fetch all settings on startup
@@ -636,6 +755,11 @@ function startDeviceHeartbeat() {
   // inbox UI's "device offline" badge reflects reality instead of
   // showing the last known state from when Node crashed.
   startDeviceHeartbeat();
+
+  // Campaign engine — dedicated background drain loop so multi-thousand
+  // campaigns run to completion server-side (no browser, no cron) and the
+  // liveness heartbeat above stays fast during a blast.
+  startCampaignDrainLoop();
 
   console.log("\nServer is ready to handle requests\n");
 });

@@ -134,6 +134,13 @@ class FacebookSetupController extends Controller
             return $this->backTo($pageId)->with('status', $ok);
         }
 
+        // `unsupported` means Facebook has retired the field, not that it
+        // refused this particular change — the message already explains what to
+        // do instead, so don't bury it under "Facebook rejected the change".
+        if (! empty($res['unsupported'])) {
+            return $this->backTo($pageId)->withErrors(['facebook' => $res['error']]);
+        }
+
         return $this->backTo($pageId)->withErrors(['facebook' => __('Facebook rejected the change: ').($res['error'] ?? __('unknown error'))]);
     }
 

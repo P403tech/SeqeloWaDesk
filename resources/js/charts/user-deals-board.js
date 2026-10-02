@@ -211,6 +211,405 @@ export default function userDealsBoard() {
         } catch (err) { toast(err?.message || 'Could not save settings.', 'error'); }
     });
 
+    /* ──────────────── pipeline + stage management ────────────────
+     * The tables always carried multiple pipelines and fully editable stages;
+     * nothing exposed them, so every workspace was stuck on the seeded ladder.
+     * Everything below drives the CRUD endpoints on DealsController.
+     * ------------------------------------------------------------------- */
+
+    const sBase       = settingsModal?.dataset.base || baseUrl;
+    const pipelineId  = Number(settingsModal?.dataset.pipelineId || 0);
+    const indexUrl    = document.querySelector('[data-pipeline-switch]')?.dataset.indexUrl || baseUrl;
+
+    /** JSON fetch that surfaces the server's own message — the endpoints return
+     *  actionable 422s (needs_move, only-Won-stage) that must reach the user. */
+    async function jsonReq(url, opts = {}) {
+        const r = await fetch(url, {
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, 'Accept': 'application/json' },
+            ...opts,
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) {
+            const err = new Error(data.message || `HTTP ${r.status}`);
+            err.payload = data;
+            throw err;
+        }
+        return data;
+    }
+
+    /* --- pipeline switcher (also the entry point for creating one) --- */
+    document.querySelector('[data-pipeline-switch]')?.addEventListener('change', async (e) => {
+        const v = e.target.value;
+        if (v !== '__new') { window.location = `${indexUrl}?pipeline=${v}`; return; }
+        e.target.value = String(pipelineId);          // restore before we await
+        const name = window.prompt('Name the new pipeline');
+        if (!name || !name.trim()) return;
+        try {
+            const res = await jsonReq(`${sBase}/pipelines`, { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+            window.location = `${indexUrl}?pipeline=${res.pipeline.id}`;
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    /* --- settings tabs --- */
+    settingsModal?.querySelectorAll('[data-settings-tab]').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const key = tab.dataset.settingsTab;
+            settingsModal.querySelectorAll('[data-settings-tab]').forEach((t) => {
+                const on = t === tab;
+                t.classList.toggle('border-wa-deep', on);
+                t.classList.toggle('text-ink-900', on);
+                t.classList.toggle('border-transparent', !on);
+                t.classList.toggle('text-ink-500', !on);
+            });
+            settingsModal.querySelectorAll('[data-settings-pane]').forEach((p) => {
+                p.hidden = p.dataset.settingsPane !== key;
+            });
+        });
+    });
+
+    /* --- stage rows: inline edit --- */
+    const stageList = settingsModal?.querySelector('[data-stage-list]');
+
+    /** Read a row's controls and PATCH it. Kind maps to the two boolean flags —
+     *  the server clears the opposite flag and demotes any previous holder, so
+     *  a pipeline always resolves exactly one Won and one Lost stage. */
+    async function saveStageRow(row) {
+        const kind = row.querySelector('[data-stage-kind]').value;
+        const body = {
+            name:        row.querySelector('[data-stage-name]').value.trim(),
+            color:       row.querySelector('[data-stage-color]').value,
+            probability: Number(row.querySelector('[data-stage-prob]').value || 0),
+            is_won:      kind === 'won',
+            is_lost:     kind === 'lost',
+        };
+        if (!body.name) { toast('Stage name cannot be empty.', 'error'); return false; }
+        try {
+            await jsonReq(`${sBase}/stages/${row.dataset.stageId}`, { method: 'PATCH', body: JSON.stringify(body) });
+            boardDirty = true;
+            return true;
+        } catch (err) { toast(err.message, 'error'); return false; }
+    }
+
+    stageList?.addEventListener('change', (e) => {
+        const row = e.target.closest('[data-stage-row]');
+        if (row) saveStageRow(row);
+    });
+    // Typing in the name field commits on blur, not on every keystroke.
+    stageList?.addEventListener('focusout', (e) => {
+        if (e.target.matches('[data-stage-name]')) {
+            const row = e.target.closest('[data-stage-row]');
+            if (row) saveStageRow(row);
+        }
+    });
+
+    /* --- stage delete (server may demand a destination) --- */
+    stageList?.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-stage-delete]');
+        if (!btn) return;
+        const row = btn.closest('[data-stage-row]');
+        const id  = row.dataset.stageId;
+        try {
+            await jsonReq(`${sBase}/stages/${id}`, { method: 'DELETE' });
+            row.remove(); boardDirty = true; toast('Stage deleted', 'success');
+        } catch (err) {
+            if (!err.payload?.needs_move) { toast(err.message, 'error'); return; }
+            // Offer the other stages on this pipeline as destinations.
+            const targets = [...stageList.querySelectorAll('[data-stage-row]')]
+                .filter((r) => r !== row)
+                .map((r) => ({ id: r.dataset.stageId, name: r.querySelector('[data-stage-name]').value }));
+            askMove(err.message, targets, async (moveTo) => {
+                await jsonReq(`${sBase}/stages/${id}?move_to=${moveTo}`, { method: 'DELETE' });
+                row.remove(); boardDirty = true; toast('Stage deleted', 'success');
+            });
+        }
+    });
+
+    /* --- stage add --- */
+    settingsModal?.querySelector('[data-stage-add]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = e.target.querySelector('input[name="name"]');
+        const name  = input.value.trim();
+        if (!name) return;
+        try {
+            await jsonReq(`${sBase}/pipelines/${pipelineId}/stages`, { method: 'POST', body: JSON.stringify({ name }) });
+            input.value = '';
+            toast('Stage added — reloading the board', 'success');
+            window.location.reload();
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    /* --- stage reorder (drag the rows) --- */
+    let stageDrag = null;
+    stageList?.querySelectorAll('[data-stage-row]').forEach(bindStageRow);
+
+    function bindStageRow(row) {
+        row.addEventListener('dragstart', () => { stageDrag = row; row.classList.add('dragging'); });
+        row.addEventListener('dragend',   () => { row.classList.remove('dragging'); stageDrag = null; persistStageOrder(); });
+        row.addEventListener('dragover',  (e) => {
+            e.preventDefault();
+            if (!stageDrag || stageDrag === row) return;
+            const box    = row.getBoundingClientRect();
+            const before = e.clientY < box.top + box.height / 2;
+            row.parentNode.insertBefore(stageDrag, before ? row : row.nextSibling);
+        });
+    }
+
+    async function persistStageOrder() {
+        const ids = [...stageList.querySelectorAll('[data-stage-row]')].map((r) => Number(r.dataset.stageId));
+        try {
+            await jsonReq(`${sBase}/pipelines/${pipelineId}/stages/reorder`, { method: 'POST', body: JSON.stringify({ ids }) });
+            boardDirty = true;
+        } catch (err) { toast(err.message, 'error'); }
+    }
+
+    /* --- lost reasons --- */
+    const reasonList = settingsModal?.querySelector('[data-reason-list]');
+
+    const currentReasons = () =>
+        [...(reasonList?.querySelectorAll('[data-reason]') || [])].map((c) => c.dataset.reason);
+
+    async function saveReasons(list) {
+        await jsonReq(`${sBase}/pipelines/${pipelineId}`, {
+            method: 'PATCH', body: JSON.stringify({ lost_reasons: list }),
+        });
+        const empty = reasonList.querySelector('[data-reason-empty]');
+        if (empty) empty.classList.toggle('hidden', list.length > 0);
+        // Keep the Mark-Lost modal in step without a page reload.
+        const lm = document.getElementById('dl-lost-modal');
+        if (lm) lm.dataset.reasons = JSON.stringify(list);
+    }
+
+    settingsModal?.querySelector('[data-reason-add]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = e.target.querySelector('input[name="reason"]');
+        const val   = input.value.trim();
+        if (!val) return;
+        // De-dupe client-side too, so the chip list matches what the server keeps.
+        if (currentReasons().some((r) => r.toLowerCase() === val.toLowerCase())) {
+            toast('That reason is already on the list.', 'info');
+            input.value = '';
+            return;
+        }
+        const next = [...currentReasons(), val];
+        try {
+            await saveReasons(next);
+            reasonList.querySelector('[data-reason-empty]')?.insertAdjacentHTML('beforebegin',
+                `<span class="dl-chip" data-reason="${esc(val)}">${esc(val)}<button type="button" data-reason-del aria-label="Remove">&times;</button></span>`);
+            input.value = '';
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    reasonList?.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-reason-del]');
+        if (!btn) return;
+        const chip = btn.closest('[data-reason]');
+        const next = currentReasons().filter((r) => r !== chip.dataset.reason);
+        try { await saveReasons(next); chip.remove(); }
+        catch (err) { toast(err.message, 'error'); }
+    });
+
+    /* --- pipeline rename / default / delete --- */
+    settingsModal?.querySelector('[data-pipeline-form]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        try {
+            await jsonReq(`${sBase}/pipelines/${pipelineId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: (fd.get('name') || '').toString().trim(), is_default: !!fd.get('is_default') }),
+            });
+            toast('Pipeline saved — reloading', 'success');
+            window.location.reload();
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    settingsModal?.querySelector('[data-pipeline-delete]')?.addEventListener('click', async () => {
+        if (!window.confirm('Delete this pipeline? Its stages go with it.')) return;
+        const done = () => { window.location = indexUrl; };
+        try {
+            await jsonReq(`${sBase}/pipelines/${pipelineId}`, { method: 'DELETE' });
+            done();
+        } catch (err) {
+            if (!err.payload?.needs_move) { toast(err.message, 'error'); return; }
+            let others = [];
+            try {
+                const res = await jsonReq(`${sBase}/pipelines`);
+                others = res.data.filter((p) => p.id !== pipelineId).map((p) => ({ id: p.id, name: p.name }));
+            } catch (_) { /* fall through to the empty-list guard below */ }
+            if (!others.length) { toast('Create another pipeline first.', 'error'); return; }
+            askMove(err.message, others, async (moveTo) => {
+                await jsonReq(`${sBase}/pipelines/${pipelineId}?move_to=${moveTo}`, { method: 'DELETE' });
+                done();
+            });
+        }
+    });
+
+    /* ──────────────── deal custom fields ────────────────
+     * Definitions are managed here; VALUES are edited on each deal's panel and
+     * ride along with PATCH /deals/{id}. Deals never had custom fields, so
+     * anything beyond title/value/owner lived in the free-text notes box where
+     * nothing could filter or report on it.
+     * ------------------------------------------------------------------- */
+
+    const fieldList = settingsModal?.querySelector('[data-field-list]');
+    let FIELD_DEFS = [];
+
+    const TYPE_LABELS = {
+        text: 'Text', number: 'Number', date: 'Date',
+        select: 'Choice', bool: 'Yes / No', url: 'Link', email: 'Email',
+    };
+
+    function renderFieldList() {
+        if (!fieldList) return;
+        if (!FIELD_DEFS.length) {
+            fieldList.innerHTML = '<span data-field-empty class="text-[12px] text-ink-500">No custom fields yet.</span>';
+            return;
+        }
+        fieldList.innerHTML = FIELD_DEFS.map((f) => `
+            <div class="dl-stage-row" data-field-row data-field-id="${f.id}">
+              <input type="text" data-field-label value="${esc(f.label)}" maxlength="128" aria-label="Field label" class="dl-stage-name">
+              <span class="text-[10px] font-mono text-ink-500 shrink-0">${esc(f.key)}</span>
+              <span class="text-[11px] text-ink-500 shrink-0">${esc(TYPE_LABELS[f.type] || f.type)}</span>
+              ${f.type === 'select'
+                ? `<input type="text" data-field-options value="${esc((f.options || []).join(', '))}" placeholder="option, option" aria-label="Choices" class="dl-stage-name" style="flex:1.4">`
+                : ''}
+              <label class="dl-stage-prob" title="Required">
+                <input type="checkbox" data-field-required ${f.required ? 'checked' : ''} aria-label="Required">
+                <span>req</span>
+              </label>
+              <button type="button" data-field-delete aria-label="Delete field" class="dl-stage-del">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+              </button>
+            </div>`).join('');
+    }
+
+    async function loadFieldDefs() {
+        try {
+            const res = await jsonReq(`${sBase}/fields`);
+            FIELD_DEFS = res.data || [];
+            renderFieldList();
+        } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // Load lazily — only when the Custom fields tab is first opened, so the
+    // board's initial render never waits on a request most sessions won't need.
+    let fieldsLoaded = false;
+    settingsModal?.querySelector('[data-settings-tab="fields"]')?.addEventListener('click', () => {
+        if (fieldsLoaded) return;
+        fieldsLoaded = true;
+        loadFieldDefs();
+    });
+
+    settingsModal?.querySelector('[data-field-add]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form  = e.target;
+        const label = form.querySelector('[name="label"]').value.trim();
+        const type  = form.querySelector('[name="type"]').value;
+        if (!label) return;
+        try {
+            await jsonReq(`${sBase}/fields`, { method: 'POST', body: JSON.stringify({ label, type }) });
+            form.querySelector('[name="label"]').value = '';
+            await loadFieldDefs();
+            toast('Field added', 'success');
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    // Inline edits commit on change/blur, mirroring the stage rows above.
+    const saveFieldRow = async (row) => {
+        const optsEl = row.querySelector('[data-field-options]');
+        const body = {
+            label:    row.querySelector('[data-field-label]').value.trim(),
+            required: row.querySelector('[data-field-required]').checked,
+        };
+        if (optsEl) {
+            body.options = optsEl.value.split(',').map((s) => s.trim()).filter(Boolean);
+        }
+        if (!body.label) { toast('Field name cannot be empty.', 'error'); return; }
+        try { await jsonReq(`${sBase}/fields/${row.dataset.fieldId}`, { method: 'PATCH', body: JSON.stringify(body) }); }
+        catch (err) { toast(err.message, 'error'); }
+    };
+
+    fieldList?.addEventListener('change', (e) => {
+        const row = e.target.closest('[data-field-row]');
+        if (row) saveFieldRow(row);
+    });
+    fieldList?.addEventListener('focusout', (e) => {
+        if (e.target.matches('[data-field-label],[data-field-options]')) {
+            const row = e.target.closest('[data-field-row]');
+            if (row) saveFieldRow(row);
+        }
+    });
+
+    fieldList?.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-field-delete]');
+        if (!btn) return;
+        if (!window.confirm('Remove this field? Values already saved on deals are kept.')) return;
+        const row = btn.closest('[data-field-row]');
+        try {
+            await jsonReq(`${sBase}/fields/${row.dataset.fieldId}`, { method: 'DELETE' });
+            FIELD_DEFS = FIELD_DEFS.filter((f) => String(f.id) !== String(row.dataset.fieldId));
+            renderFieldList();
+            toast('Field removed', 'success');
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    /* --- Mark Lost: picklist when configured, free text otherwise --- */
+    const lostModal = document.getElementById('dl-lost-modal');
+
+    function askLostReason(onConfirm) {
+        if (!lostModal) { onConfirm(''); return; }
+        let reasons = [];
+        try { reasons = JSON.parse(lostModal.dataset.reasons || '[]'); } catch (_) { reasons = []; }
+
+        lostModal.querySelector('[data-lost-field]').innerHTML = reasons.length
+            ? `<label class="block text-xs font-semibold text-ink-500 mb-1">Reason</label>
+               <select name="reason" required class="dl-field">
+                 <option value="">Select a reason…</option>
+                 ${reasons.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}
+               </select>`
+            : `<label class="block text-xs font-semibold text-ink-500 mb-1">Reason (optional)</label>
+               <input type="text" name="reason" maxlength="191" class="dl-field" placeholder="Why was this deal lost?">`;
+
+        lostModal._onConfirm = onConfirm;
+        lostModal.classList.add('open');
+    }
+
+    lostModal?.querySelectorAll('[data-lost-cancel]').forEach((b) =>
+        b.addEventListener('click', () => lostModal.classList.remove('open')));
+    lostModal?.addEventListener('click', (e) => { if (e.target === lostModal) lostModal.classList.remove('open'); });
+    lostModal?.querySelector('[data-lost-form]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const field  = lostModal.querySelector('[name="reason"]');
+        const reason = (field?.value || '').trim();
+        try {
+            await lostModal._onConfirm?.(reason);
+            lostModal.classList.remove('open');
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
+    /* --- shared "where should the deals go?" prompt --- */
+    const moveModal = document.getElementById('dl-move-modal');
+
+    function askMove(message, targets, onConfirm) {
+        if (!moveModal) return;
+        moveModal.querySelector('[data-move-message]').textContent = message;
+        moveModal.querySelector('[data-move-target]').innerHTML =
+            targets.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+        moveModal._onConfirm = onConfirm;
+        moveModal.classList.add('open');
+    }
+
+    moveModal?.querySelectorAll('[data-move-cancel]').forEach((b) =>
+        b.addEventListener('click', () => moveModal.classList.remove('open')));
+    moveModal?.addEventListener('click', (e) => { if (e.target === moveModal) moveModal.classList.remove('open'); });
+    moveModal?.querySelector('[data-move-form]')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const target = moveModal.querySelector('[data-move-target]').value;
+        try {
+            await moveModal._onConfirm?.(target);
+            moveModal.classList.remove('open');
+        } catch (err) { toast(err.message, 'error'); }
+    });
+
     /* ───────────────────────── detail slide-over ───────────────────────── */
 
     const panel = document.getElementById('dl-panel');
@@ -300,6 +699,43 @@ export default function userDealsBoard() {
 
         const timeline = acts.length ? acts.map(renderActivity).join('') : '<div class="text-[12px] text-ink-400 py-3">No activity yet — add a note, log a call, or set a task above.</div>';
 
+        // Workspace-defined custom fields. The section is omitted entirely when
+        // none are defined — an empty heading reads like something failed to
+        // load. Each input carries data-custom so the existing change handler
+        // routes it to the `custom` payload instead of a column.
+        const customFields = (data.custom || []).filter((f) => f.show_in_panel !== false);
+        const customBlock = customFields.length ? `
+            <section class="mb-5">
+                <div class="dl-eyebrow">More details</div>
+                <div class="grid grid-cols-2 gap-3">
+                    ${customFields.map((f) => {
+                        const v = f.value === null || f.value === undefined ? '' : String(f.value);
+                        let input;
+                        if (f.type === 'select') {
+                            input = `<select data-custom="${esc(f.key)}" class="dl-field mt-1">
+                                <option value=""></option>
+                                ${(f.options || []).map((o) => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+                            </select>`;
+                        } else if (f.type === 'bool') {
+                            // Tri-state on purpose: "not answered yet" is a real
+                            // and different state from "No".
+                            input = `<select data-custom="${esc(f.key)}" class="dl-field mt-1">
+                                <option value="" ${v === '' ? 'selected' : ''}>—</option>
+                                <option value="yes" ${(v === '1' || v === 'true') ? 'selected' : ''}>Yes</option>
+                                <option value="no"  ${(v === '0' || v === 'false') ? 'selected' : ''}>No</option>
+                            </select>`;
+                        } else {
+                            const t = f.type === 'number' ? 'number'
+                                : f.type === 'date' ? 'date'
+                                : f.type === 'email' ? 'email'
+                                : f.type === 'url' ? 'url' : 'text';
+                            input = `<input type="${t}" data-custom="${esc(f.key)}" value="${esc(v)}" class="dl-field mt-1">`;
+                        }
+                        return `<label class="text-[11px] font-semibold text-ink-500">${esc(f.label)}${f.required ? ' *' : ''}${input}</label>`;
+                    }).join('')}
+                </div>
+            </section>` : '';
+
         panelBody.innerHTML = `
             <div class="dl-phead">
                 <div class="flex items-start justify-between gap-3">
@@ -352,6 +788,8 @@ export default function userDealsBoard() {
                     ${d.lost_reason ? `<div class="text-[12px] text-ink-500 mt-2">Lost reason: ${esc(d.lost_reason)}</div>` : ''}
                 </section>
 
+                ${customBlock}
+
                 <section>
                     <div class="dl-eyebrow">Activity</div>
                     <div class="flex items-center gap-2 mb-2">
@@ -375,6 +813,25 @@ export default function userDealsBoard() {
         if (el.matches('[data-act-type]')) {
             const due = panelBody.querySelector('[data-act-due]');
             if (due) due.style.display = el.value === 'task' ? '' : 'none';
+            return;
+        }
+        // Custom fields go to the same PATCH, nested under `custom` — the server
+        // MERGES that map, so sending one key at a time never clears the others.
+        if (el.matches('[data-custom]')) {
+            const body = { custom: { [el.dataset.custom]: el.value } };
+            try {
+                const res = await api(`${panelBase}/${openId}`, { method: 'PATCH', body: JSON.stringify(body) });
+                boardDirty = true;
+                // The server skips a value that doesn't fit its field type and
+                // keeps the old one. Say so — a silently reverted input reads as
+                // a bug, and the operator has no other way to know.
+                if ((res?.skipped_custom || []).includes(el.dataset.custom)) {
+                    toast('That value does not fit this field — left unchanged.', 'error');
+                    openPanel(openId);
+                } else {
+                    toast('Saved', 'success');
+                }
+            } catch (err) { toast(err.message, 'error'); }
             return;
         }
         if (el.matches('[data-edit]')) {
@@ -415,8 +872,16 @@ export default function userDealsBoard() {
             return;
         }
         if (el.hasAttribute('data-lost')) {
-            try { await api(`${panelBase}/${openId}/lost`, { method: 'POST', body: '{}' }); boardDirty = true; toast('Marked Lost', 'info'); openPanel(openId); }
-            catch (err) { toast(err.message, 'error'); }
+            // Ask WHY before losing the deal. With a configured picklist the
+            // server rejects anything off-list, so the report can group on the
+            // exact string; with no list the box is free text, exactly as before.
+            askLostReason(async (reason) => {
+                await api(`${panelBase}/${openId}/lost`, {
+                    method: 'POST',
+                    body: JSON.stringify(reason ? { reason } : {}),
+                });
+                boardDirty = true; toast('Marked Lost', 'info'); openPanel(openId);
+            });
             return;
         }
         if (el.hasAttribute('data-act-add')) {

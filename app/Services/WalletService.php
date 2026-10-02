@@ -167,17 +167,48 @@ class WalletService
      * Add money to the currency wallet AND auto-convert to credits
      * inside the same transaction. Returns ['currencyTx', 'creditTx'].
      *
-     * `credits_per_currency_minor` controls the conversion rate:
-     * 0.1 means each minor unit (1 paise) buys 0.1 credits, i.e.
-     * ₹1 = 10 credits. Admins can tune this in /admin/settings.
+     * `credits_per_currency_minor` is the credits granted per ONE MAJOR
+     * currency unit (₹1) — exactly the number the admin Wallet-rules page
+     * shows and labels ("how many credits per 1 of money paid"). $minor is
+     * paise, so it is converted paise → major before the rate is applied:
+     * rate 0.1 → ₹1 buys 0.1 credit (₹10/credit); rate 100 → ₹1 buys 100
+     * credits. Admins tune it in /admin/settings/wallet-rules.
      */
+    /**
+     * Money (minor units) → credits, at the platform's ONE conversion rate.
+     *
+     * THE single place this conversion may happen. It used to be inlined in
+     * topup() only, and the referral payout — which stores its reward in the
+     * same money-minor units — skipped it entirely and credited the raw minor
+     * figure as credits. That made one rupiah/rupee/dollar worth 100 credits
+     * when earned but `credits_per_currency_unit` credits when bought: at a
+     * rate of 0.01 the referral paid out 10,000× what the same money buys.
+     *
+     * Both callers now share this method, so the two can no longer disagree.
+     *
+     * floor(), not round(): granting a credit that was not paid for is the
+     * error worth avoiding, and it matches what topup() always did.
+     */
+    public function creditsForMinor(int $minor): int
+    {
+        if ($minor <= 0) {
+            return 0;
+        }
+        // Rate is credits per MAJOR unit (₹1 / Rp1), matching the admin page's
+        // label "how many credits per 1 of money paid". $minor is hundredths of
+        // a major unit, so divide by 100 before applying the rate.
+        $rate = (float) SystemSetting::get('credits_per_currency_minor', 0.1);
+
+        return (int) floor(($minor / 100) * $rate);
+    }
+
     public function topup(User $user, int $minor, string $sourceCurrency = 'razorpay.topup', string $sourceCredit = 'topup.conversion', ?string $description = null, array $meta = []): array
     {
         if ($minor <= 0) {
             throw new RuntimeException("topup called with non-positive minor amount: $minor");
         }
         $rate = (float) SystemSetting::get('credits_per_currency_minor', 0.1);
-        $creditsToAdd = (int) floor($minor * $rate);
+        $creditsToAdd = $this->creditsForMinor($minor);
 
         return DB::transaction(function () use ($user, $minor, $sourceCurrency, $sourceCredit, $description, $meta, $creditsToAdd, $rate) {
             $fresh = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();

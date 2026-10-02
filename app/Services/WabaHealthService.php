@@ -133,6 +133,20 @@ class WabaHealthService
                 $out['waba'] = $r['data'];
                 $this->absorbHealthStatus($out, $r['data']['health_status'] ?? null);
                 $this->absorbWabaStatuses($out, $r['data']);
+
+                // Owner business + Ownership need business-level access and are
+                // in the RICH set only — when the rich read 400s and we fell back
+                // to safe, they're missing, blanking the Business-account panel.
+                // Read JUST those in an isolated best-effort request so a
+                // permission error on them can't wipe the fields we already have.
+                if (empty($out['waba']['ownership_type']) || empty($out['waba']['owner_business_info'])) {
+                    $rb = $this->get($token, $waba, ['fields' => 'ownership_type,owner_business_info,on_behalf_of_business_info']);
+                    if ($rb['ok'] && is_array($rb['data'] ?? null)) {
+                        foreach (['ownership_type', 'owner_business_info', 'on_behalf_of_business_info'] as $bf) {
+                            if (!empty($rb['data'][$bf])) $out['waba'][$bf] = $rb['data'][$bf];
+                        }
+                    }
+                }
             } else {
                 // Meta error #10 = the app's Business isn't a registered WhatsApp
                 // Tech/Solution Provider for this WABA — almost always because the
@@ -270,7 +284,7 @@ class WabaHealthService
             if ($appId === '' || $appSecret === '') {
                 $this->pushIssue($out, 'info', 'Token', 0, 'Token scopes/expiry not shown',
                     'The token is working (Meta accepted the account reads on this page), but the Meta App ID + App Secret are not configured, so the permission list and expiry can not be introspected.',
-                    'Add the Meta App ID + App Secret in Admin → WhatsApp (WABA) settings to enable full token diagnostics.');
+                    setup_hint('Add the Meta App ID + App Secret in Admin → WhatsApp (WABA) settings to enable full token diagnostics.', 'Full token diagnostics are unavailable. Please contact support.'));
             } elseif (!$readOk) {
                 $this->pushIssue($out, 'warning', 'Token', 0, 'Could not verify the token',
                     'Meta did not accept this token for the token debug or the account reads.',

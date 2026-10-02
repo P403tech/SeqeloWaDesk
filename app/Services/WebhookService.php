@@ -39,6 +39,13 @@ class WebhookService
             'contact_opt_in'                    => 'Contact opted in',
             'contact_updated'                   => 'Contact updated',
             'device_status_updated'             => 'Device status updated',
+            // CRM pipeline + Meta Lead Ads. `lead_received` fires once per
+            // Instant-Form submission (webhook OR backfill — whichever sees it
+            // first, never both, because meta_leads.leadgen_id is unique).
+            'lead_received'                     => 'Meta lead-ad form submitted',
+            'deal_created'                      => 'Deal created',
+            'deal_won'                          => 'Deal won',
+            'deal_lost'                         => 'Deal lost',
         ];
     }
 

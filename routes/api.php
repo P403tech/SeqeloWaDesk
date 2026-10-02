@@ -27,6 +27,14 @@ Route::post('/instaflow/inbound',
     [\App\Http\Controllers\Api\InstaflowInboundController::class, 'ingest'])
     ->name('instaflow.inbound');
 
+// ───────── MailTrixy (Email) → WaDesk push ─────────
+// The separate MailTrixy deployment pushes each new inbound email here; the
+// controller self-guards on the X-Mailtrixy-Secret shared secret. Serves
+// /api/mailtrixy/inbound.
+Route::post('/mailtrixy/inbound',
+    [\App\Http\Controllers\Api\MailtrixyInboundController::class, 'ingest'])
+    ->name('mailtrixy.inbound');
+
 // ───────── Scheduled / Broadcast / Campaign status callbacks ─────────
 Route::post('/update-schedule-status',
     [\App\Http\Controllers\ScheduledController::class, 'updateStatus'])
@@ -66,6 +74,12 @@ Route::post('/campaigns/track-response',
 Route::post('/campaigns/unsubscribe',
     [\App\Http\Controllers\WaCampaignsController::class, 'nodeUnsubscribe'])
     ->name('wa-campaigns.node.unsubscribe');
+// Dedicated campaign-drain tick from the Node bridge (startCampaignDrainLoop).
+// Runs ONLY the campaign sweep and reports campaigns_active so Node can re-tick
+// back-to-back until a big blast finishes — no cron, no browser.
+Route::post('/campaigns/drain',
+    [\App\Http\Controllers\WaCampaignsController::class, 'nodeCampaignDrain'])
+    ->name('wa-campaigns.node.drain');
 
 // ───────── Baileys client status callbacks ─────────
 Route::post('/update-status',
@@ -118,12 +132,46 @@ Route::post('/commerce/check-inventory',
     ->name('api.commerce.inventory');
 
 // ───────── Flow-node side-effects ─────────
+// Node fires this when a flow RUN ends naturally — persists completed_at so
+// /flows/analytics can show a real completion rate + duration (previously the
+// run stayed 'active' forever because completion was in-memory only).
+Route::post('/flow-node/complete',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'complete'])
+    ->name('api.flow-node.complete');
+// Node stamps the wait node a run parks on → /flows/analytics drop-off funnel.
+Route::post('/flow-node/position',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'position'])
+    ->name('api.flow-node.position');
+// Node parks a LONG duration-delay here so a restart can't drop it; the
+// heartbeat sweep resumes it. (Durable long delays.)
+Route::post('/flow-node/delay-park',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'delayPark'])
+    ->name('api.flow-node.delay-park');
+// Durable SESSIONS — Node snapshots a reply-waiting session here (upsert/clear)
+// and reads it back after a restart to rehydrate + continue the flow.
+Route::post('/flow-node/park-session',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'parkSession'])
+    ->name('api.flow-node.park-session');
+Route::get('/flow-node/park-session',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'getParkSession'])
+    ->name('api.flow-node.park-session.get');
 Route::post('/flow-node/tag',
     [\App\Http\Controllers\FlowNodeActionsController::class, 'tag'])
     ->name('api.flow-node.tag');
 Route::post('/flow-node/assign',
     [\App\Http\Controllers\FlowNodeActionsController::class, 'assign'])
     ->name('api.flow-node.assign');
+Route::post('/flow-node/task',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'task'])
+    ->name('api.flow-node.task');
+Route::post('/flow-node/contact-update',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'contactUpdate'])
+    ->name('api.flow-node.contact-update');
+// Flow templates ask Laravel to upload a media-header sample to Meta once,
+// then Node sends the returned media id instead of an unreachable CDN link.
+Route::post('/flow-node/template-header-media',
+    [\App\Http\Controllers\FlowNodeActionsController::class, 'templateHeaderMedia'])
+    ->name('api.flow-node.template-header-media');
 Route::post('/flow-node/place-ai-call',
     [\App\Http\Controllers\FlowNodeActionsController::class, 'placeAiCall'])
     ->name('api.flow-node.place-ai-call');
@@ -246,6 +294,48 @@ Route::get('/campaigns/sync', function (\Illuminate\Http\Request $request) {
         'campaigns' => [],
     ]);
 });
+
+// Flow "collect media" (Phase 3). The Node flow runtime POSTs a customer's
+// uploaded media here (base64) so it lands on OUR disk and the Ask-node
+// variable can hold a durable public URL. WABA/Twilio inbound media is already
+// stored by the webhook; this covers the Baileys path (raw buffer lives in
+// Node). Gated by the same X-Node-Token as every other Node-bridge route.
+Route::post('/flow/store-media', function (\Illuminate\Http\Request $request) {
+    $expected = node_token();
+    $got      = (string) $request->header('X-Node-Token', '');
+    if ($expected === '' || !hash_equals($expected, $got)) {
+        return response()->json(['ok' => false, 'error' => 'unauthorized'], 401);
+    }
+    $data = (string) $request->input('data', '');
+    $mime = (string) $request->input('mime', 'application/octet-stream');
+    if ($data === '') {
+        return response()->json(['ok' => false, 'error' => 'no_data'], 422);
+    }
+    // Accept a data: URI or a bare base64 string.
+    if (str_contains($data, ',')) {
+        $data = substr($data, strpos($data, ',') + 1);
+    }
+    $bin = base64_decode($data, true);
+    if ($bin === false || strlen($bin) === 0) {
+        return response()->json(['ok' => false, 'error' => 'bad_base64'], 422);
+    }
+    if (strlen($bin) > 25 * 1024 * 1024) {   // 25 MB safety cap
+        return response()->json(['ok' => false, 'error' => 'too_large'], 413);
+    }
+    // Store under the SAME chat-media/ convention the inbound webhook uses so
+    // AiAgentService::resolveInboundImage() finds it identically.
+    $ext  = app(\App\Services\Waba\WabaMediaFetcher::class)->extFor($mime);
+    $path = 'chat-media/' . \Illuminate\Support\Str::random(24) . '.' . $ext;
+    media_storage()->put($path, $bin);
+
+    // Return an ABSOLUTE url — a flow variable may feed a WABA header, which
+    // Meta must be able to fetch (a relative /storage path would 404 there).
+    $url = media_storage()->url($path);
+    if (!preg_match('#^https?://#i', $url)) {
+        $url = url($url);
+    }
+    return response()->json(['ok' => true, 'path' => $path, 'url' => $url]);
+})->name('flow.store-media');
 
 Route::get('/keyword-replies',
     [\App\Http\Controllers\AutoReplyController::class, 'lookup'])

@@ -182,8 +182,15 @@ class AuthController extends Controller
             'name'                  => 'required|string|max:191',
             'email'                 => 'required|email|max:191|unique:users,email',
             // Mobile is MANDATORY — we contact users for account verification,
-            // support and security notices. National number + dial code.
-            'mobile'                => ['required', 'string', 'max:20', 'regex:/^[0-9()+\-\s]{6,20}$/'],
+            // support and security notices. National number + dial code. It must
+            // also be UNIQUE across accounts (one number = one account) — checked
+            // on a digits-only canonical so formatting can't slip a duplicate past.
+            'mobile'                => ['required', 'string', 'max:20', 'regex:/^[0-9()+\-\s]{6,20}$/',
+                function ($attr, $value, $fail) use ($request) {
+                    if (\App\Support\MobileNumber::isTaken($request->input('country_code'), $value)) {
+                        $fail(__('This mobile number is already registered.'));
+                    }
+                }],
             'country_code'          => ['required', 'string', 'max:8'],
             'password'              => ['required', 'confirmed', \App\Support\PasswordPolicy::rule()],
             'agree'                 => 'accepted',
@@ -289,20 +296,60 @@ class AuthController extends Controller
         }
         $slug = Workspace::generateSlug($data['name']);
 
-        // Resolve the plan a new workspace lands on. Admin picks it at
-        // /admin/settings/general; fall back to a package flagged
-        // is_default, then the first active free plan, then the legacy
-        // 'starter' slug so signup never breaks if plans are misconfigured.
-        $defaultPlanId = trim((string) \App\Models\SystemSetting::get('registration_default_plan_id', ''));
-        $package = $defaultPlanId !== ''
-            ? \App\Models\Package::where('plan_id', $defaultPlanId)->where('status', 1)->first()
-            : null;
-        $package ??= \App\Models\Package::where('status', 1)->where('is_default', true)->first();
-        $package ??= \App\Models\Package::where('status', 1)
+        // Resolve the plan a new workspace lands on. Admin controls this at
+        // /admin/settings/general:
+        //   • "Assign a plan on registration" OFF → NO plan is assigned; the
+        //     owner picks (and pays for) one on the plan step. This is the safe
+        //     option — it stops a PAID default plan from ever being granted for
+        //     free (the bug where a user selected a paid plan, skipped payment,
+        //     and still ended up "on" it).
+        //   • ON (default) → the admin's default plan is used, falling back to a
+        //     package flagged is_default, then the first active free plan.
+        //     A PAID resolved plan is downgraded to free here, because a paid
+        //     plan must NEVER be handed out at signup without going through
+        //     checkout.
+        $freePlan = fn () => \App\Models\Package::where('status', 1)
             ->where(fn ($q) => $q->where('free', true)
                 ->orWhere(fn ($q2) => $q2->where('plan_amount', 0)->where('is_custom_quote', false)))
             ->orderBy('sort_order')->first();
-        $planSlug = $package?->plan_id ?? 'starter';
+
+        $package = null;
+        if ((bool) \App\Models\SystemSetting::get('registration_assign_plan', true)) {
+            $defaultPlanId = trim((string) \App\Models\SystemSetting::get('registration_default_plan_id', ''));
+            $package = $defaultPlanId !== ''
+                ? \App\Models\Package::where('plan_id', $defaultPlanId)->where('status', 1)->first()
+                : null;
+            $package ??= \App\Models\Package::where('status', 1)->where('is_default', true)->first();
+            $package ??= $freePlan();
+            // A paid plan is only ever entered through checkout — never granted here.
+            if ($package && ! $package->isFreePlan()) {
+                $package = $freePlan();
+            }
+        } else {
+            // Toggle OFF — ignore the configured default entirely and land the
+            // workspace on the FREE tier. The owner upgrades via checkout when
+            // they choose a paid plan, so a paid plan is never auto-granted.
+            $package = $freePlan();
+        }
+        // `workspaces.plan` is NOT NULL, so always keep a slug — but it must NEVER
+        // resolve to a PAID package for a brand-new, unpaid workspace. Otherwise
+        // the profile shows that paid plan as "current" and the plans page blocks
+        // the owner from ever paying for it (the reported bug on installs with NO
+        // free plan, where the old hardcoded 'starter' fallback happened to match
+        // a paid tier). Rules: a resolved FREE package keeps its slug; otherwise
+        // fall back to a slug that maps to NO paid package (a real free plan's
+        // slug, an unmapped 'starter', else the neutral sentinel '__free__' which
+        // resolves to no package and is therefore treated as free — leaving every
+        // plan purchasable).
+        if ($package && $package->isFreePlan()) {
+            $planSlug = $package->plan_id;
+        } else {
+            $planSlug = $freePlan()?->plan_id;
+            if (! $planSlug) {
+                $starter = \App\Models\Package::where('plan_id', 'starter')->first();
+                $planSlug = (! $starter || $starter->isFreePlan()) ? 'starter' : '__free__';
+            }
+        }
 
         $attrs = [
             'owner_user_id' => $user->id,
@@ -310,7 +357,7 @@ class AuthController extends Controller
             'slug'          => $slug,
             'industry'      => $data['industry'] ?? null,
             'size_range'    => $data['size_range'] ?? null,
-            'timezone'      => $data['timezone'] ?? 'Asia/Kolkata',
+            'timezone'      => $data['timezone'] ?? \App\Models\SystemSetting::get('default_timezone', config('app.timezone', 'Asia/Kolkata')),
             'plan'          => $planSlug,
             'status'        => true,
             'last_active_at'=> now(),
@@ -342,28 +389,13 @@ class AuthController extends Controller
             }
         }
 
-        // generateSlug() pre-checks uniqueness, but two concurrent signups with
-        // the same workspace name (or a retried request) can both pass that
-        // check and then collide on INSERT — surfacing a raw
-        // UniqueConstraintViolationException 500 to the user. Catch it and retry
-        // with a random suffix so signup always succeeds instead of erroring.
-        $workspace = null;
-        for ($try = 0; $try < 5; $try++) {
-            try {
-                $workspace = Workspace::create($attrs);
-                break;
-            } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
-                if (! str_contains($e->getMessage(), 'workspaces_slug_unique')) {
-                    throw $e; // a different unique constraint — don't mask it
-                }
-                $attrs['slug'] = Str::slug($data['name'] ?: 'workspace') . '-' . Str::lower(Str::random(6));
-            }
-        }
-        if (! $workspace) {
-            // Extremely unlikely (5 random-suffix collisions) — last-ditch unique slug.
-            $attrs['slug'] = 'workspace-' . $user->id . '-' . Str::lower(Str::random(6));
-            $workspace = Workspace::create($attrs);
-        }
+        // Slug collisions are absorbed by createWithUniqueSlug() -- the
+        // pre-check in generateSlug() and the INSERT are not atomic, so a
+        // double-submit or two same-named signups can still race. The retry
+        // used to be inlined here, which meant registration recovered but
+        // every other creation path 500-ed; it now lives on the model so all
+        // callers share it.
+        $workspace = Workspace::createWithUniqueSlug($attrs);
 
         $workspace->members()->attach($user->id, [
             'role'      => 'owner',
@@ -416,6 +448,15 @@ class AuthController extends Controller
     public function switchWorkspace(Request $request, int $id): RedirectResponse
     {
         if (!Auth::check()) return redirect()->route('login');
+
+        // On a white-label tenant domain the user is LOCKED to that one
+        // workspace — switching is disabled (and the middleware would override
+        // it back every request anyway). Never let a tenant-domain visitor hop
+        // to another workspace.
+        if (\App\Http\Middleware\ResolveTenantDomain::isTenant()) {
+            return back()->with('error', __('Workspace switching is disabled on this domain.'));
+        }
+
         $user = Auth::user();
         if (!$user->switchWorkspace($id)) {
             return back()->with('error', 'You are not a member of that workspace.');

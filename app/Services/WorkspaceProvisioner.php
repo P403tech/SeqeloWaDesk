@@ -53,7 +53,7 @@ class WorkspaceProvisioner
             }
         }
 
-        $workspace = Workspace::create($attrs);
+        $workspace = Workspace::createWithUniqueSlug($attrs);
         $workspace->members()->attach($user->id, ['role' => 'owner', 'joined_at' => now()]);
         $user->switchWorkspace($workspace->id);
 

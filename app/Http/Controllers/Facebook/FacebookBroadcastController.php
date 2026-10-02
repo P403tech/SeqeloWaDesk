@@ -36,6 +36,19 @@ class FacebookBroadcastController extends Controller
     public function index(): View
     {
         $wsId  = $this->workspaceId();
+
+        // Reconcile any SENDING broadcast that has NO pending recipients left
+        // to DONE. The send loop is browser-driven, so a finished run can be
+        // left showing "Sending" forever if the last batch's completion write
+        // never landed (tab closed mid-tick) — the panel then never reports the
+        // broadcast ended. Cheap: status-only, no sends. Runs on page open
+        // (project policy is no cron — periodic work sweeps on a poll/load).
+        FacebookBroadcast::query()
+            ->where('workspace_id', $wsId)
+            ->where('status', FacebookBroadcast::STATUS_SENDING)
+            ->whereDoesntHave('recipients', fn ($q) => $q->where('status', FacebookBroadcastRecipient::STATUS_PENDING))
+            ->update(['status' => FacebookBroadcast::STATUS_DONE, 'finished_at' => now()]);
+
         $pages = FacebookPage::forWorkspace($wsId)->connected()->orderBy('name')->get();
 
         // Eligible audience per page (24h window), resolved once for the form.
@@ -207,8 +220,21 @@ class FacebookBroadcastController extends Controller
         $buttons = $this->fbButtons(is_array($broadcast->buttons) ? $broadcast->buttons : []);
         $cutoff  = now()->subHours(self::WINDOW_HOURS);
 
-        $rows = $broadcast->recipients()->where('status', FacebookBroadcastRecipient::STATUS_PENDING)
-            ->orderBy('id')->limit(self::BATCH)->get();
+        // Atomically CLAIM this batch out of PENDING so two overlapping ticks
+        // (a browser double-poll, or a resume racing the poller) can NEVER
+        // select the same recipient and send it twice — the "delivered 6 times"
+        // bug. Lock the rows, flip them out of PENDING inside the transaction,
+        // commit; then send OUTSIDE the lock and reconcile each true outcome.
+        $rows = \Illuminate\Support\Facades\DB::transaction(function () use ($broadcast) {
+            $claimed = $broadcast->recipients()
+                ->where('status', FacebookBroadcastRecipient::STATUS_PENDING)
+                ->orderBy('id')->limit(self::BATCH)->lockForUpdate()->get();
+            if ($claimed->isNotEmpty()) {
+                $broadcast->recipients()->whereIn('id', $claimed->pluck('id'))
+                    ->update(['status' => FacebookBroadcastRecipient::STATUS_SENT, 'sent_at' => now()]);
+            }
+            return $claimed;
+        });
 
         foreach ($rows as $row) {
             // Re-check the 24h window per recipient — a batch can run minutes after
@@ -225,6 +251,9 @@ class FacebookBroadcastController extends Controller
                 continue;
             }
 
+            // Already claimed to SENT in the locked batch above — a recipient
+            // can never be re-selected as PENDING and re-sent. We only reconcile
+            // the TRUE outcome below (window-block / send-fail).
             $text = $this->personalise($body, $row);
             $res  = $buttons
                 ? $client->sendButtonTemplate($row->psid, $text, $buttons)
@@ -232,24 +261,30 @@ class FacebookBroadcastController extends Controller
 
             if ($res['ok'] ?? false) {
                 $mid = (string) ($res['mid'] ?? '');
-                $row->forceFill([
-                    'status'              => FacebookBroadcastRecipient::STATUS_SENT,
-                    'provider_message_id' => $mid,
-                    'sent_at'             => now(),
-                    'error'               => null,
-                ])->save();
-                $broadcast->increment('sent');
-                $this->mirror($broadcast, $row, $text, $mid);
+                // Visibility: log Meta's accept so "did it actually send?" is answerable.
+                Log::info('[FB-BROADCAST-SEND] ok', ['broadcast_id' => $broadcast->id, 'psid' => $row->psid, 'mid' => $mid]);
+                // Each bookkeeping step is guarded + logged on its own, so a failure
+                // in ONE (e.g. a bad increment column) can't silently abort the
+                // others — that was why the counter stayed 0 AND the inbox mirror
+                // never ran (a throw here skipped everything after it).
+                try { $row->forceFill(['provider_message_id' => $mid, 'error' => null])->save(); } catch (\Throwable $e) {}
+                try { $broadcast->increment('sent'); }
+                catch (\Throwable $e) { Log::warning('[FB-BROADCAST-SEND] sent-counter increment failed', ['broadcast_id' => $broadcast->id, 'error' => $e->getMessage()]); }
+                $this->mirror($broadcast, $row, $text, $mid);   // self-guarded (logs its own failure)
                 continue;
             }
 
+            // Send failed → downgrade the optimistic claim to failed/blocked so
+            // the operator sees the real result (and it is NOT re-sent).
             $error = (string) ($res['error'] ?? 'Facebook rejected the send.');
+            Log::warning('[FB-BROADCAST-SEND] failed', ['broadcast_id' => $broadcast->id, 'psid' => $row->psid, 'error' => $error]);
             $gone  = FacebookBroadcastRecipient::isUnreachable($error);
             $row->forceFill([
-                'status' => $gone ? FacebookBroadcastRecipient::STATUS_BLOCKED : FacebookBroadcastRecipient::STATUS_FAILED,
-                'error'  => mb_substr($error, 0, 255),
+                'status'  => $gone ? FacebookBroadcastRecipient::STATUS_BLOCKED : FacebookBroadcastRecipient::STATUS_FAILED,
+                'sent_at' => null,
+                'error'   => mb_substr($error, 0, 255),
             ])->save();
-            $broadcast->increment($gone ? 'blocked' : 'failed');
+            try { $broadcast->increment($gone ? 'blocked' : 'failed'); } catch (\Throwable $e) {}
         }
 
         $broadcast->refresh();
@@ -333,7 +368,23 @@ class FacebookBroadcastController extends Controller
 
     private function personalise(string $body, FacebookBroadcastRecipient $row): string
     {
-        return trim(str_replace(['{{name}}', '{{ name }}'], (string) ($row->title ?: ''), $body));
+        // A Messenger broadcast recipient only carries the PSID + the Messenger
+        // display name (title) — there is no per-recipient order/custom data. So
+        // {{name}} / {{first_name}} / {{last_name}} fill from that name, and ANY
+        // other token (e.g. {{order_id}}) resolves to EMPTY — the old code only
+        // replaced {{name}} and shipped every other token as a literal "{{...}}".
+        $name  = trim((string) ($row->title ?: ''));
+        $space = mb_strpos($name, ' ');
+        $map = [
+            'name'       => $name,
+            'first_name' => $space === false ? $name : trim(mb_substr($name, 0, $space)),
+            'last_name'  => $space === false ? ''    : trim(mb_substr($name, $space + 1)),
+        ];
+        $out = preg_replace_callback('/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/', function ($m) use ($map) {
+            return $map[strtolower($m[1])] ?? '';
+        }, $body);
+        // Collapse the double spaces an emptied token leaves behind.
+        return trim((string) preg_replace('/[ \t]{2,}/', ' ', (string) $out));
     }
 
     /** A sent broadcast belongs in the thread an operator would read it in. */
@@ -343,7 +394,7 @@ class FacebookBroadcastController extends Controller
             return;
         }
         try {
-            InboxMessage::create([
+            $inbox = InboxMessage::create([
                 'conversation_id' => $row->conversation_id,
                 'provider'        => 'facebook',
                 'direction'       => 'out',
@@ -357,8 +408,28 @@ class FacebookBroadcastController extends Controller
                 'sent_at' => now(),
             ]);
             Conversation::whereKey($row->conversation_id)->update(['last_message_at' => now(), 'last_outbound_at' => now()]);
+
+            // Announce it in realtime so the sent broadcast shows in the OPEN inbox
+            // thread without a manual refresh. Inbound already fires this event; the
+            // broadcast mirror was creating the row but never announcing it, so it
+            // looked like "the broadcast isn't mirroring to the inbox".
+            try {
+                event(new \App\Events\Inbox\MessageReceived(
+                    (int) $inbox->id,
+                    (int) $row->conversation_id,
+                    (int) $broadcast->workspace_id,
+                    'out',
+                    null
+                ));
+            } catch (\Throwable $e) { /* realtime push is best-effort */ }
         } catch (\Throwable $e) {
-            Log::warning('[FB-BROADCAST] mirror failed: '.$e->getMessage());
+            // Enriched so a create failure (missing column / bad conversation) is
+            // traceable instead of a bare message.
+            Log::warning('[FB-BROADCAST] mirror failed', [
+                'conversation_id' => $row->conversation_id,
+                'broadcast_id'    => $broadcast->id,
+                'error'           => $e->getMessage(),
+            ]);
         }
     }
 

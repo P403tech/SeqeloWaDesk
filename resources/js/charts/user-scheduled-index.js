@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /*
  * /scheduled — list page wiring.
  * - Renders all rows server-side (encrypted name/body forces this).
@@ -138,23 +140,17 @@ export default function init() {
      * snaps to current.
      */
     const POLL_MS = 15_000;
-    let pollHandle = null;
-    function startPoll() {
-        if (pollHandle) return;
-        pollHandle = setInterval(() => {
-            if (document.hidden) return;
-            refreshSilent();
-        }, POLL_MS);
-    }
-    function stopPoll() {
-        if (!pollHandle) return;
-        clearInterval(pollHandle);
-        pollHandle = null;
-    }
-    startPoll();
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) refreshSilent();
+    // Shared poller — adds the overlap guard this loop never had, pauses on a
+    // hidden tab, and widens to 60s once the list settles. A scheduled list is
+    // mostly static between the minute a send is due and the next one, so a
+    // flat 15s was four requests a minute to learn nothing.
+    const poller = createPoller(async () => { await refreshSilent(); return false; }, {
+        interval: POLL_MS, maxInterval: 60_000,
     });
+    function startPoll() { poller.start(); }
+    function stopPoll()  { poller.stop(); }
+    // The poller owns visibilitychange (pause while hidden, fire on return).
+    startPoll();
     window.addEventListener('pagehide', stopPoll);
 
     /**

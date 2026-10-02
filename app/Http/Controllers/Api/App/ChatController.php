@@ -403,6 +403,37 @@ class ChatController extends Controller
             }
         }
         if (! $deviceId) {
+            // `active` is the operator's on/off flag, NOT the live session
+            // state — a device can sit active=1 while its session is dead. Ask
+            // for status=connected too, otherwise a workspace whose only
+            // Unofficial number is offline binds every new thread to it and the
+            // send fails, even with a healthy WABA/Twilio number available.
+            $d = Device::query()->forCurrentWorkspace()
+                ->where('active', 1)->where('status', 'connected')
+                ->orderByDesc('id')->first();
+            if ($d) {
+                $deviceId = (int) $d->id;
+                $engine   = WorkspaceEngine::ENGINE_BAILEYS;
+            }
+        }
+        if (! $deviceId && ! $engine) {
+            // No live Unofficial device — use a connected WABA/Twilio account
+            // before falling through to the bare workspace default, so the
+            // thread is pinned to a number that can actually deliver.
+            $cfg = \App\Models\WaProviderConfig::query()
+                ->where('workspace_id', $wsId)
+                ->whereIn('provider', ['waba', 'twilio'])
+                ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
+                ->orderByDesc('is_primary')->orderByDesc('connected_at')
+                ->first();
+            if ($cfg) {
+                $deviceId = (int) $cfg->id;   // polymorphic, same as conversations.device_id
+                $engine   = (string) $cfg->provider;
+            }
+        }
+        if (! $deviceId) {
+            // Still nothing live — keep the old behaviour of pinning to an
+            // active-but-offline device rather than leaving the thread unbound.
             $d = Device::query()->forCurrentWorkspace()->where('active', 1)->orderByDesc('id')->first();
             if ($d) {
                 $deviceId = (int) $d->id;
@@ -427,6 +458,15 @@ class ChatController extends Controller
         // keeps ONE THREAD PER NUMBER. (device_id below stamps the new row.)
         $existing = \App\Services\Inbox\ConversationResolver::find((int) $wsId, $digits, $deviceId);
         if ($existing) {
+            // Rename-on-existing: a POST that carries a `name` must RENAME the
+            // thread, not silently drop it. (The get-or-create only ever set the
+            // name on CREATION, so renaming an existing chat was a no-op — the
+            // reported bug.) Prefer the dedicated PATCH /chats/{id} endpoint, but
+            // keep this working since the app already posts here.
+            if (trim((string) ($data['name'] ?? '')) !== '') {
+                $this->applyChatName($existing, (string) $data['name']);
+            }
+
             return response()->json([
                 'success' => true,
                 'data'    => $this->presentConversation($existing),
@@ -454,6 +494,29 @@ class ChatController extends Controller
             'success' => true,
             'data'    => $this->presentConversation($c),
         ], 201);
+    }
+
+    /**
+     * PATCH /chats/{id} — rename a thread. Body: { name }. Dedicated endpoint so
+     * the intent is explicit (vs. overloading POST /chats). An empty/blank name
+     * clears the custom name back to the bare "+phone". Returns the updated
+     * conversation in the same shape as every other chat endpoint.
+     */
+    public function rename(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['name' => 'nullable|string|max:191']);
+
+        $c = Conversation::query()->forCurrentWorkspace()->find($id);
+        if (! $c) {
+            return response()->json(['success' => false, 'message' => 'Conversation not found.'], 404);
+        }
+
+        $this->applyChatName($c, (string) ($data['name'] ?? ''));
+
+        return response()->json([
+            'success' => true,
+            'data'    => $this->presentConversation($c),
+        ], 200);
     }
 
     // -----------------------------------------------------------------
@@ -842,20 +905,46 @@ class ChatController extends Controller
             }
         }
 
-        $contactAttr = function (string $key) use ($contact, $jidDigits): string {
+        // Scalarise a custom value — a custom attribute may hold a nested array;
+        // casting that straight to string would warn + emit "Array".
+        $scalar = fn ($v) => is_scalar($v) ? (string) $v : '';
+        $contactAttr = function (string $key) use ($contact, $jidDigits, $scalar): string {
+            $norm = str_replace([' ', '-'], '_', strtolower(trim($key)));
             if (! $contact) {
-                return in_array(strtolower($key), ['phone', 'mobile', 'number'], true) ? $jidDigits : '';
+                return in_array($norm, ['phone', 'mobile', 'number', 'phone_number', 'whatsapp'], true) ? $jidDigits : '';
             }
+            // Fixed attributes → the REAL Contact columns. The Contact table uses
+            // `mobile` (NOT `phone_number`) and has no `company` column, so the old
+            // aliases silently resolved {{phone}} etc. to blank. Cover every fixed
+            // key GET /attributes exposes (address / country_code / last_name /
+            // language / title / subject …) so they all resolve on send.
             $aliases = [
-                'name' => 'name', 'first_name' => 'name',
-                'phone' => 'phone_number', 'mobile' => 'phone_number',
-                'email' => 'email', 'company' => 'company',
+                'name' => 'name', 'full_name' => 'name',
+                'first_name' => 'first_name', 'middle_name' => 'middle_name', 'last_name' => 'last_name',
+                'title' => 'title', 'subject' => 'subject', 'language' => 'language', 'address' => 'address',
+                'email' => 'email', 'country_code' => 'country_code',
+                'phone' => 'mobile', 'mobile' => 'mobile', 'number' => 'mobile',
+                'phone_number' => 'mobile', 'whatsapp' => 'mobile',
             ];
-            $norm = str_replace([' ', '-'], '_', strtolower($key));
-            $col  = $aliases[$norm] ?? $aliases[strtolower($key)] ?? null;
-            if ($col && isset($contact->{$col})) return (string) $contact->{$col};
+            if (isset($aliases[$norm])) {
+                $col = $aliases[$norm];
+                $val = $scalar($contact->{$col} ?? '');
+                if ($val === '' && $col === 'mobile') $val = $jidDigits; // fall back to thread number
+                if ($val === '' && $col === 'name') {
+                    $val = trim($scalar($contact->first_name ?? '') . ' ' . $scalar($contact->last_name ?? ''));
+                }
+                return $val;
+            }
+            // Custom attributes — exact, normalised, then a CASE-INSENSITIVE match.
+            // The stored key casing ("Order ID" / "orderId") often differs from the
+            // {{token}} the template uses, which is why custom attrs "didn't go".
             $custom = is_array($contact->custom_attributes ?? null) ? $contact->custom_attributes : [];
-            return (string) ($custom[$key] ?? $custom[$norm] ?? $custom[ucwords(str_replace('_', ' ', $norm))] ?? '');
+            if (array_key_exists($key, $custom))  return $scalar($custom[$key]);
+            if (array_key_exists($norm, $custom)) return $scalar($custom[$norm]);
+            foreach ($custom as $ck => $cv) {
+                if (strcasecmp(str_replace([' ', '-'], '_', (string) $ck), $norm) === 0) return $scalar($cv);
+            }
+            return '';
         };
 
         $resolveToken = function (string $key) use ($bodyMap, $otpCode, $contactAttr): string {
@@ -1947,11 +2036,94 @@ class ChatController extends Controller
         }
     }
 
+    /**
+     * The real phone digits for a thread, '' when there is none.
+     * For a @lid (linked-identity) chat the phone is NOT in raw_jid — that's the
+     * LID id — it lives in contact_digits (or the alt_jid phone form, or the
+     * "+<digits>" the title carries). Groups / Instagram / Facebook return ''.
+     */
+    private static function convPhone(Conversation $c): string
+    {
+        $rawJid = (string) $c->raw_jid;
+        if (str_ends_with($rawJid, '@g.us')) {
+            return '';
+        }
+        if (str_contains($rawJid, '@s.whatsapp.net')) {
+            return (string) preg_replace('/\D+/', '', explode('@', $rawJid)[0]);
+        }
+        // @lid or other non-phone raw_jid → the real phone is NOT in raw_jid, and
+        // NOT in contact_digits either — for a @lid row that column holds the LID
+        // (linked-identity id), not the phone. It lives in alt_jid (the
+        // @s.whatsapp.net form) or is embedded in the stored title as "+<digits>".
+        $alt = (string) ($c->alt_jid ?? '');
+        if (str_contains($alt, '@s.whatsapp.net')) {
+            return (string) preg_replace('/\D+/', '', explode('@', $alt)[0]);
+        }
+        if (preg_match('/\+(\d{8,15})\s*$/', (string) self::safeAttr($c, 'title'), $m)) {
+            return $m[1];
+        }
+        return '';
+    }
+
+    /**
+     * Rename a thread. `conversations` has NO contact_name column — the display
+     * name is `title`, stored in the SAME "<name> · +<phone>" shape
+     * ConversationResolver::defaultTitle writes, so the web inbox stays
+     * consistent and the app serializer (presentConversation) splits it back to a
+     * clean name. Empty name → fall back to just the phone. Groups / non-phone
+     * channels store the bare name.
+     */
+    private function applyChatName(Conversation $c, string $name): void
+    {
+        $name  = trim($name);
+        $phone = self::convPhone($c);
+
+        if ($name === '') {
+            $c->title = $phone !== '' ? '+' . $phone : (string) self::safeAttr($c, 'title');
+        } elseif ($phone !== '') {
+            $c->title = $name . ' · +' . $phone;
+        } else {
+            $c->title = $name;
+        }
+        $c->save();
+    }
+
     private function presentConversation(Conversation $c): array
     {
+        // Split the stored thread title into a CLEAN name + phone. Threads opened
+        // via ConversationResolver store the title as "<name> · +<digits>" (or
+        // just "+<digits>" when the contact is unnamed). The app wants those two
+        // parts separately so it can show a clean primary line ("Himanshu") and
+        // format the number itself on a secondary line — instead of always
+        // getting "Himanshu · +91…". We split on the app surface only, so what's
+        // stored (and the web inbox) is untouched.
+        $rawTitle = (string) (self::safeAttr($c, 'title') ?? '');
+        // Real phone for the thread. For @lid (linked-identity) chats the phone is
+        // NOT in raw_jid — that's the LID id — so it comes from contact_digits.
+        // Groups / non-phone channels resolve to ''.
+        $phone    = self::convPhone($c);
+
+        $name = $rawTitle;
+        if ($phone !== '') {
+            $suffix = ' · +' . $phone;
+            if (str_ends_with($rawTitle, $suffix)) {
+                $name = substr($rawTitle, 0, -strlen($suffix));       // "<name>"
+            } elseif ($rawTitle === '+' . $phone || $rawTitle === $phone) {
+                $name = '';                                           // number-only, no name set
+            }
+        }
+        $name         = trim($name);
+        $phoneDisplay = $phone !== '' ? '+' . $phone : '';
+        // Primary display: the contact name when set, else the +phone. No suffix.
+        $title        = $name !== '' ? $name : ($phoneDisplay !== '' ? $phoneDisplay : $rawTitle);
+
         return [
             'id'               => $c->id,
-            'title'            => self::safeAttr($c, 'title'),
+            'title'            => $title,
+            // Broken-out fields so the app can format name / phone lines itself.
+            'name'             => $name,
+            'phone'            => $phone,
+            'phone_display'    => $phoneDisplay,
             'preview'          => self::safeAttr($c, 'preview'),
             'status'           => $c->status,
             'archived'         => (bool) $c->archived,
@@ -2045,7 +2217,45 @@ class ChatController extends Controller
             'delivered_at'        => $m->delivered_at?->toIso8601String(),
             'read_at'             => $m->read_at?->toIso8601String(),
             'created_at'          => $m->created_at?->toIso8601String(),
+        ] + $this->aiFields($m);
+    }
+
+    /**
+     * Who sent an outbound bubble — the AI agent or a human operator — mirroring
+     * what the web Team Inbox shows (the "AgentName ★score" tag). The app uses
+     * `is_ai` to badge AI replies differently from human ones. All values come
+     * from columns already on the row (agent_id / quality_score / quality_note /
+     * user_id) — no schema change. Works for both Message and InboxMessage.
+     */
+    private function aiFields($m): array
+    {
+        $agentId = $m->agent_id ? (int) $m->agent_id : null;
+        $isAi    = $m->direction === 'out' && $agentId !== null;
+        $info    = $isAi ? $this->aiAgentInfo($agentId) : ['name' => null, 'color' => null];
+
+        return [
+            // 'customer' (inbound) | 'ai' (auto-reply) | 'human' (operator)
+            'sent_by'       => $m->direction === 'in' ? 'customer' : ($isAi ? 'ai' : 'human'),
+            'is_ai'         => $isAi,                                    // <- the simple AI-vs-human flag
+            'agent_id'      => $agentId,                                 // AI agent id (null when human)
+            'agent_name'    => $info['name'],                           // e.g. "test"
+            'agent_color'   => $info['color'],
+            'user_id'       => $m->user_id ? (int) $m->user_id : null,   // human operator (null when AI)
+            'quality_score' => $m->quality_score !== null ? (int) $m->quality_score : null, // the ★ (1–10)
+            'quality_note'  => $m->quality_note ?? null,
         ];
+    }
+
+    /** Memoised AI-agent name/color lookup so a thread of AI replies is one query per agent. */
+    private static array $aiAgentInfoCache = [];
+    private function aiAgentInfo(int $agentId): array
+    {
+        if (! array_key_exists($agentId, self::$aiAgentInfoCache)) {
+            $a = \App\Models\AiAgent::find($agentId);
+            self::$aiAgentInfoCache[$agentId] = ['name' => $a?->name, 'color' => $a?->avatar_color];
+        }
+
+        return self::$aiAgentInfoCache[$agentId];
     }
 
     /**
@@ -2099,7 +2309,7 @@ class ChatController extends Controller
             'delivered_at'        => $m->delivered_at?->toIso8601String(),
             'read_at'             => $m->read_at?->toIso8601String(),
             'created_at'          => $m->created_at?->toIso8601String(),
-        ];
+        ] + $this->aiFields($m);
     }
 
     /**

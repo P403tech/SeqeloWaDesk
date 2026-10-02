@@ -55,7 +55,7 @@
         [
             'roman' => 'iii',
             'cat' => fc('use-cases.case3_cat', __('Customer service')),
-            'title' => fc('use-cases.case3_title', __('Slack-fast,<br>for WhatsApp.')),
+            'title' => fc('use-cases.case3_title', __('Slack-fast,<br>for every channel.')),
             'bullets' => [fc('use-cases.case3_bullet1', __('Shared inbox & SLA timers')), fc('use-cases.case3_bullet2', __('Auto-reply on keywords')), fc('use-cases.case3_bullet3', __('Round-robin assignment')), fc('use-cases.case3_bullet4', __('Internal notes & @mentions'))],
             'uplift' => fc('use-cases.case3_uplift', '3× ' . __('faster')),
         ],

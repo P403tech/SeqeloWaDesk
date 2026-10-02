@@ -65,7 +65,7 @@ class WorkspacesController extends Controller
             Workspace::where('owner_user_id', $user->id)->count(),
         );
 
-        $workspace = Workspace::create([
+        $workspace = Workspace::createWithUniqueSlug([
             'owner_user_id'  => $user->id,
             'name'           => $data['name'],
             'slug'           => Workspace::generateSlug($data['name']),

@@ -23,6 +23,96 @@ use Illuminate\Support\Facades\Log;
 
 class AiAgentService
 {
+    /**
+     * OpenAI-compatible brands → base URL. Every provider here speaks the
+     * OpenAI /chat/completions API, so callProvider() reaches it via callOpenAI()
+     * with this base URL. (openai itself is included so its default is explicit;
+     * anthropic / gemini / mistral are NOT here — they use their own helpers.)
+     * Each brand's key is stored/resolved by its provider slug, admin + BYOK.
+     */
+    private const OAI_BASE = [
+        'openai'     => 'https://api.openai.com/v1',
+        'openrouter' => 'https://openrouter.ai/api/v1',
+        'deepseek'   => 'https://api.deepseek.com',
+        'xai'        => 'https://api.x.ai/v1',
+        'perplexity' => 'https://api.perplexity.ai',
+        'groq'       => 'https://api.groq.com/openai/v1',
+        'together'   => 'https://api.together.xyz/v1',
+        'fireworks'  => 'https://api.fireworks.ai/inference/v1',
+        'qwen'       => 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+        'moonshot'   => 'https://api.moonshot.ai/v1',
+        'zai'        => 'https://api.z.ai/api/paas/v4',
+        'cohere'     => 'https://api.cohere.ai/compatibility/v1',
+        'nvidia'     => 'https://integrate.api.nvidia.com/v1',
+        'llama'      => 'https://api.llama.com/compat/v1',
+        'huggingface'=> 'https://router.huggingface.co/v1',
+        'baidu'      => 'https://qianfan.baidubce.com/v2',
+        'ai21'       => 'https://api.ai21.com/studio/v1',
+        'reka'       => 'https://api.reka.ai/v1',
+        'yi'         => 'https://api.01.ai/v1',
+    ];
+
+    /**
+     * Every text provider callProvider() can actually reach: the
+     * OpenAI-compatible brands above, plus the three with their own helpers.
+     *
+     * Validators MUST build their allow-list from here rather than hardcoding
+     * one. The AI pickers are data-driven (they list whatever admin key is
+     * active), so a hardcoded `in:openai,anthropic,gemini` meant the dropdown
+     * offered Mistral while the endpoint rejected it with Laravel's stock
+     * "The selected provider is invalid." — a dead option in the UI.
+     *
+     * @return array<int,string>
+     */
+    /**
+     * A sane current model id per provider, used when an admin activates a key
+     * but leaves default_model blank.
+     *
+     * The model pickers used to `continue` past such a row, so the provider
+     * vanished from the dropdown with no explanation — the key was active, the
+     * UI just silently refused to offer it.
+     */
+    public static function fallbackModel(string $provider): string
+    {
+        return match (strtolower($provider)) {
+            'openai'     => 'gpt-4o-mini',
+            'anthropic'  => 'claude-sonnet-4-20250514',
+            'gemini'     => 'gemini-2.0-flash',
+            'mistral'    => 'mistral-small-latest',
+            'deepseek'   => 'deepseek-chat',
+            'xai'        => 'grok-2-latest',
+            'groq'       => 'llama-3.3-70b-versatile',
+            'perplexity' => 'sonar',
+            'openrouter' => 'openai/gpt-4o-mini',
+            'qwen'       => 'qwen-plus',
+            'moonshot'   => 'moonshot-v1-8k',
+            'cohere'     => 'command-r',
+            'together'   => 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+            'fireworks'  => 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+            default      => '',
+        };
+    }
+
+    public static function supportedProviders(): array
+    {
+        return array_values(array_unique(array_merge(
+            array_keys(self::OAI_BASE),
+            ['anthropic', 'gemini', 'mistral', 'muse'],
+        )));
+    }
+
+    /**
+     * Why the last provider call produced nothing, in words a user can act on.
+     * Null when the call succeeded or the provider gave no reason.
+     *
+     * The helpers return null on failure, which made every cause — bad key,
+     * retired model id, safety block, token exhaustion — look identical to the
+     * controllers. They now read this to say what actually went wrong.
+     */
+    private ?string $lastProviderError = null;
+
+    public function lastProviderError(): ?string { return $this->lastProviderError; }
+
     public function __construct(private InboxDispatcher $dispatcher, private WalletService $wallet)
     {
     }
@@ -31,7 +121,7 @@ class AiAgentService
      * If the conversation has an AI agent assigned and auto_respond is on,
      * generate a reply and store + dispatch it. Returns the Message or null.
      */
-    public function respondIfAssigned(Conversation $convo): ?InboxMessage
+    public function respondIfAssigned(Conversation $convo, ?string $flowContext = null): ?InboxMessage
     {
         if (!$convo->assignee_agent_id) {
             return null;
@@ -132,7 +222,7 @@ class AiAgentService
         // the workspace is genuinely over-cap AND out of wallet credits the
         // dispatcher throws PlanLimitReachedException, which we catch below to hand
         // off (same intent as the old out-of-credits gate, but plan-aware).
-        $reply = $this->generateReply($agent, $convo);
+        $reply = $this->generateReply($agent, $convo, $flowContext);
         if (!$reply) {
             Log::warning('[AI-AGENT] empty reply from LLM', [
                 'agent_id'   => $agent->id,
@@ -415,7 +505,7 @@ class AiAgentService
      * Generate a reply text using the agent's LLM config.
      * Called by respondIfAssigned() and by the inline test endpoint.
      */
-    public function generateReply(AiAgent $agent, Conversation $convo): ?string
+    public function generateReply(AiAgent $agent, Conversation $convo, ?string $flowContext = null): ?string
     {
         $history = InboxMessage::query()
             ->where('conversation_id', $convo->id)
@@ -463,6 +553,11 @@ class AiAgentService
             }
         }
 
+        // Knowledge base — when the agent is linked to a trained /ai-training
+        // assistant, fold that assistant's knowledge (URLs / text / Q&A) into the
+        // system prompt so the inbox AI answers FROM that knowledge. Reuses the
+        // exact context builder the Flow AI node / chat widget uses, so the two
+        // stay consistent. Null link → unchanged behaviour.
         $kbId = (int) ($agent->knowledge_assistant_id ?? 0);
         if ($kbId > 0) {
             try {
@@ -483,6 +578,19 @@ class AiAgentService
             } catch (\Throwable $e) {
                 Log::warning('[AI-AGENT] knowledge base inject failed: ' . $e->getMessage(), ['agent' => $agent->id]);
             }
+        }
+
+        // Flow answers — when the AI node runs at the END of a flow (after Ask
+        // nodes / a WhatsApp Form the customer filled), the collected answers
+        // are passed in so the agent replies BASED ON what the customer already
+        // chose/entered, and never re-asks. These are structured answers that
+        // aren't otherwise in the plain-text transcript (a WhatsApp Form
+        // submission in particular is not readable in the message history).
+        if ($flowContext !== null && trim($flowContext) !== '') {
+            $systemPrompt .= "\n\n--- What the customer already provided in the automated flow ---\n"
+                . trim($flowContext)
+                . "\n--- End flow answers ---"
+                . "\n\nThe customer answered these questions / filled this form BEFORE reaching you. Use these answers to inform your reply, and do NOT ask again for anything already provided above.";
         }
 
         // Vision — if the customer's latest inbound message is an image,
@@ -716,14 +824,24 @@ class AiAgentService
         } catch (\Throwable $e) { /* never block a send on the cap lookup */ }
 
         try {
-            $reply = match ($provider) {
-                'openai'    => $this->callOpenAI($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode),
-                'anthropic' => $this->callAnthropic($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode),
-                'gemini'    => $this->callGemini($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode),
-                'mistral'   => $this->callMistral($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $jsonMode),
-                'muse'      => $this->callMuse($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $jsonMode),
-                default     => null,
-            };
+            // 20 AI brands as first-class providers. Anthropic + Gemini have
+            // their own APIs; Mistral keeps its native helper; EVERY other brand
+            // speaks the OpenAI /chat/completions API, so we reach it with
+            // callOpenAI + that brand's base URL (see self::OAI_BASE). Each brand
+            // has its own key (admin global + per-workspace BYOK, resolved above).
+            if ($provider === 'anthropic') {
+                $reply = $this->callAnthropic($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode);
+            } elseif ($provider === 'gemini') {
+                $reply = $this->callGemini($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode);
+            } elseif ($provider === 'mistral') {
+                $reply = $this->callMistral($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $jsonMode);
+            } elseif ($provider === 'muse') {
+                $reply = $this->callMuse($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $jsonMode);
+            } elseif (isset(self::OAI_BASE[$provider])) {
+                $reply = $this->callOpenAI($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, $image, $jsonMode, self::OAI_BASE[$provider]);
+            } else {
+                $reply = null;
+            }
 
             // Meter token usage so the AI dashboard + monthly cap see this call.
             // Counts are estimated (~4 chars/token) since the per-provider
@@ -743,6 +861,49 @@ class AiAgentService
             return $reply;
         } catch (\Throwable $e) {
             Log::error("[AI-AGENT] provider={$provider} model={$model} error: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Same provider routing as callProvider(), but with an EXPLICIT api key and
+     * NO workspace key-resolution or token metering. For platform features that
+     * hold their own admin-set key and are not tied to any workspace/BYOK — e.g.
+     * the Client Support Bot's AI + web tiers. Returns reply text or null.
+     */
+    public function callProviderWithKey(
+        string $provider,
+        string $model,
+        string $apiKey,
+        string $systemPrompt,
+        string $userPrompt,
+        int $maxTokens = 512,
+        float $temperature = 0.7,
+    ): ?string {
+        // Clear first so a caller never reads a reason left over from an
+        // earlier, unrelated call.
+        $this->lastProviderError = null;
+
+        if (trim($apiKey) === '') {
+            $this->lastProviderError = "No API key is configured for {$provider}.";
+            return null;
+        }
+        try {
+            if ($provider === 'anthropic') {
+                return $this->callAnthropic($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature);
+            }
+            if ($provider === 'gemini') {
+                return $this->callGemini($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature);
+            }
+            if ($provider === 'mistral') {
+                return $this->callMistral($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature);
+            }
+            if (isset(self::OAI_BASE[$provider])) {
+                return $this->callOpenAI($apiKey, $model, $systemPrompt, $userPrompt, $maxTokens, $temperature, null, false, self::OAI_BASE[$provider]);
+            }
+            return null;
+        } catch (\Throwable $e) {
+            Log::error("[SUPPORT-BOT] provider={$provider} model={$model} error: " . $e->getMessage());
             return null;
         }
     }
@@ -789,6 +950,8 @@ class AiAgentService
         if ($res->ok()) {
             return trim((string) ($res->json('choices.0.message.content') ?? '')) ?: null;
         }
+        $this->lastProviderError = 'Mistral HTTP ' . $res->status()
+            . (($m = (string) ($res->json('message') ?? $res->json('error.message') ?? '')) !== '' ? ': ' . $m : '.');
         Log::warning('[AI-AGENT] Mistral non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
         return null;
     }
@@ -830,7 +993,7 @@ class AiAgentService
         return null;
     }
 
-    private function callOpenAI(string $key, string $model, string $system, string $user, int $maxTokens, float $temp, ?array $image = null, bool $jsonMode = false): ?string
+    private function callOpenAI(string $key, string $model, string $system, string $user, int $maxTokens, float $temp, ?array $image = null, bool $jsonMode = false, string $baseUrl = 'https://api.openai.com/v1'): ?string
     {
         // Multimodal content array when an image is attached, else the
         // plain string the text path always sent (Chat Completions vision).
@@ -875,12 +1038,20 @@ class AiAgentService
         }
 
         $res = Http::withToken($key)
+            ->withHeaders([
+                // OpenRouter recommends these for attribution/rankings; harmless
+                // for OpenAI + custom OpenAI-compatible endpoints (they ignore them).
+                'HTTP-Referer' => (string) config('app.url', ''),
+                'X-Title'      => (string) \App\Models\SystemSetting::get('app_name', 'WaDesk'),
+            ])
             ->timeout($image ? 60 : 30)
-            ->post('https://api.openai.com/v1/chat/completions', $payload);
+            ->post(rtrim($baseUrl, '/') . '/chat/completions', $payload);
         if ($res->ok()) {
             return trim((string) ($res->json('choices.0.message.content') ?? '')) ?: null;
         }
-        Log::warning('[AI-AGENT] OpenAI non-200', ['status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
+        $this->lastProviderError = 'Provider HTTP ' . $res->status()
+            . (($m = (string) ($res->json('error.message') ?? '')) !== '' ? ': ' . $m : '.');
+        Log::warning('[AI-AGENT] OpenAI-compatible non-200', ['base' => $baseUrl, 'status' => $res->status(), 'body' => substr($res->body(), 0, 300)]);
         return null;
     }
 
@@ -927,6 +1098,8 @@ class AiAgentService
         }
         // Log the actual error BODY (bad model id, unsupported param, billing,
         // etc.) — not just the status — so "no content" is diagnosable.
+        $this->lastProviderError = 'Anthropic HTTP ' . $res->status()
+            . (($m = (string) ($res->json('error.message') ?? '')) !== '' ? ': ' . $m : '.');
         Log::warning('[AI-AGENT] Anthropic non-200', [
             'status' => $res->status(),
             'model'  => $model,
@@ -956,9 +1129,63 @@ class AiAgentService
             ]
         );
         if ($res->ok()) {
-            return trim((string) ($res->json('candidates.0.content.parts.0.text') ?? '')) ?: null;
+            $text = trim((string) ($res->json('candidates.0.content.parts.0.text') ?? ''));
+            if ($text !== '') {
+                return $text;
+            }
+
+            // HTTP 200 with no usable text. Gemini does this in two common
+            // cases, and both used to surface as the same useless "provider
+            // returned no content — check API key", sending people to inspect
+            // a key that was never the problem:
+            //   SAFETY     — the candidate is returned with NO parts at all
+            //   MAX_TOKENS — the budget ran out before any text was emitted
+            $finish = (string) ($res->json('candidates.0.finishReason') ?? '');
+            $block  = (string) ($res->json('promptFeedback.blockReason') ?? '');
+
+            $this->lastProviderError = match (true) {
+                $block !== ''             => "Gemini blocked the prompt (blockReason: {$block}).",
+                $finish === 'SAFETY'      => 'Gemini blocked the response as unsafe (finishReason: SAFETY). Rephrase the description.',
+                $finish === 'MAX_TOKENS'  => 'Gemini hit the token limit before returning any text (finishReason: MAX_TOKENS).',
+                $finish === 'RECITATION'  => 'Gemini refused to return the response (finishReason: RECITATION).',
+                $finish !== ''            => "Gemini returned no text (finishReason: {$finish}).",
+                default                   => 'Gemini returned an empty response.',
+            };
+
+            Log::warning('[AI-AGENT] Gemini empty candidate', [
+                'model'        => $model,
+                'finishReason' => $finish,
+                'blockReason'  => $block,
+                'body'         => mb_substr($res->body(), 0, 2000),
+            ]);
+
+            return null;
         }
-        Log::warning('[AI-AGENT] Gemini non-200', ['status' => $res->status()]);
+
+        // Non-200. The BODY is where Google puts the actual reason — a wrong
+        // model id, a key without the Generative Language API enabled, a
+        // referrer restriction. Logging only the status threw all of that
+        // away, which is why "check your API key" was a guess rather than a
+        // diagnosis. Keep it for the caller so the UI can show the truth.
+        $reason = (string) ($res->json('error.message') ?? '');
+        $status = $res->status();
+
+        $this->lastProviderError = $reason !== ''
+            ? "Gemini HTTP {$status}: {$reason}"
+            : "Gemini HTTP {$status}.";
+
+        if ($status === 404) {
+            $this->lastProviderError .= " The model id \"{$model}\" is not available to this API key — Google retired the Gemini 1.5 models for keys issued after April 2025.";
+        } elseif ($status === 403) {
+            $this->lastProviderError .= ' Enable the Generative Language API on the key\'s Google Cloud project, and check any key referrer/IP restrictions.';
+        }
+
+        Log::warning('[AI-AGENT] Gemini non-200', [
+            'status' => $status,
+            'model'  => $model,
+            'body'   => mb_substr($res->body(), 0, 2000),
+        ]);
+
         return null;
     }
 
@@ -1109,6 +1336,52 @@ class AiAgentService
             }
         } catch (\Throwable $e) {
             Log::warning('[AI-AGENT] handoff notify failed: ' . $e->getMessage());
+        }
+
+        // Tell the CUSTOMER a human is taking over — previously the handoff only
+        // tagged + notified the TEAM, so the customer got silence after the AI
+        // stopped. Best-effort: a failure here never blocks the handoff. Message
+        // is workspace-configurable with a sane default.
+        try {
+            $ackText = trim((string) (\App\Models\SystemSetting::get('ai_handoff_customer_message', '')
+                ?: 'Thanks for your patience — I\'m connecting you with a team member now. Please hold on a moment.'));
+
+            $toNumber = InboxMessage::query()
+                ->where('conversation_id', $convo->id)->where('direction', 'in')
+                ->orderByDesc('id')->value('from_number');
+            if (!$toNumber && $convo->raw_jid) {
+                $toNumber = preg_replace('/\D+/', '', (string) $convo->raw_jid);
+            }
+            $toNumber = preg_replace('/\D+/', '', (string) ($toNumber ?: ''));
+
+            if ($ackText !== '' && $toNumber !== '') {
+                $device = $convo->device_id ? \App\Models\Device::find($convo->device_id) : null;
+                $fromNumber = $device
+                    ? preg_replace('/\D+/', '', (string) ($device->country_code . $device->phone_number))
+                    : '';
+                $ackMsg = InboxMessage::create([
+                    'conversation_id' => $convo->id,
+                    'user_id'         => $convo->user_id,
+                    'direction'       => 'out',
+                    'from_number'     => $fromNumber,
+                    'to_number'       => $toNumber,
+                    'body'            => $ackText,
+                    'status'          => 'pending',
+                    'sent_at'         => now(),
+                    'meta'            => array_filter([
+                        'source'     => 'ai_handoff_ack',
+                        'target_jid' => $convo->raw_jid ?: null,
+                    ]),
+                ]);
+                $this->dispatcher->send($ackMsg, $convo->platform ?? 'W');
+                $convo->update([
+                    'preview'          => mb_substr($ackText, 0, 191),
+                    'last_message_at'  => now(),
+                    'last_outbound_at' => now(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[AI-AGENT] handoff customer ack failed: ' . $e->getMessage());
         }
 
         Log::info('[AI-AGENT] ✓ handoff complete', [

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Extension;
 use App\Models\SystemSetting;
 use App\Services\ExtensionService;
+use App\Services\Mailtrixy\MailtrixyClient;
 use App\Support\Audit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -55,6 +56,15 @@ class ExtensionController extends Controller
             // Display name shown on every "Sync from …", "Manage on …", "… URL"
             // label across the app — ig_brand_name() reads this. Default IgDesk.
             'instaflowBrand'      => (string) (SystemSetting::get('instaflow_brand', '') ?: 'IgDesk'),
+            // MailTrixy is the same shape: a standalone email deployment the
+            // operator connects by URL + shared secret (no code upload).
+            'mailtrixyUrl'        => (string) SystemSetting::get('mailtrixy_url', ''),
+            'mailtrixyConnected'  => (bool) SystemSetting::get('mailtrixy_connected', false),
+            'mailtrixyLastCheck'  => (string) SystemSetting::get('mailtrixy_last_check', ''),
+            'mailtrixyHasSecret'  => trim((string) SystemSetting::get('mailtrixy_secret', '')) !== '',
+            // Display name of the connected email product — mailtrixy_brand_name()
+            // reads this. Default MailTrixy.
+            'mailtrixyBrand'      => (string) (SystemSetting::get('mailtrixy_brand', '') ?: 'MailTrixy'),
         ]);
     }
 
@@ -171,6 +181,94 @@ class ExtensionController extends Controller
         ]);
 
         return back()->with('status', $brand . ' disconnected.');
+    }
+
+    /**
+     * Connect this WaDesk to a standalone MailTrixy deployment: save the base
+     * URL + shared secret, then run the handshake. MailTrixy must expose
+     *   GET  {url}/api/wadesk/handshake   (header: X-Mailtrixy-Secret: <secret>)
+     *   → 200 {"ok":true,"service":"mailtrixy", ...}
+     * so both sides prove they share the secret before any data flows. Secret is
+     * stored encrypted (SystemSetting::ENCRYPTED_KEYS). No package is uploaded.
+     * Unlike Instagram there is no native email add-on, so no one-engine guard.
+     */
+    public function connectMailtrixy(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'mailtrixy_url'    => 'required|url|max:255',
+            'mailtrixy_secret' => 'nullable|string|max:255',
+            'mailtrixy_brand'  => 'nullable|string|max:40',
+        ]);
+
+        $url = rtrim(trim($data['mailtrixy_url']), '/');
+        SystemSetting::set('mailtrixy_url', $url, 'string', 'MailTrixy deployment base URL');
+
+        // Display name of the connected email product (drives mailtrixy_brand_name()).
+        $brand = trim((string) ($data['mailtrixy_brand'] ?? ''));
+        SystemSetting::set('mailtrixy_brand', $brand !== '' ? $brand : 'MailTrixy', 'string', 'Connected email product display name');
+
+        // A blank secret field means "keep the existing secret" — so the operator
+        // can re-test the connection without re-typing it. A non-blank value replaces it.
+        $secret = trim((string) ($data['mailtrixy_secret'] ?? ''));
+        if ($secret !== '') {
+            SystemSetting::set('mailtrixy_secret', $secret, 'string', 'MailTrixy handshake shared secret');
+        } else {
+            $secret = (string) SystemSetting::get('mailtrixy_secret', '');
+        }
+
+        // Handshake through the bridge client — same header + acceptance rule
+        // every later call uses, so "connected" here means the real calls work.
+        // Display name comes from the admin's brand setting (mailtrixy_brand_name),
+        // so a re-branded install never shows the literal "MailTrixy" in any
+        // user-facing message. The handshake header + service key stay literal
+        // (functional identifiers, never re-branded).
+        $brand     = mailtrixy_brand_name();
+        $connected = (new MailtrixyClient($url, $secret))->handshake();
+        $reason    = $connected ? '' : 'Could not verify a ' . $brand . ' deployment at that URL — check the URL and shared secret.';
+
+        SystemSetting::set('mailtrixy_connected', $connected ? '1' : '0', 'bool', 'MailTrixy handshake result');
+        SystemSetting::set('mailtrixy_last_check', now()->toDateTimeString(), 'string', 'MailTrixy last handshake time');
+
+        // Audit::log() takes (string $action, array $opts) — everything else
+        // (subject, result, meta) goes INSIDE $opts, same as the Instaflow rows.
+        Audit::log('admin.mailtrixy.connect', [
+            'subject_type' => 'mailtrixy',
+            'result'       => $connected ? 'success' : 'failure',
+            'meta'         => [
+                'url'    => $url,
+                'reason' => $connected ? null : $reason,
+            ],
+        ]);
+
+        // Namespaced flash keys: this page has TWO connect cards, and the
+        // shared status/error keys would render this outcome on the Instagram
+        // card and auto-open its modal. Each card only reads its own keys.
+        return $connected
+            ? back()->with('mailtrixy_status', $brand . ' connected.')
+            : back()->with('mailtrixy_error', $brand . ' not connected — ' . $reason);
+    }
+
+    /**
+     * Disconnect the standalone MailTrixy deployment — wipes the stored URL +
+     * shared secret and flips the connection flag off, so the app stops
+     * treating email as connected (the card shows "Connect" again). The
+     * display-name brand is left as-is (harmless).
+     */
+    public function disconnectMailtrixy(Request $request): RedirectResponse
+    {
+        $brand = mailtrixy_brand_name();
+
+        SystemSetting::set('mailtrixy_url', '', 'string', 'MailTrixy deployment base URL');
+        SystemSetting::set('mailtrixy_secret', '', 'string', 'MailTrixy handshake shared secret');
+        SystemSetting::set('mailtrixy_connected', '0', 'bool', 'MailTrixy handshake result');
+        SystemSetting::set('mailtrixy_last_check', now()->toDateTimeString(), 'string', 'MailTrixy last handshake time');
+
+        Audit::log('admin.mailtrixy.disconnect', [
+            'subject_type' => 'mailtrixy',
+            'result'       => 'success',
+        ]);
+
+        return back()->with('mailtrixy_status', $brand . ' disconnected.');
     }
 
     /** Step 1 — licence check. Same code that unlocks the Updater. */

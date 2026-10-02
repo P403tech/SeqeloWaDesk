@@ -227,7 +227,15 @@ class WoocommerceController extends Controller
             $allowed = self::automationTypes();
             foreach ($data['events'] as $type => $row) {
                 if (!in_array($type, $allowed, true)) continue;
-                $varMap = array_values(array_filter((array) ($row['var_map'] ?? []), fn ($v) => $v !== null && $v !== ''));
+                // Preserve POSITIONAL slots: {{1}},{{2}},{{3}} map to indexes
+                // 0,1,2. Do NOT array_filter — that collapses a skipped middle
+                // variable and shifts the rest (e.g. {{3}}'s value would land in
+                // {{2}}). Keep each slot (empty string for an unmapped one) and
+                // only trim trailing empties.
+                $varMap = array_map(fn ($v) => (string) ($v ?? ''), array_values((array) ($row['var_map'] ?? [])));
+                while (!empty($varMap) && end($varMap) === '') {
+                    array_pop($varMap);
+                }
                 WoocommerceIntegrationEvent::updateOrCreate(
                     ['integration_id' => $integration->id, 'event_type' => $type],
                     [
@@ -445,12 +453,34 @@ class WoocommerceController extends Controller
      */
     public function webhook(string $secret, Request $request): Response
     {
+        // TRACE-0: fires on EVERY hit to the webhook URL, before any check. If a
+        // client places an order and you see NOTHING here, WooCommerce never sent
+        // the webhook (not registered / wrong URL / delivery disabled) — the
+        // problem is on the WooCommerce side, not ours. grep [WC-HOOK].
+        \Log::info('[WC-HOOK] hit', [
+            'secret_tail' => substr($secret, -6),
+            'topic'       => (string) $request->header('X-WC-Webhook-Topic', ''),
+            'resource'    => (string) $request->header('X-WC-Webhook-Resource', ''),
+            'event'       => (string) $request->header('X-WC-Webhook-Event', ''),
+            'delivery_id' => (string) $request->header('X-WC-Webhook-Delivery-ID', ''),
+            'from_ip'     => $request->ip(),
+            'bytes'       => strlen($request->getContent()),
+            'has_sig'     => $request->header('X-WC-Webhook-Signature') ? 'yes' : 'no',
+        ]);
+
         $integration = WoocommerceIntegration::where('webhook_secret', $secret)->first();
-        if (!$integration) return response('not found', 404);
+        if (!$integration) {
+            \Log::warning('[WC-HOOK] 404 — no integration matches this webhook secret. The URL WooCommerce is posting to has the WRONG/OLD secret; re-copy the webhook URL from the integration page.', ['secret_tail' => substr($secret, -6)]);
+            return response('not found', 404);
+        }
 
         $payload = $request->getContent();
         $sig     = (string) $request->header('X-WC-Webhook-Signature', '');
         if (!$this->woo->verifyWebhookSignature($payload, $sig, $integration->webhook_secret)) {
+            \Log::warning('[WC-HOOK] 401 — signature mismatch. The WooCommerce webhook "Secret" field does NOT match ours. Set the WooCommerce webhook Secret to this integration\'s webhook_secret exactly (no extra spaces).', [
+                'integration' => $integration->id,
+                'sig_present' => $sig !== '',
+            ]);
             return response('bad signature', 401);
         }
 
@@ -462,6 +492,26 @@ class WoocommerceController extends Controller
             ->first();
 
         $shouldSend = $event && $event->is_active && $event->template_id;
+
+        // TRACE: one line per inbound webhook so you can watch a real order flow
+        // through and see exactly whether an automation is armed for this topic.
+        // grep the log for [WC-AUTO] to follow the whole send decision.
+        \Log::info('[WC-AUTO] webhook received', [
+            'integration' => $integration->id,
+            'workspace'   => $integration->workspace_id,
+            'topic'       => $topic,
+            'order'       => $data['number'] ?? ($data['id'] ?? null),
+            'wc_status'   => $data['status'] ?? null,
+            'recipient'   => $this->resolveRecipient($data),
+            'event_found' => (bool) $event,
+            'is_active'   => $event?->is_active,
+            'template_id' => $event?->template_id,
+            'will_send'   => $shouldSend,
+            'skip_reason' => $shouldSend ? null
+                : (!$event ? 'NO automation configured for this topic (add + enable it on the WooCommerce automations page)'
+                : (!$event->is_active ? 'automation exists but is DISABLED — turn it on'
+                : (!$event->template_id ? 'automation on but NO template selected' : 'unknown'))),
+        ]);
 
         $log = WoocommerceIntegrationLog::create([
             'integration_id' => $integration->id,
@@ -628,6 +678,15 @@ class WoocommerceController extends Controller
             ->where('event_type', 'order.' . $status)
             ->where('is_active', true)
             ->first();
+
+        \Log::info('[WC-AUTO] order-status automation', [
+            'wc_status'  => $status,
+            'looking_for' => 'order.' . $status,
+            'matched'    => (bool) $event,
+            'template_id' => $event?->template_id,
+            'will_fire'  => (bool) ($event && $event->template_id),
+        ]);
+
         if (!$event || !$event->template_id) return;
 
         $this->sendPseudoEvent($integration, $event, $this->resolveRecipient($data), $this->orderContext($integration, $data), 'order.' . $status);
@@ -652,7 +711,24 @@ class WoocommerceController extends Controller
         // the order's billing country so WhatsApp can actually reach it; a raw
         // local number silently never delivers. WooPhone::fromOrder pulls the
         // phone + ISO-2 country and prepends the dialing code.
-        return \App\Support\Woo\WooPhone::fromOrder($data);
+        $rawPhone = ($data['billing']['phone'] ?? null)
+            ?? ($data['shipping']['phone'] ?? null)
+            ?? ($data['phone'] ?? null)
+            ?? ($data['customer']['phone'] ?? null);
+        $iso = ($data['billing']['country'] ?? null)
+            ?? ($data['shipping']['country'] ?? null)
+            ?? ($data['customer']['billing']['country'] ?? null);
+
+        $normalized = \App\Support\Woo\WooPhone::fromOrder($data);
+
+        \Log::info('[WC-AUTO] recipient resolved', [
+            'raw'         => $rawPhone,
+            'country_iso' => $iso,
+            'normalized'  => $normalized,
+            'changed'     => $normalized !== preg_replace('/\D+/', '', (string) $rawPhone),
+        ]);
+
+        return $normalized;
     }
 
     /**
@@ -691,8 +767,34 @@ class WoocommerceController extends Controller
             $targets['admin'] = $event->admin_number;
         }
 
+        \Log::info('[WC-AUTO] dispatch', [
+            'event_type'  => $event->event_type,
+            'template'    => $tpl->name ?? $tpl->id,
+            'send_to'     => $sendTo,
+            'targets'     => $targets,
+            'var_map'     => $event->var_map,
+            'positional'  => $ctx['_positional'] ?? null,
+        ]);
+
         if (empty($targets)) {
+            \Log::warning('[WC-AUTO] no target — nothing sent', ['event_type' => $event->event_type, 'send_to' => $sendTo]);
             $log->update(['status' => 'failed', 'error' => 'No recipient — order has no customer phone' . ($sendTo === 'admin' ? '' : ' and no admin number set') . '.']);
+            return;
+        }
+
+        // DELAYED send: honour delay_seconds via a delayed job when Advanced Scaling
+        // (a queue worker) is on. Sync connection ignores the delay = send now =
+        // previous behaviour, so this is purely additive.
+        $senderKey = (string) ($integration->metadata["sender_key"] ?? "") ?: null;
+        $delay     = (int) ($event->delay_seconds ?? 0);
+        if ($delay > 0 && \App\Support\Scaling::enabled()) {
+            foreach ($targets as $number) {
+                \App\Jobs\SendCommerceEventJob::dispatch($integration->workspace_id, $integration->user_id, (string) $number, (int) $tpl->id, $ctx, $senderKey)
+                    ->onConnection(\App\Support\Scaling::queueConnection())
+                    ->onQueue('bulk')
+                    ->delay(now()->addSeconds($delay));
+            }
+            $log->update(['status' => 'scheduled', 'recipient' => implode(', ', array_values($targets)), 'error' => null]);
             return;
         }
 
@@ -702,6 +804,11 @@ class WoocommerceController extends Controller
             $r = $notifier->notify($integration->workspace_id, $integration->user_id, $number, $tpl, $ctx, (string) ($integration->metadata["sender_key"] ?? "") ?: null);
             $results[$who] = $r;
             $anyOk = $anyOk || ($r['ok'] ?? false);
+            \Log::info('[WC-AUTO] sent', [
+                'to' => $who, 'number' => $number,
+                'ok' => $r['ok'] ?? false, 'engine' => $r['engine'] ?? null,
+                'provider_id' => $r['provider_id'] ?? null, 'error' => $r['error'] ?? null,
+            ]);
         }
 
         $errors = collect($results)
@@ -866,6 +973,9 @@ class WoocommerceController extends Controller
     {
         $counts      = $this->woo->getStoreCounts($integration);
         $orders      = $this->woo->getOrders($integration, 10);
+        // Paginated orders for the Orders tab (Prev/Next across ALL orders, not
+        // just the last 10). Page comes from ?page=N.
+        $ordersPaged = $this->woo->getOrdersPage($integration, 20, max(1, (int) request()->query('page', 1)));
         $products    = $this->woo->getProducts($integration, 10);
         $customers   = $this->woo->getCustomers($integration, 10);
         $salesReport = $this->woo->getSalesReport($integration, 30);
@@ -951,9 +1061,12 @@ class WoocommerceController extends Controller
             'recovery_sends'=> $recoverySends,
         ];
 
-        // Offer-composer pickers.
+        // Offer-composer pickers. Coupons = this workspace's OWN store coupons
+        // (WaCoupon, workspace-scoped) — NOT the admin billing Coupon model,
+        // which has no workspace_id and would leak platform promo codes.
         $contactGroups = \App\Models\ContactGroup::where('workspace_id', $wsId)->get(['id', 'user_group', 'color']);
-        $coupons       = \App\Models\Coupon::where('is_active', true)->orderBy('code')->limit(100)->get(['id', 'code', 'type', 'amount']);
+        $coupons       = \App\Models\WaCoupon::where('workspace_id', $wsId)->where('active', true)
+            ->orderBy('code')->limit(100)->get(['id', 'code', 'type', 'amount']);
         $offerProducts = \App\Models\WaProduct::where('workspace_id', $wsId)
             ->whereNotNull('woo_product_id')->orderBy('name')->limit(200)->get(['id', 'name', 'price_minor']);
 
@@ -964,6 +1077,7 @@ class WoocommerceController extends Controller
             'offerProducts' => $offerProducts,
             'counts'        => $counts,
             'orders'        => $orders,
+            'ordersPaged'   => $ordersPaged,
             'products'      => $products,
             'customers'     => $customers,
             'logTotal'      => $logTotal,

@@ -112,6 +112,38 @@ class WoocommerceService
         }
     }
 
+    /**
+     * Paginated orders for the Orders tab — WooCommerce returns the total count
+     * and page count in the X-WP-Total / X-WP-TotalPages headers, so the UI can
+     * render Prev/Next across ALL orders instead of only the last 10.
+     */
+    public function getOrdersPage(WoocommerceIntegration $integration, int $perPage = 20, int $page = 1): array
+    {
+        $perPage = max(1, min(100, $perPage));
+        $page    = max(1, $page);
+        try {
+            $r = $this->client($integration)
+                ->get($this->base($integration->store_url) . '/orders', [
+                    'per_page' => $perPage,
+                    'page'     => $page,
+                    'orderby'  => 'date',
+                    'order'    => 'desc',
+                ]);
+            if (! $r->successful()) {
+                return ['items' => [], 'total' => 0, 'total_pages' => 1, 'page' => $page, 'per_page' => $perPage];
+            }
+            return [
+                'items'       => $r->json() ?: [],
+                'total'       => (int) ($r->header('X-WP-Total') ?: 0),
+                'total_pages' => max(1, (int) ($r->header('X-WP-TotalPages') ?: 1)),
+                'page'        => $page,
+                'per_page'    => $perPage,
+            ];
+        } catch (\Throwable $e) {
+            return ['items' => [], 'total' => 0, 'total_pages' => 1, 'page' => $page, 'per_page' => $perPage];
+        }
+    }
+
     public function getProducts(WoocommerceIntegration $integration, int $limit = 20): array
     {
         try {

@@ -1,3 +1,5 @@
+import { createPoller } from '../lib/poller.js';
+
 /**
  * /social/posts — live status updates + AJAX actions for the unified posts grid.
  *  - Polls /social/posts/data every ~8s and updates each card's badge, time,
@@ -97,5 +99,10 @@ export default function init() {
             }
         } catch (e) { /* transient — try again next tick */ }
     }
-    setInterval(poll, 8000);
+    // Shared poller — this loop had none of the usual guards: it polled every
+    // 8s forever, including on a hidden tab, with no protection against a slow
+    // response stacking behind the next tick.
+    createPoller(async () => { await poll(); return false; }, {
+        interval: 8000, maxInterval: 60000,
+    }).start();
 }

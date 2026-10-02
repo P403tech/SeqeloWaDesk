@@ -19,6 +19,22 @@ function textOf(node) {
     return (node?.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Does this cell actually have something to show?
+ *
+ * `children.length > 0` was too loose: a column the page fills in later (the
+ * Groups cell ships an empty `<div class="flex">`, the Tags cell an empty
+ * wrapper) counted as content, so the card rendered a heading with nothing
+ * under it. Look for real content instead — text, or an element that carries
+ * meaning on its own.
+ */
+function hasContent(cell) {
+    if (!cell) return false;
+    if (textOf(cell) !== '') return true;
+
+    return !!cell.querySelector('img, svg, input, select, textarea, button, a, [data-chip], [class*="badge"], [class*="chip"], [class*="pill"]');
+}
+
 function headerLabels(table) {
     return Array.from(table?.querySelectorAll('thead th') || []).map((th) => textOf(th));
 }
@@ -82,12 +98,15 @@ function buildTableCard(container, row, labels, rowIndex) {
 
     const cells = cellsFor(row);
     const actionIndex = actionCellIndex(cells, labels);
+    // The label travels WITH its own cell, never by position in the filtered
+    // list — dropping an empty column must not shift every later value under
+    // the wrong heading (email under "Tags", mobile under "Email").
     const dataCells = cells
         .map((cell, index) => ({ cell, index, label: labels[index] || '' }))
         .filter(({ cell, index, label }) => {
             if (index === actionIndex) return false;
             if (label === '' && cell.querySelector('input[type="checkbox"]')) return false;
-            return textOf(cell) !== '' || cell.children.length > 0;
+            return hasContent(cell);
         });
 
     if (dataCells.length === 0) {

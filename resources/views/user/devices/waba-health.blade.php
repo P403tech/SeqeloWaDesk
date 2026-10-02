@@ -112,10 +112,6 @@
         $waUsername       = (string) ($wcMeta['wa_username'] ?? ($phone['username'] ?? ''));
         $waUsernameStatus = strtolower((string) ($wcMeta['wa_username_status'] ?? 'reserved'));
         $unApproved       = $waUsernameStatus === 'approved';
-        // This page's top @php block reassigns $errors to $health['errors'] (an
-        // array), which shadows Laravel's ViewErrorBag — so the Blade error
-        // directive would fatal (getBag on array). Pull the real validation bag
-        // straight from the session instead.
         $vErrors          = session('errors') ? session('errors')->getBag('default') : null;
         // Readable prerequisites. Meta grants the badge on brand notability OR a
         // Meta Verified subscription — those two can't be read via the API, so
@@ -267,6 +263,49 @@
                       window.alert(msg);
                       btn.disabled = false; btn.style.opacity = '1';
                   }).catch(function () { btn.disabled = false; btn.style.opacity = '1'; window.alert('Network error — please try again.'); });
+            });
+        })();
+
+        // Live inbound-webhook check — fetches the diagnostic and renders a clear
+        // verdict panel (subscribed apps, the delivery URL Meta holds vs this
+        // server, App-Secret state, and the next step).
+        (function () {
+            var btn = document.getElementById('wh-check-btn');
+            var box = document.getElementById('wh-check-result');
+            if (!btn || !box) return;
+            var esc = function (s) { var e = document.createElement('div'); e.textContent = String(s == null ? '' : s); return e.innerHTML; };
+            btn.addEventListener('click', function () {
+                var orig = btn.innerHTML;
+                btn.disabled = true; btn.style.opacity = '0.6'; btn.textContent = @json(__('Checking…'));
+                fetch(btn.dataset.url, { headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': @json(csrf_token()) } })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        box.classList.remove('hidden');
+                        if (!d || d.ok === false) {
+                            box.innerHTML = '<div class="rounded-xl border border-accent-coral/40 bg-accent-coral/5 text-accent-coral p-3 text-[11px]">' + esc(d && d.message ? d.message : 'Check failed') + '</div>';
+                            return;
+                        }
+                        var cls = d.verdict === 'delivering_here'
+                            ? 'border-wa-green/40 bg-wa-mint text-wa-deep'
+                            : ((d.verdict === 'not_subscribed' || d.verdict === 'wrong_url')
+                                ? 'border-accent-coral/40 bg-accent-coral/5 text-accent-coral'
+                                : 'border-accent-amber/40 bg-accent-amber/5 text-[#7B5A14]');
+                        var secret = d.app_secret_stored ? @json(__('yes')) : (d.admin_secret_stored ? @json(__('platform secret')) : @json(__('no')));
+                        var match = d.override_url ? (d.override_matches ? ' ✓ ' + @json(__('match')) : ' ✗ ' + @json(__('mismatch'))) : '';
+                        var h = '<div class="rounded-xl border ' + cls + ' p-3 text-[11px] space-y-1.5 leading-snug">';
+                        h += '<div class="font-semibold">' + (d.subscribed ? @json(__('Subscribed to Meta app')) : @json(__('NOT subscribed'))) + ': ' + esc(d.apps && d.apps.length ? d.apps.join(', ') : '—') + '</div>';
+                        h += '<div>' + @json(__('Meta delivers to')) + ': <code class="break-all">' + esc(d.override_url || @json(__('(app default callback)'))) + '</code></div>';
+                        h += '<div>' + @json(__('This server')) + ': <code class="break-all">' + esc(d.our_url) + '</code>' + match + '</div>';
+                        h += '<div>' + @json(__('App Secret stored for this number')) + ': ' + secret + '</div>';
+                        (d.messages || []).forEach(function (m) { h += '<div class="pt-1">• ' + esc(m) + '</div>'; });
+                        h += '</div>';
+                        box.innerHTML = h;
+                    })
+                    .catch(function (e) {
+                        box.classList.remove('hidden');
+                        box.innerHTML = '<div class="rounded-xl border border-accent-coral/40 bg-accent-coral/5 text-accent-coral p-3 text-[11px]">' + esc(e && e.message ? e.message : 'Network error') + '</div>';
+                    })
+                    .then(function () { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = orig; });
             });
         })();
     </script>
@@ -616,6 +655,18 @@
                         {{ __('Fix inbound — re-subscribe & verify') }}
                     </button>
                 </form>
+
+                {{-- Live inbound-webhook check — asks Meta which apps this WABA is
+                     subscribed to, the EXACT delivery (override) URL it holds vs THIS
+                     server, and whether an App Secret is stored (the signature-reject
+                     cause of "subscribed but no inbound"). Renders inline; no reload. --}}
+                <button type="button" id="wh-check-btn"
+                    data-url="{{ url('/devices/waba/' . $waba->id . '/webhook-check') }}"
+                    class="mt-2 w-full px-3 py-2 rounded-xl border border-paper-200 hover:border-wa-deep text-[12px] font-semibold text-ink-700 inline-flex items-center justify-center gap-1.5">
+                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+                    {{ __('Check inbound webhook (live)') }}
+                </button>
+                <div id="wh-check-result" class="mt-2 hidden"></div>
 
                 {{-- OWN-APP WEBHOOK SETUP — shown whenever inbound is NOT CONFIRMED
                      wired (false OR null/unverified). A number connected with the

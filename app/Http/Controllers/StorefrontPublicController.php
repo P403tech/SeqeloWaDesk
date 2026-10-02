@@ -351,11 +351,33 @@ class StorefrontPublicController extends Controller
      */
     private function resolveWaNumber(WaStorefront $sf, ?WaProviderConfig $cfg): ?string
     {
-        $waNumber = $cfg?->phone_number ?: null;
-        if (!$waNumber && $sf->device_id && ($device = $sf->device)) {
-            $waNumber = trim(($device->country_code ?? '') . $device->phone_number);
+        // Use the SHOP's OWN sending number — the same one shown on the shop card
+        // (WaStorefront::sending_label) — NOT the workspace's PRIMARY config. A
+        // workspace with two WABA numbers was handing checkout the primary
+        // (+9000000001, a different number) while the card showed the number the
+        // merchant actually picked, so buyers were sent to chat with the wrong one.
+        // 1) Bound Unofficial (Baileys) device.
+        if ($sf->device_id && ($device = $sf->device)) {
+            $ph = preg_replace('/\D+/', '', (string) (($device->country_code ?? '') . $device->phone_number));
+            if ($ph !== '') return $ph;
         }
-        return $waNumber ?: null;
+        // 2) The store's connected OFFICIAL (WABA/Twilio) number — SAME selection
+        //    the shop card uses (first connected, ordered by id) so the two never
+        //    disagree.
+        $official = WaProviderConfig::query()
+            ->where('workspace_id', $sf->workspace_id)
+            ->whereIn('provider', ['waba', 'twilio'])
+            ->where('status', WaProviderConfig::STATUS_CONNECTED)
+            ->orderBy('id')
+            ->first();
+        if ($official && trim((string) $official->phone_number) !== '') {
+            return preg_replace('/\D+/', '', (string) $official->phone_number);
+        }
+        // 3) Last resort — whatever config was passed in.
+        if ($cfg && trim((string) $cfg->phone_number) !== '') {
+            return preg_replace('/\D+/', '', (string) $cfg->phone_number);
+        }
+        return null;
     }
 
     /**
@@ -413,9 +435,19 @@ class StorefrontPublicController extends Controller
         $host = strtolower($request->getHost());
         $rootHost = strtolower(parse_url(config('app.url'), PHP_URL_HOST) ?: '');
 
-        // Custom domain (verified) match
+        // Custom domain (verified) match — storefront-level domain first.
         $sf = WaStorefront::where('custom_domain', $host)->where('custom_domain_verified', true)->where('enabled', true)->first();
         if ($sf) return $sf;
+
+        // Workspace-level custom domain (Phase 1 white-label). An admin can point
+        // a whole client's domain at their shop from /admin/workspaces without the
+        // client touching store settings. Same host-resolution + DNS-verified gate
+        // the storefront domain uses — scoped to THIS host only, never the platform.
+        $ws = \App\Models\Workspace::where('custom_domain', $host)->where('cname_verified', true)->first();
+        if ($ws) {
+            $wsSf = WaStorefront::where('workspace_id', $ws->id)->where('enabled', true)->first();
+            if ($wsSf) return $wsSf;
+        }
 
         // Subdomain match: foo.parent.tld
         if ($rootHost && str_ends_with($host, '.' . $rootHost)) {

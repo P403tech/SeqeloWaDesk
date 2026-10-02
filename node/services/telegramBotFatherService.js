@@ -40,14 +40,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * request, the exchange is a handful of messages, and an update subscription on a
  * user account is a much bigger surface than the job needs.
  */
-async function ask(client, text) {
+/**
+ * Resolve @BotFather to a real entity ONCE per client. gramjs/teleproto throw
+ * "Could not find the input entity for BotFather" when getMessages/sendMessage
+ * are called with the bare username on a session that has never opened that chat
+ * — which is exactly a fresh operator account, so create-bot died on step 1.
+ * getEntity resolves it (contacts.resolveUsername) and caches it, so every later
+ * getMessages/sendMessage on this client works.
+ */
+async function botFatherPeer(client) {
+    return client.getEntity(BOTFATHER);
+}
+
+async function ask(client, peer, text) {
     // Newest message id BEFORE sending, so we can tell a genuine reply from the
     // last thing @BotFather said in some earlier session.
-    const before = await client.getMessages(BOTFATHER, { limit: 1 });
+    const before = await client.getMessages(peer, { limit: 1 });
     const lastId = before && before[0] ? before[0].id : 0;
 
     if (text !== null) {
-        await client.sendMessage(BOTFATHER, { message: text });
+        await client.sendMessage(peer, { message: text });
     }
 
     const deadline = Date.now() + REPLY_TIMEOUT_MS;
@@ -55,7 +67,7 @@ async function ask(client, text) {
     while (Date.now() < deadline) {
         await sleep(900);
 
-        const msgs = await client.getMessages(BOTFATHER, { limit: 5 });
+        const msgs = await client.getMessages(peer, { limit: 5 });
         // Incoming only, newer than what was there before we spoke. Skipping our
         // own outgoing message matters — getMessages returns it too, and reading
         // it back as the "reply" made every step look instantly successful.
@@ -106,13 +118,22 @@ export async function createBot(accountId, sessionString, displayName, username)
         return { ok: false, error: explain(e) };
     }
 
+    // Resolve @BotFather up front — the bare-username ask() calls below throw
+    // "Could not find the input entity for BotFather" on a fresh account.
+    let bf;
+    try {
+        bf = await botFatherPeer(client);
+    } catch (e) {
+        return { ok: false, error: "Could not reach @BotFather — is the account fully logged in? (" + explain(e) + ")" };
+    }
+
     try {
         // Cancel anything half-finished from a previous attempt. Without this a
         // @BotFather left mid-/setdescription reads "/newbot" as the description.
-        await ask(client, "/cancel");
+        await ask(client, bf, "/cancel");
         await sleep(STEP_DELAY_MS);
 
-        const started = await ask(client, "/newbot");
+        const started = await ask(client, bf, "/newbot");
         if (!started) {
             return { ok: false, error: "@BotFather did not answer. Try again in a minute." };
         }
@@ -123,13 +144,13 @@ export async function createBot(accountId, sessionString, displayName, username)
         }
 
         await sleep(STEP_DELAY_MS);
-        const afterName = await ask(client, name);
+        const afterName = await ask(client, bf, name);
         if (!afterName) {
             return { ok: false, error: "@BotFather stopped replying after the name." };
         }
 
         await sleep(STEP_DELAY_MS);
-        const afterHandle = await ask(client, handle);
+        const afterHandle = await ask(client, bf, handle);
         if (!afterHandle) {
             return { ok: false, error: "@BotFather stopped replying after the username." };
         }
@@ -202,11 +223,18 @@ export async function listBots(accountId, sessionString) {
         return { ok: false, error: explain(e) };
     }
 
+    let bf;
     try {
-        await ask(client, "/cancel");
+        bf = await botFatherPeer(client);
+    } catch (e) {
+        return { ok: false, error: explain(e) };
+    }
+
+    try {
+        await ask(client, bf, "/cancel");
         await sleep(STEP_DELAY_MS);
 
-        const reply = await ask(client, "/mybots");
+        const reply = await ask(client, bf, "/mybots");
         if (!reply) {
             return { ok: false, error: "@BotFather did not answer /mybots." };
         }

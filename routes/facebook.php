@@ -16,6 +16,7 @@
 */
 
 use App\Http\Controllers\Facebook\FacebookComposerAiController;
+use App\Http\Controllers\Facebook\FacebookCommentRuleController;
 use App\Http\Controllers\Facebook\FacebookFlowNodeController;
 use App\Http\Controllers\Facebook\FacebookBroadcastController;
 use App\Http\Controllers\Facebook\FacebookInsightsController;
@@ -49,6 +50,12 @@ Route::middleware(['web', 'auth', 'plan:access_facebook'])
         Route::post('/facebook/broadcasts/{broadcast}/retry', [FacebookBroadcastController::class, 'retry'])->whereNumber('broadcast')->name('broadcasts.retry');
         Route::post('/facebook/broadcasts/{broadcast}/batch', [FacebookBroadcastController::class, 'sendBatch'])->whereNumber('broadcast')->name('broadcasts.batch');
         Route::delete('/facebook/broadcasts/{broadcast}',     [FacebookBroadcastController::class, 'destroy'])->whereNumber('broadcast')->name('broadcasts.destroy');
+
+        // Comment auto-reply rules — keyword on a comment → public reply + DM + flow.
+        Route::get('/facebook/comment-rules',          [FacebookCommentRuleController::class, 'index'])->name('comment-rules');
+        Route::post('/facebook/comment-rules',         [FacebookCommentRuleController::class, 'store'])->name('comment-rules.store');
+        Route::put('/facebook/comment-rules/{id}',     [FacebookCommentRuleController::class, 'update'])->whereNumber('id')->name('comment-rules.update');
+        Route::delete('/facebook/comment-rules/{id}',  [FacebookCommentRuleController::class, 'destroy'])->whereNumber('id')->name('comment-rules.destroy');
     });
 
 // ── Facebook Posts — composer + scheduler. Plan-gated (facebook_posts). ──

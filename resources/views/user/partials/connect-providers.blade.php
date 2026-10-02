@@ -57,7 +57,16 @@
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 p-4">
-        @foreach (['waba', 'baileys', 'twilio'] as $key)
+        @php
+            // The Unofficial API (baileys) is a removable add-on, off by default.
+            // Drop its card entirely when the add-on is absent so no trace of the
+            // Unofficial engine shows (not even a greyed "Disabled by admin" tile).
+            // waba/twilio keep their normal enabled / disabled-by-admin states.
+            $__cardKeys = \App\Services\WorkspaceEngine::unofficialEnabled()
+                ? ['waba', 'baileys', 'twilio']
+                : ['waba', 'twilio'];
+        @endphp
+        @foreach ($__cardKeys as $key)
             @php
                 $card = $cards[$key];
                 $isAllowed = in_array($key, $allowed, true);

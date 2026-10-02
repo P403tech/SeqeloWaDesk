@@ -103,7 +103,7 @@ class PlanUsage
                 'monthly_messages_limit' => $usedMessages,
                 'contacts_limit'         => self::countModel(\App\Models\Contact::class, $ws->id),
                 'device_limit'           => self::countModel(\App\Models\Device::class, $ws->id),
-                'user_seat_limit'        => \App\Models\User::where('current_workspace_id', $ws->id)->count(),
+                'user_seat_limit'        => $ws->seatsUsed(),   // canonical pivot count — matches enforcement (#29)
                 'flow_limit'             => self::countModel(\App\Models\Flow::class, $ws->id),
                 default                  => 0,
             };
@@ -176,11 +176,23 @@ class PlanUsage
             ->whereBetween('created_at', [$start, $end])
             ->count();
 
+        // EXCLUDE mirrored rows. Bulk / campaign / scheduled sends write a
+        // `messages` row (counted in $bulk above) AND get mirrored into
+        // `inbox_messages` by InboxMirror (meta.source = bulk|campaign|scheduled).
+        // Counting both tables therefore double-counted the same message and
+        // inflated the "messages used" meter. Skip the mirrors here so each
+        // message is counted once; genuine inbox / auto-reply / flow sends
+        // (other sources, or none) still count. Billing was never affected —
+        // MessageBillingService is idempotent per wamid. (#30)
         $inbox = InboxMessage::query()
             ->forCurrentEngine()
             ->where('direction', 'out')
             ->whereBetween('created_at', [$start, $end])
             ->whereHas('conversation', fn ($q) => $q->where('workspace_id', $wsId))
+            ->where(function ($q) {
+                $q->whereNull('meta->source')
+                  ->orWhereNotIn('meta->source', ['bulk', 'campaign', 'scheduled']);
+            })
             ->count();
 
         return $bulk + $inbox;

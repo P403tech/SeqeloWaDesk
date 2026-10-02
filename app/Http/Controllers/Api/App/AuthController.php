@@ -60,11 +60,34 @@ class AuthController extends Controller
 
         RateLimiter::clear($throttleKey);
 
+        // Two-factor gate. When 2FA is ON, do NOT issue a token here — the app must
+        // request a WhatsApp OTP (/2fa/send) and verify it (/2fa/verify), which then
+        // returns the token + full payload exactly like this login would. Replaces
+        // the old PIN/passcode second factor.
+        //
+        // BUT: 2FA can only work while the admin's WhatsApp OTP sender is active. If
+        // the admin turned it OFF (or it's unconfigured) AFTER a user enabled 2FA,
+        // gating here would demand a code that can never arrive ("WhatsApp OTP not
+        // available") and lock the user out. So require 2FA only when the sender is
+        // actually active; otherwise fall through to a normal password login. The
+        // user's 2FA setting is preserved and auto-resumes the moment a sender is
+        // reconnected — and the payload below reports 2FA as effectively OFF so the
+        // app hides it.
+        if ($user->two_factor_enabled && app(\App\Services\Auth\RegistrationOtpService::class)->isActive()) {
+            return response()->json([
+                'status'     => 'two_factor_required',
+                'two_factor' => 1,
+                'email'      => $user->email,
+                'message'    => 'Two-factor verification required — request an OTP, then verify it.',
+            ], 200);
+        }
+
         $abilities = strtolower((string) $user->role) === 'admin' ? ['admin'] : ['*'];
         $token = $user->createToken('mobile-app', $abilities)->plainTextToken;
 
         return response()->json([
             'status' => 'success',
+            'two_factor' => 0,
             'token_type' => 'Bearer',
             'access_token' => $token,
             'user' => $this->userPayload($user),
@@ -89,7 +112,14 @@ class AuthController extends Controller
             'name' => 'required|string|max:191',
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:8',
-            'mobile' => 'nullable|string|max:32',
+            'mobile' => ['nullable', 'string', 'max:32',
+                function ($attr, $value, $fail) use ($request) {
+                    // One number = one account (digits-only canonical match).
+                    if ($value !== null && $value !== ''
+                        && \App\Support\MobileNumber::isTaken($request->input('country_code'), $value)) {
+                        $fail(__('This mobile number is already registered.'));
+                    }
+                }],
             'image' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
             'refer_code' => 'nullable|string',
         ]);

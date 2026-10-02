@@ -16,12 +16,27 @@
             <a href="{{ route('user.crm.revenue') }}" class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold shrink-0">{{ __('Revenue report') }}</a>
         </div>
 
-        <x-crm.how-to :steps="[
-            __('This is your <b>home screen</b> — pipeline, revenue, outstanding money and tasks at a glance.'),
-            __('Click any number to jump to that page (deals, invoices, payments).'),
-            __('Open <b>Revenue report</b> for collected / outstanding / tax, then <b>export</b> to CSV or PDF.'),
-            __('New here? Open the <a href=\"' . url('/crm/guide') . '\" class=\"underline font-semibold\">AI CRM guide</a> for every page and how to use it.'),
-        ]" />
+        @php
+            // Built here, not inline in the :steps attribute. The last step
+            // contains a link, and a double-quoted HTML attribute cannot hold
+            // an anchor whose href is also double quoted — the browser ends the
+            // attribute at the first inner quote and prints the rest of the PHP
+            // array as visible page text, which is what leaked under the
+            // heading here. Passing a variable keeps the markup out of the
+            // attribute entirely, and :link is a translator placeholder so the
+            // sentence stays translatable with the anchor intact.
+            $crmSteps = [
+                __('This is your <b>home screen</b> — pipeline, revenue, outstanding money and tasks at a glance.'),
+                __('Click any number to jump to that page (deals, invoices, payments).'),
+                __('Open <b>Revenue report</b> for collected / outstanding / tax, then <b>export</b> to CSV or PDF.'),
+                __('New here? Open the :link for every page and how to use it.', [
+                    'link' => '<a href="' . url('/crm/guide') . '" class="underline font-semibold">'
+                        . __('CRM guide') . '</a>',
+                ]),
+            ];
+        @endphp
+
+        <x-crm.how-to :steps="$crmSteps" />
 
         {{-- KPI row --}}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">

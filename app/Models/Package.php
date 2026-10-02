@@ -102,7 +102,7 @@ class Package extends Model
         'autoreply', 'bulkmessage', 'schedulemessage', 'ads', 'campaign',
         'autoflow', 'broadcast', 'chatgpt_suggestion', 'template',
         'access_carousel_templates', 'role_based_permissions',
-        'access_drip_campaigns', 'access_ctwa', 'access_analytics', 'remove_branding',
+        'access_drip_campaigns', 'access_campaign_followups', 'access_ctwa', 'access_analytics', 'remove_branding',
         'integration_shopify', 'integration_woocommerce', 'integration_hubspot', 'integration_salesforce',
         'integration_google_calendar', 'integration_google_sheets',
         'integration_slack', 'integration_trello',
@@ -120,10 +120,18 @@ class Package extends Model
         'tiktok_accounts_limit', 'tiktok_scheduled_posts_limit',
         // Telegram channel (bots, inbox, flows, broadcasts).
         'access_telegram', 'telegram_broadcasts', 'telegram_bots_limit',
+        'access_line', 'line_broadcasts', 'line_channels_limit',
+        'access_wechat', 'wechat_broadcasts', 'wechat_channels_limit',
+        'access_viber', 'viber_broadcasts', 'viber_channels_limit',
+        'access_threads', 'threads_posts', 'threads_replies', 'threads_insights', 'threads_accounts', 'threads_scheduled_posts',
         // SMS channel (Twilio / MSG91) — inbox + campaigns. sms_monthly_limit
         // caps sends per billing month (NULL/0 = unlimited); billed to this cap,
         // never the WhatsApp wallet.
         'access_sms', 'sms_monthly_limit',
+        // Email channel (linked mailbox via the mail bridge) — inbox, flows,
+        // campaigns. email_monthly_limit caps sends per billing month
+        // (NULL/0 = unlimited); billed to this cap, never the WhatsApp wallet.
+        'access_email', 'email_monthly_limit',
         'allow_byok_ai_keys',
         'multipledevice', 'file_type_restrictions',
         // Sprint 9.5 plan gates — WABA calling + AI + storefront + SLA.
@@ -137,6 +145,10 @@ class Package extends Model
         'access_proxy_isolation',
         // Sprint 11 — Sales Pipeline / Deal Management CRM.
         'access_sales_pipeline', 'pipelines_limit',
+        // Meta Lead Ads — Instant-Form leads mapped into contacts + deals.
+        // Separate from access_facebook: a workspace can run Pages without
+        // buying lead capture, and lead capture is what the ad spend rides on.
+        'access_lead_ads',
         'waba_calling_minutes_monthly', 'ai_voice_minutes_monthly',
         'ai_chat_messages_monthly', 'ai_training_sources_limit',
         'chatbot_widgets_limit', 'storefronts_limit',
@@ -213,7 +225,9 @@ class Package extends Model
         'access_carousel_templates' => 'boolean',
         'role_based_permissions' => 'boolean',
         'access_drip_campaigns' => 'boolean',
+        'access_campaign_followups' => 'boolean',
         'access_lead_finder' => 'boolean',
+        'access_lead_ads' => 'boolean',
         'access_facebook' => 'boolean',
         'facebook_inbox' => 'boolean',
         'facebook_posts' => 'boolean',
@@ -224,7 +238,22 @@ class Package extends Model
         'tiktok_comments' => 'boolean',
         'access_telegram' => 'boolean',
         'telegram_broadcasts' => 'boolean',
+        'access_line' => 'boolean',
+        'line_broadcasts' => 'boolean',
+        'access_wechat' => 'boolean',
+        'wechat_broadcasts' => 'boolean',
+        'wechat_channels_limit' => 'integer',
+        'access_viber' => 'boolean',
+        'viber_broadcasts' => 'boolean',
+        'access_threads' => 'boolean',
+        'threads_posts' => 'boolean',
+        'threads_replies' => 'boolean',
+        'threads_insights' => 'boolean',
+        'viber_channels_limit' => 'integer',
+        'line_channels_limit' => 'integer',
         'access_sms' => 'boolean',
+        'access_email' => 'boolean',
+        'email_monthly_limit' => 'integer',
         'facebook_ai_agent' => 'boolean',
         'facebook_pages_limit' => 'integer',
         'facebook_scheduled_posts_limit' => 'integer',
@@ -398,28 +427,61 @@ class Package extends Model
                 : (\Illuminate\Support\Facades\Route::has('register') ? route('register') : url('/'));
         }
 
-        // Volume — the headline numeric allowances (0 = unlimited).
-        $volumeKeys = ['device_limit', 'monthly_messages_limit', 'user_seat_limit', 'contacts_limit', 'broadcast_limit'];
-        $volume = [];
-        foreach ($volumeKeys as $k) {
-            $v = $this->$k;
-            if ($v === null || ! isset($catalog['limits'][$k])) continue;
-            $label = ((int) $v === 0 ? __('Unlimited') : number_format((int) $v)) . ' ' . lcfirst($catalog['limits'][$k]);
-            $volume[] = ['label' => $label, 'included' => true];
-            if (count($volume) >= 4) break;
-        }
+        // An ADD-ON is bought on top of a plan and grants only a FEW specific
+        // things — so a 0 limit means "not part of this add-on", NOT "unlimited".
+        // Render add-on cards from ONLY what they actually add.
+        $isAddon = (($this->type ?? 'plan') === 'addon');
 
-        // Features — capabilities (enabled first, then a few greyed-out for contrast).
-        $on = [];
-        $off = [];
-        foreach ($catalog['capabilities'] as $field => $label) {
-            if ((bool) $this->$field) {
-                if (count($on) < 7) $on[] = ['label' => $label, 'included' => true];
-            } elseif (count($off) < 3) {
-                $off[] = ['label' => $label, 'included' => false];
+        // Volume — headline numeric allowances. Plan: 0 = unlimited. Add-on:
+        // skip 0 (not included) and show each NON-ZERO limit it adds, scanned
+        // across the WHOLE catalog (an add-on's grant can be any column, not the
+        // plan-headline five).
+        $volume = [];
+        if ($isAddon) {
+            // An add-on's real limit deltas live in grants_json (its raw limit
+            // columns stay 0). -1 = it grants unlimited for THAT one key; >0 =
+            // it adds N. Only what the admin declared shows — never a blanket
+            // "unlimited everything".
+            $grantLimits = is_array($this->grants_json['limits'] ?? null) ? $this->grants_json['limits'] : [];
+            foreach ($grantLimits as $k => $v) {
+                if (! isset($catalog['limits'][$k]) || (int) $v === 0) continue;
+                $label = ((int) $v === -1 ? __('Unlimited') : number_format((int) $v)) . ' ' . lcfirst($catalog['limits'][$k]);
+                $volume[] = ['label' => $label, 'included' => true];
+                if (count($volume) >= 4) break;
+            }
+        } else {
+            $volumeKeys = ['device_limit', 'monthly_messages_limit', 'user_seat_limit', 'contacts_limit', 'broadcast_limit'];
+            foreach ($volumeKeys as $k) {
+                $v = $this->$k;
+                if ($v === null || ! isset($catalog['limits'][$k])) continue;
+                $label = ((int) $v === 0 ? __('Unlimited') : number_format((int) $v)) . ' ' . lcfirst($catalog['limits'][$k]);
+                $volume[] = ['label' => $label, 'included' => true];
+                if (count($volume) >= 4) break;
             }
         }
-        $features = array_merge($on, $off);
+
+        // Features — capabilities. Plan: enabled first + a few greyed-out for
+        // contrast. Add-on: ONLY the capabilities it turns ON (an add-on is
+        // DEFINED by what it adds — no greyed-out "not included" rows, and no
+        // implied "unlimited").
+        if ($isAddon) {
+            $features = [];
+            foreach ($catalog['capabilities'] as $field => $label) {
+                if ((bool) $this->$field) $features[] = ['label' => $label, 'included' => true];
+                if (count($features) >= 8) break;
+            }
+        } else {
+            $on = [];
+            $off = [];
+            foreach ($catalog['capabilities'] as $field => $label) {
+                if ((bool) $this->$field) {
+                    if (count($on) < 7) $on[] = ['label' => $label, 'included' => true];
+                } elseif (count($off) < 3) {
+                    $off[] = ['label' => $label, 'included' => false];
+                }
+            }
+            $features = array_merge($on, $off);
+        }
 
         // Support — light derived list.
         $support = [['label' => __('Docs & community'), 'included' => true]];
@@ -522,6 +584,7 @@ class Package extends Model
                 'autoflow'                     => 'Flow automation',
                 'access_keyword_replies'       => 'Keyword replies',
                 'access_drip_campaigns'        => 'Drip campaigns',
+                'access_campaign_followups'    => 'Campaign follow-ups',
                 'access_routing_rules'         => 'Auto-assign routing rules',
                 'access_business_hours'        => 'Business hours',
                 'access_analytics'             => 'Analytics dashboard',
@@ -544,11 +607,19 @@ class Package extends Model
                 'access_facebook'              => 'Facebook Pages (posts, comments, Messenger)',
                 'access_tiktok'                => 'TikTok (connect, insights, posting)',
                 'access_telegram'              => 'Telegram (bots, inbox, flows, broadcasts)',
+                'access_line'                  => 'LINE (Official Account — inbox, flows, broadcasts)',
+                'line_broadcasts'              => 'LINE broadcasts (send to your OA audience)',
+                'access_wechat'                => 'WeChat (Official Account — inbox, flows, broadcasts)',
+                'wechat_broadcasts'            => 'WeChat broadcasts (send to your OA audience)',
+                'access_viber'                 => 'Viber (Public Account — inbox, flows, broadcasts)',
+                'viber_broadcasts'             => 'Viber broadcasts (send to subscribed users)',
                 'access_sms'                   => 'SMS (Twilio / MSG91 — inbox, campaigns)',
+                'access_email'                 => 'Email (linked mailbox — inbox, flows, campaigns)',
                 'access_wa_storefront'         => 'WhatsApp storefront',
                 'access_flows_commerce'        => 'Commerce flows',
                 'access_chatbot_widgets'       => 'Website chat widgets',
                 'access_sales_pipeline'        => 'Sales pipeline (Deal CRM)',
+                'access_lead_ads'              => 'Meta Lead Ads (Instant Forms → contacts + deals)',
                 'access_sla_policies'          => 'SLA policies',
                 'access_proxy_isolation'       => 'Per-number proxy / dedicated IP',
                 'access_translation'           => 'Auto-translation',

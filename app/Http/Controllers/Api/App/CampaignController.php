@@ -39,6 +39,8 @@ use Illuminate\Support\Str;
  */
 class CampaignController extends Controller
 {
+    use \App\Http\Controllers\Api\App\Concerns\ScopesToSelectedSender;
+
     /**
      * GET /campaigns — list the workspace's campaigns.
      * Shape: { success, message, data: [ transformCampaign(), ... ] }
@@ -48,13 +50,10 @@ class CampaignController extends Controller
         try {
             $query = WpCampaign::query()->forCurrentWorkspace();
 
-            // Device scoping — when the app's device picker is active
-            // (validated X-Device-Id → app_device_id), show only campaigns sent
-            // from THIS number; absent header = workspace-wide (back-compat).
-            $deviceId = (int) $request->attributes->get('app_device_id', 0);
-            if ($deviceId > 0) {
-                $query->where('device_id', $deviceId);
-            }
+            // Sender scoping — show only campaigns sent from the SELECTED
+            // account. device_id is paired with provider because the id alone is
+            // ambiguous across channels; absent selection = workspace-wide.
+            $this->scopeToSelectedSender($query, $request);
 
             if ($status = $request->get('status')) {
                 $query->where('status', $status);
@@ -102,8 +101,7 @@ class CampaignController extends Controller
             $campaign = WpCampaign::query()->forCurrentWorkspace()->find($id);
             // Device scoping — 404 (not 403) a campaign that belongs to another
             // number, matching the device-scoped list.
-            $pinned = (int) $request->attributes->get('app_device_id', 0);
-            if (! $campaign || ($pinned > 0 && (int) $campaign->device_id !== $pinned)) {
+            if (! $campaign || $this->rowOffSelectedSender($request, $campaign)) {
                 return response()->json(['success' => false, 'message' => 'Campaign not found'], 404);
             }
 
@@ -708,8 +706,7 @@ class CampaignController extends Controller
     {
         try {
             $campaign = WpCampaign::query()->forCurrentWorkspace()->find($id);
-            $pinned = (int) $request->attributes->get('app_device_id', 0);
-            if (! $campaign || ($pinned > 0 && (int) $campaign->device_id !== $pinned)) {
+            if (! $campaign || $this->rowOffSelectedSender($request, $campaign)) {
                 return response()->json(['success' => false, 'message' => 'Campaign not found'], 404);
             }
 
@@ -754,8 +751,7 @@ class CampaignController extends Controller
         try {
             $campaign = WpCampaign::query()->forCurrentWorkspace()->find($id);
 
-            $pinned = (int) $request->attributes->get('app_device_id', 0);
-            if (!$campaign || ($pinned > 0 && (int) $campaign->device_id !== $pinned)) {
+            if (!$campaign || $this->rowOffSelectedSender($request, $campaign)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Campaign not found',
@@ -854,7 +850,12 @@ class CampaignController extends Controller
     public function statistics(Request $request): JsonResponse
     {
         try {
-            $campaigns = WpCampaign::query()->forCurrentWorkspace()->get();
+            // Analytics must count the SELECTED account only — an unscoped
+            // aggregate reported every number's campaigns under whichever one
+            // the operator had picked.
+            $campaigns = WpCampaign::query()->forCurrentWorkspace()
+                ->tap(fn ($q) => $this->scopeToSelectedSender($q, $request))
+                ->get();
 
             $total = $campaigns->count();
             $active = $campaigns->where('status', 'processing')->count();

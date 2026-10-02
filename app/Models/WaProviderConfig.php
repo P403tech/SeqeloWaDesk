@@ -35,6 +35,9 @@ class WaProviderConfig extends Model
 {
     protected $fillable = [
         'workspace_id', 'provider', 'status',
+        'default_ai_agent_id',
+        // Per-number business/segment tag (see Device::default_tag).
+        'default_tag',
         'credentials_json', 'meta_json',
         'phone_number', 'display_label',
         'connected_at', 'last_health_at',

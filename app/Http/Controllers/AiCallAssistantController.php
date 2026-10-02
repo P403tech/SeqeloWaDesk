@@ -41,6 +41,22 @@ class AiCallAssistantController extends Controller
         return view('user.ai-assistants.index', compact('assistants', 'counts'));
     }
 
+    /** AI-Training assistants (knowledge bases) the voice agent can answer from. */
+    private function knowledgeAssistants(int $wsId)
+    {
+        return \App\Models\AiChatAssistant::where('workspace_id', $wsId)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    /** Validate a submitted KB assistant id belongs to the workspace; blank/0 → null. */
+    private function validKnowledgeAssistantId(int $wsId, $id): ?int
+    {
+        $id = (int) $id;
+        if ($id <= 0) return null;
+        return \App\Models\AiChatAssistant::where('workspace_id', $wsId)->whereKey($id)->exists() ? $id : null;
+    }
+
     public function create(): View
     {
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);
@@ -49,6 +65,7 @@ class AiCallAssistantController extends Controller
             'tools'     => collect(),
             'mode'      => 'create',
             'numbers'   => $this->wabaNumbers($wsId, null),
+            'knowledgeAssistants' => $this->knowledgeAssistants($wsId),
         ]);
     }
 
@@ -61,6 +78,7 @@ class AiCallAssistantController extends Controller
             'tools'     => $assistant->tools()->get(),
             'mode'      => 'edit',
             'numbers'   => $this->wabaNumbers($wsId, $assistant->id),
+            'knowledgeAssistants' => $this->knowledgeAssistants($wsId),
         ]);
     }
 
@@ -86,13 +104,23 @@ class AiCallAssistantController extends Controller
             });
 
         return $configs->map(function ($c) use ($ownerOf) {
-            $creds = $c->creds();
-            $num = (string) (((array) ($c->meta_json ?? []))['phone_number'] ?? '')
-                ?: (string) ($creds['phone_number_id'] ?? '')
-                ?: ('WABA #' . $c->id);
+            // The real display number lives on the top-level `phone_number`
+            // column (Meta's display_phone_number). Reading only meta_json /
+            // phone_number_id made every option collapse to "WABA #<id>".
+            $meta = (array) ($c->meta_json ?? []);
+            $num  = (string) ($c->phone_number
+                ?: ($meta['display_phone_number'] ?? '')
+                ?: ($meta['phone_number'] ?? '')
+                ?: $c->display_label
+                ?: ($meta['verified_name'] ?? '')
+                ?: ('WABA #' . $c->id));
+            // Append the business name when we have both, so the picker reads
+            // "+1 555 0100 · Acme Co" instead of a bare number.
+            $name  = (string) ($c->display_label ?: ($meta['verified_name'] ?? ''));
+            $label = ($name !== '' && $name !== $num) ? ($num . ' · ' . $name) : $num;
             return [
                 'id'       => (int) $c->id,
-                'label'    => $num,
+                'label'    => $label,
                 'taken_by' => $ownerOf[(int) $c->id] ?? null,
             ];
         })->values()->all();
@@ -121,6 +149,8 @@ class AiCallAssistantController extends Controller
             'ai_api_key'           => 'nullable|string|max:500',  // BYOK override
             'ai_system_prompt'     => 'nullable|string|max:6000',
             'knowledge_base_url'   => 'nullable|url|max:500',
+            // Optional AI-Training knowledge base (ai_chat_assistants row).
+            'knowledge_assistant_id' => 'nullable|integer',
             'natural_conciseness'  => 'sometimes|boolean',
             // Step 4
             'voice_provider'       => 'required|in:elevenlabs,openai,deepgram',
@@ -191,6 +221,8 @@ class AiCallAssistantController extends Controller
             'ai_model'            => $data['ai_model'],
             'ai_system_prompt'    => $data['ai_system_prompt'] ?? null,
             'knowledge_base_url'  => $data['knowledge_base_url'] ?? null,
+            // Validate the KB assistant belongs to this workspace; blank/0 → null.
+            'knowledge_assistant_id' => $this->validKnowledgeAssistantId($wsId, $data['knowledge_assistant_id'] ?? null),
             'natural_conciseness' => (bool) ($data['natural_conciseness'] ?? true),
             'voice_provider'      => $data['voice_provider'],
             'voice_id'            => $data['voice_id'] ?? null,
