@@ -9,6 +9,9 @@ export default defineConfig({
                 'resources/css/app.css',     // dashboard / admin / user shell
                 'resources/css/frontend.css', // public landing pages — independent entry
                 'resources/js/app.js',
+                // Public pages load this on its own. The legal pages 500 when it
+                // is missing from the built Vite manifest.
+                'resources/js/locale-switcher.js',
             ],
             refresh: true,
         }),
