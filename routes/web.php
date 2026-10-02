@@ -952,18 +952,6 @@ Route::middleware('auth')->group(function () {
             Route::post  ('/instagram/connect-start', [DevicesController::class, 'instagramConnectStart'])->name('instagram.connect-start');
             Route::get   ('/instagram/return',        [DevicesController::class, 'instagramReturn'])->name('instagram.return');
             Route::delete('/instagram/{id}/unlink',   [DevicesController::class, 'instagramUnlink'])->whereNumber('id')->name('instagram.unlink');
-            // Email (via the linked MailTrixy install). The real email engine
-            // stays on MailTrixy; these manage this workspace's mirror rows:
-            //   available   — email accounts on MailTrixy not yet linked (picker)
-            //   link        — upsert a mirror row (also the per-row Refresh)
-            //   {id}/unlink — drop this workspace's mirror row
-            Route::get   ('/email/available',     [DevicesController::class, 'emailAvailable'])->name('email.available');
-            Route::post  ('/email/link',          [DevicesController::class, 'emailLink'])->name('email.link');
-            Route::delete('/email/{id}/unlink',   [DevicesController::class, 'emailUnlink'])->whereNumber('id')->name('email.unlink');
-            //   {id}/sync — pull this mailbox's mail from MailTrixy. The live
-            //   push is fire-and-forget (8s timeout, no retry), so this both
-            //   backfills history and repairs anything the push dropped.
-            Route::post  ('/email/{id}/sync',     [DevicesController::class, 'emailSync'])->whereNumber('id')->name('email.sync');
             // Re-point THIS number's Meta webhook (override_callback_uri) at our
             // current inbound URL, reusing the stored token — one-click fix for
             // inbound going dead after a domain change (no disconnect / re-paste).

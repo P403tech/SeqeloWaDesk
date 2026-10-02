@@ -99,30 +99,12 @@
     // keys). Gated on the admin sms_enabled toggle, like telegram/tiktok.
     $hasSms = (bool) \App\Models\SystemSetting::get('sms_enabled', false);
 
-    // LINE channel (core) — LINE Official Account (Messaging API). Connected on
-    // /line by pasting a channel access token + secret. Gated on line_enabled.
-    $hasLine = (bool) \App\Models\SystemSetting::get('line_enabled', false);
-
-    // WeChat channel (core) — WeChat Official Account. Connected on /wechat by
-    // pasting AppID + AppSecret + Token. Gated on wechat_enabled.
-    $hasWeChat = (bool) \App\Models\SystemSetting::get('wechat_enabled', false);
-
-    // Viber channel (core) — Viber Public Account. Connected on /viber by pasting
-    // the bot auth token. Gated on viber_enabled.
-    $hasViber = (bool) \App\Models\SystemSetting::get('viber_enabled', false);
-
-    // Email channel (via the linked MailTrixy install). Mailboxes connect once
-    // on MailTrixy; the card here links one into this workspace (mirror rows,
-    // like Instagram). Gated on email_enabled + a configured bridge.
-    // Resolved by DevicesController and passed in — the 15s background refresh
-    // re-renders _channel_rows from the controller payload alone, so computing
-    // these only here made the mailbox rows vanish moments after page load.
-    // Fall back to a local resolve so a direct render of this view still works.
-    $hasEmail = $hasEmail ?? ((bool) \App\Models\SystemSetting::get('email_enabled', false)
-        && \App\Services\Mailtrixy\MailtrixyClient::fromSettings()->isConfigured());
-    $emailAccounts = $emailAccounts ?? ($hasEmail
-        ? \App\Models\WorkspaceEmailAccount::forWorkspace($__fbWsId)->orderBy('email')->get()
-        : collect());
+    // LINE, WeChat, Viber, and Email are not part of this install.
+    $hasLine = false;
+    $hasWeChat = false;
+    $hasViber = false;
+    $hasEmail = false;
+    $emailAccounts = collect();
 
     // Threads (Meta) — publishing channel; connects on /threads/posts (OAuth).
     $hasThreads = (bool) \App\Models\SystemSetting::get('threads_enabled', false);

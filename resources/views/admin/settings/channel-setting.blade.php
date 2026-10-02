@@ -15,11 +15,7 @@
         $fbOn  = (bool) \App\Models\SystemSetting::get('facebook_enabled', false);
         $smsOn = (bool) \App\Models\SystemSetting::get('sms_enabled', false);
         $tgOn  = (bool) \App\Models\SystemSetting::get('telegram_enabled', false);
-        $lineOn = (bool) \App\Models\SystemSetting::get('line_enabled', false);
-        $wechatOn = (bool) \App\Models\SystemSetting::get('wechat_enabled', false);
-        $viberOn = (bool) \App\Models\SystemSetting::get('viber_enabled', false);
         $ttOn  = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false);
-        $emailOn = (bool) \App\Models\SystemSetting::get('email_enabled', false);
         $thOn  = (bool) \App\Models\SystemSetting::get('threads_enabled', false);
         $svgThreads = '<svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.4"><path d="M8 2.2c-3 0-5.3 2.1-5.3 5.8S5 13.8 8 13.8c1.9 0 3.3-.8 4-2M8 5.2c1.6 0 2.7 1 2.7 2.6 0 1.4-1 2.3-2.4 2.3-1 0-1.7-.5-1.7-1.3 0-.8.7-1.2 1.9-1.2 2 0 3.3 1 3.3 2.8"/></svg>';
 
@@ -32,8 +28,6 @@
         $svgTiktok   = '<svg viewBox="0 0 24 24" class="w-5 h-5" fill="#fff"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>';
         $svgSms      = '<svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"><path d="M2 4.5h12v7H8l-3 2.5V11.5H2z"/><path d="M5 7.5h6M5 9h4"/></svg>';
         $svgInstagram= '<svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.4"><rect x="2.5" y="2.5" width="11" height="11" rx="3.4"/><circle cx="8" cy="8" r="2.7"/><circle cx="11.4" cy="4.6" r="0.7" fill="#fff" stroke="none"/></svg>';
-        $svgEmail    = '<svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3.5" width="12" height="9" rx="1.6"/><path d="m2.5 4.5 5.5 4.3 5.5-4.3"/></svg>';
-
         $cards = [
             'whatsapp'  => ['tag' => 'messaging',  'title' => __('WhatsApp'),           'on' => true,  'onLabel' => count($settings['allowed_send_methods'] ?? []) . ' ' . __('engine(s)'),
                 'bg' => '#25D366', 'svg' => $svgWhatsapp,
@@ -44,24 +38,12 @@
             'telegram'  => ['tag' => 'channel',    'title' => __('Telegram'),           'on' => $tgOn, 'onLabel' => $tgOn ? __('Enabled') : __('Disabled'),
                 'bg' => '#229ED9', 'svg' => $svgTelegram,
                 'desc' => __('Bot API — no OAuth. Paste-a-token connect, plus optional API id/hash for the in-app bot maker.')],
-            'line'      => ['tag' => 'channel',    'title' => __('LINE'),               'on' => $lineOn, 'onLabel' => $lineOn ? __('Enabled') : __('Disabled'),
-                'bg' => '#06C755', 'svg' => $svgTelegram,
-                'desc' => __('LINE Messaging API — paste a channel access token + secret. Big in Japan, Taiwan and Thailand.')],
-            'wechat'    => ['tag' => 'channel',    'title' => __('WeChat'),             'on' => $wechatOn, 'onLabel' => $wechatOn ? __('Enabled') : __('Disabled'),
-                'bg' => '#07C160', 'svg' => $svgTelegram,
-                'desc' => __('WeChat Official Account — paste AppID + AppSecret + Token. A certified Service Account is required.')],
-            'viber'     => ['tag' => 'channel',    'title' => __('Viber'),              'on' => $viberOn, 'onLabel' => $viberOn ? __('Enabled') : __('Disabled'),
-                'bg' => '#7360F2', 'svg' => $svgTelegram,
-                'desc' => __('Viber Public Account — paste the bot auth token. Users must open a chat with the bot before you can message them.')],
             'tiktok'    => ['tag' => 'channel',    'title' => __('TikTok'),             'on' => $ttOn, 'onLabel' => $ttOn ? __('Enabled') : __('Disabled'),
                 'bg' => '#010101', 'svg' => $svgTiktok,
                 'desc' => __('Separate TikTok for Developers app — client key/secret, plus Business Messaging and TikTok Shop.')],
             'sms'       => ['tag' => 'channel',    'title' => __('SMS'),                'on' => $smsOn,'onLabel' => $smsOn ? __('Enabled') : __('Disabled'),
                 'bg' => '#0EA5E9', 'svg' => $svgSms,
                 'desc' => __('Twilio / MSG91 text channel. Numbers connect per workspace and reuse the Twilio credentials.')],
-            'email'     => ['tag' => 'channel',    'title' => __('Email'),              'on' => $emailOn, 'onLabel' => $emailOn ? __('Enabled') : __('Disabled'),
-                'bg' => '#6366F1', 'svg' => $svgEmail,
-                'desc' => __('Email inbox via the linked :brand install — inbound mail lands in the team inbox and replies send from the connected mailbox.', ['brand' => mailtrixy_brand_name()])],
         ];
 
         // Threads (Meta) — a core publishing channel with its OWN settings page
@@ -712,120 +694,6 @@
                     </section>
 
                 </div>{{-- /tiktok --}}
-
-                {{-- ===== LINE ===== --}}
-                <div data-chan="line" @class(['hidden' => $section !== 'line'])>
-                    <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
-                        <div class="px-5 py-4 flex items-center justify-between gap-4">
-                            <div class="flex items-start gap-3 min-w-0">
-                                <span class="w-9 h-9 rounded-xl grid place-items-center shrink-0 text-paper-0 font-bold" style="background:#06C755">L</span>
-                                <div class="min-w-0">
-                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('channel') }}</div>
-                                    <h2 class="font-serif text-[22px] leading-tight mt-0.5">{{ __('LINE') }}</h2>
-                                    <p class="text-[12px] text-ink-600 mt-1 max-w-xl">
-                                        {{ __('LINE Messaging API — no central app needed. A workspace pastes its Official Account channel access token + secret and starts chatting in the inbox. Turn it on to give workspaces with the LINE plan feature the connect flow.') }}
-                                        <span class="block text-ink-400 mt-1">{{ __('Inbound webhook (per channel, auto-registered):') }} <span class="font-mono">{{ url('/api/line/inbound/…') }}</span></span>
-                                    </p>
-                                </div>
-                            </div>
-                            <label class="flex items-center gap-2 cursor-pointer shrink-0">
-                                <span class="text-[12px] text-ink-700">{{ (bool) \App\Models\SystemSetting::get('line_enabled', false) ? __('Enabled') : __('Disabled') }}</span>
-                                <span class="relative inline-flex items-center w-10 h-5 shrink-0">
-                                    <input form="wadesk-providers-form" type="checkbox" name="line_enabled" value="1"
-                                        @checked((bool) \App\Models\SystemSetting::get('line_enabled', false)) class="sr-only peer">
-                                    <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
-                                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
-                                </span>
-                            </label>
-                        </div>
-                    </section>
-                </div>
-
-                {{-- ===== WECHAT ===== --}}
-                <div data-chan="wechat" @class(['hidden' => $section !== 'wechat'])>
-                    <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
-                        <div class="px-5 py-4 flex items-center justify-between gap-4">
-                            <div class="flex items-start gap-3 min-w-0">
-                                <span class="w-9 h-9 rounded-xl grid place-items-center shrink-0 text-paper-0 font-bold" style="background:#07C160">W</span>
-                                <div class="min-w-0">
-                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('channel') }}</div>
-                                    <h2 class="font-serif text-[22px] leading-tight mt-0.5">{{ __('WeChat') }}</h2>
-                                    <p class="text-[12px] text-ink-600 mt-1 max-w-xl">
-                                        {{ __('WeChat Official Account (certified Service Account) — no central app needed. A workspace pastes its AppID + AppSecret + server Token and starts chatting in the inbox. Turn it on to give workspaces with the WeChat plan feature the connect flow.') }}
-                                        <span class="block text-ink-400 mt-1">{{ __('Inbound webhook (per channel, pasted into the OA Server Config):') }} <span class="font-mono">{{ url('/api/wechat/inbound/…') }}</span></span>
-                                    </p>
-                                </div>
-                            </div>
-                            <label class="flex items-center gap-2 cursor-pointer shrink-0">
-                                <span class="text-[12px] text-ink-700">{{ (bool) \App\Models\SystemSetting::get('wechat_enabled', false) ? __('Enabled') : __('Disabled') }}</span>
-                                <span class="relative inline-flex items-center w-10 h-5 shrink-0">
-                                    <input form="wadesk-providers-form" type="checkbox" name="wechat_enabled" value="1"
-                                        @checked((bool) \App\Models\SystemSetting::get('wechat_enabled', false)) class="sr-only peer">
-                                    <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
-                                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
-                                </span>
-                            </label>
-                        </div>
-                    </section>
-                </div>
-
-                {{-- ===== VIBER ===== --}}
-                <div data-chan="viber" @class(['hidden' => $section !== 'viber'])>
-                    <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
-                        <div class="px-5 py-4 flex items-center justify-between gap-4">
-                            <div class="flex items-start gap-3 min-w-0">
-                                <span class="w-9 h-9 rounded-xl grid place-items-center shrink-0 text-paper-0 font-bold" style="background:#7360F2">V</span>
-                                <div class="min-w-0">
-                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('channel') }}</div>
-                                    <h2 class="font-serif text-[22px] leading-tight mt-0.5">{{ __('Viber') }}</h2>
-                                    <p class="text-[12px] text-ink-600 mt-1 max-w-xl">
-                                        {{ __('Viber REST Bot API — no central app needed. A workspace pastes its Viber Public Account auth token and starts chatting in the inbox; we register the webhook automatically. Turn it on to give workspaces with the Viber plan feature the connect flow.') }}
-                                        <span class="block text-ink-400 mt-1">{{ __('Inbound webhook (per channel, auto-registered — needs a valid CA HTTPS domain):') }} <span class="font-mono">{{ url('/api/viber/inbound/…') }}</span></span>
-                                    </p>
-                                </div>
-                            </div>
-                            <label class="flex items-center gap-2 cursor-pointer shrink-0">
-                                <span class="text-[12px] text-ink-700">{{ (bool) \App\Models\SystemSetting::get('viber_enabled', false) ? __('Enabled') : __('Disabled') }}</span>
-                                <span class="relative inline-flex items-center w-10 h-5 shrink-0">
-                                    <input form="wadesk-providers-form" type="checkbox" name="viber_enabled" value="1"
-                                        @checked((bool) \App\Models\SystemSetting::get('viber_enabled', false)) class="sr-only peer">
-                                    <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
-                                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
-                                </span>
-                            </label>
-                        </div>
-                    </section>
-                </div>
-
-                {{-- ===== EMAIL ===== --}}
-                <div data-chan="email" @class(['hidden' => $section !== 'email'])>
-                    <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
-                        <div class="px-5 py-4 flex items-center justify-between gap-4">
-                            <div class="flex items-start gap-3 min-w-0">
-                                <span class="w-9 h-9 rounded-xl grid place-items-center shrink-0" style="background:#6366F1">
-                                    <svg viewBox="0 0 16 16" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3.5" width="12" height="9" rx="1.6"/><path d="m2.5 4.5 5.5 4.3 5.5-4.3"/></svg>
-                                </span>
-                                <div class="min-w-0">
-                                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('channel') }}</div>
-                                    <h2 class="font-serif text-[22px] leading-tight mt-0.5">{{ __('Email') }}</h2>
-                                    <p class="text-[12px] text-ink-600 mt-1 max-w-xl">
-                                        {{ __('Email runs through the linked :brand install — it owns the mailboxes and the sending; WaDesk mirrors its inbound mail into the team inbox and routes replies back. Connect :brand in Admin - Add-ons first, then turn this on so workspaces can link mailboxes on the Numbers page.', ['brand' => mailtrixy_brand_name()]) }}
-                                        <span class="block text-ink-400 mt-1">{{ __('Inbound push (shared, secret-guarded):') }} <span class="font-mono">{{ url('/api/mailtrixy/inbound') }}</span></span>
-                                    </p>
-                                </div>
-                            </div>
-                            <label class="flex items-center gap-2 cursor-pointer shrink-0">
-                                <span class="text-[12px] text-ink-700">{{ (bool) \App\Models\SystemSetting::get('email_enabled', false) ? __('Enabled') : __('Disabled') }}</span>
-                                <span class="relative inline-flex items-center w-10 h-5 shrink-0">
-                                    <input form="wadesk-providers-form" type="checkbox" name="email_enabled" value="1"
-                                        @checked((bool) \App\Models\SystemSetting::get('email_enabled', false)) class="sr-only peer">
-                                    <span class="absolute inset-0 bg-paper-200 peer-checked:bg-wa-deep rounded-full transition"></span>
-                                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-paper-0 rounded-full transition peer-checked:translate-x-5"></span>
-                                </span>
-                            </label>
-                        </div>
-                    </section>
-                </div>
 
                 {{-- ===== TELEGRAM ===== --}}
                 <div data-chan="telegram" @class(['hidden' => $section !== 'telegram'])>

@@ -1996,11 +1996,8 @@ class DevicesController extends Controller
         // (user-devices-index.js sets list.innerHTML = data.cards), so a view-only
         // variable is undefined on that path and the rows silently disappear a few
         // seconds after every page load — the same trap the other channels hit.
-        $hasEmail = (bool) \App\Models\SystemSetting::get('email_enabled', false)
-            && \App\Services\Mailtrixy\MailtrixyClient::fromSettings()->isConfigured();
-        $emailAccounts = ($hasEmail && $wsId)
-            ? \App\Models\WorkspaceEmailAccount::forWorkspace((int) $wsId)->orderBy('email')->get()
-            : collect();
+        $hasEmail = false;
+        $emailAccounts = collect();
 
         // Connect-flow gate — when admin has set an Embedded Signup
         // Config ID at /admin/settings/wadesk-message, the "Add WABA"

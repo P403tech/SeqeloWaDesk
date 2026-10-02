@@ -592,6 +592,7 @@ class WorkspaceEngine
                 // the webhook resolver (raw_jid 'line:<rowId>:<userId>'). Gated on the
                 // platform toggle (line_enabled) AND at least one connected channel.
                 if (!(bool) SystemSetting::get('line_enabled', false)
+                    || ! class_exists(\App\Models\LineChannel::class)
                     || !\App\Models\LineChannel::hasConnected($workspaceId)) {
                     continue;
                 }
@@ -616,6 +617,7 @@ class WorkspaceEngine
                 // id> — matches the webhook resolver (raw_jid 'wechat:<rowId>:<openid>').
                 // Gated on the platform toggle (wechat_enabled) AND a connected channel.
                 if (!(bool) SystemSetting::get('wechat_enabled', false)
+                    || ! class_exists(\App\Models\WeChatChannel::class)
                     || !\App\Models\WeChatChannel::hasConnected($workspaceId)) {
                     continue;
                 }
@@ -640,6 +642,7 @@ class WorkspaceEngine
                 // — matches the webhook resolver (raw_jid 'viber:<rowId>:<userId>').
                 // Gated on the platform toggle (viber_enabled) AND a connected channel.
                 if (!(bool) SystemSetting::get('viber_enabled', false)
+                    || ! class_exists(\App\Models\ViberChannel::class)
                     || !\App\Models\ViberChannel::hasConnected($workspaceId)) {
                     continue;
                 }
@@ -670,6 +673,7 @@ class WorkspaceEngine
                 // carry) AND hasConnected, which also checks the LIVE bridge, so
                 // stale mirror rows never surface after the admin disconnects it.
                 if (!(bool) SystemSetting::get('email_enabled', false)
+                    || ! class_exists(\App\Models\WorkspaceEmailAccount::class)
                     || !PlanLimitGuard::hasFeature(Workspace::find($workspaceId), 'access_email')
                     || !\App\Models\WorkspaceEmailAccount::hasConnected($workspaceId)) {
                     continue;

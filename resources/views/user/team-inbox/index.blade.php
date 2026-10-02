@@ -48,6 +48,7 @@
                 // on and this workspace has a linked mail account, so email
                 // threads are filterable.
                 if ($__tiWsId && (bool) \App\Models\SystemSetting::get('email_enabled', false)
+                    && class_exists(\App\Models\WorkspaceEmailAccount::class)
                     && \App\Models\WorkspaceEmailAccount::hasConnected((int) $__tiWsId)) {
                     $__tiChannels[] = 'em';
                 }

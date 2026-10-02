@@ -147,7 +147,6 @@ class AdminPagesController extends Controller
         // was validated away and never persisted. Same double-declaration trap
         // that hid the channel feature toggles.
         'sms_monthly_limit',
-        'email_monthly_limit',
         // Threads (Meta) publishing caps.
         'threads_accounts',
         'threads_scheduled_posts',
@@ -215,21 +214,11 @@ class AdminPagesController extends Controller
         // so their toggles never rendered on the package form and an admin had no way
         // to enable them per plan. Same double-gate bug that hid the Instagram flags.
         'access_sms',               // SMS (Twilio / MSG91)
-        'access_email',             // Email channel (linked mailbox via the mail bridge)
         'access_lead_finder',       // Lead Finder (map lead scraper)
         'access_facebook', 'facebook_inbox', 'facebook_posts',
         'facebook_comments', 'facebook_ai_agent',
         'access_tiktok', 'tiktok_inbox', 'tiktok_posts', 'tiktok_comments',
         'access_telegram', 'telegram_broadcasts',
-        // LINE / WeChat / Viber — same double-gate bug as above: declared on the
-        // Package model (fillable + boolean cast) and enforced at runtime
-        // (LineConnectController / WeChatConnectController / ViberConnectController
-        // check access_line/wechat/viber), but MISSING here — so their toggles
-        // never rendered on the package form and an admin had no way to grant the
-        // channel per plan, which blocked every user from using it.
-        'access_line', 'line_broadcasts',
-        'access_wechat', 'wechat_broadcasts',
-        'access_viber', 'viber_broadcasts',
         // Threads (Meta) — publishing channel (core). access_threads = master
         // switch, threads_posts = composer/scheduler, threads_replies = reply
         // auto-responder, threads_insights = analytics dashboard.

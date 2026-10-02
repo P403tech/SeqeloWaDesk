@@ -481,10 +481,6 @@ Route::prefix('extensions')->name('extensions.')->group(function () {
     Route::post  ('/instaflow/connect', [$ac, 'connectInstaflow'])->name('instaflow.connect');
     // Disconnect it — clears the stored URL / secret / connection flag.
     Route::post  ('/instaflow/disconnect', [$ac, 'disconnectInstaflow'])->name('instaflow.disconnect');
-    // Connect a standalone MailTrixy deployment — same URL + shared secret shape.
-    Route::post  ('/mailtrixy/connect', [$ac, 'connectMailtrixy'])->name('mailtrixy.connect');
-    // Disconnect it — clears the stored URL / secret / connection flag.
-    Route::post  ('/mailtrixy/disconnect', [$ac, 'disconnectMailtrixy'])->name('mailtrixy.disconnect');
     Route::post  ('/{id}/toggle', [$ac, 'toggle'])->name('toggle');
     Route::delete('/{id}',        [$ac, 'destroy'])->name('destroy');
     // In-place modules (addon/<slug>/) — deactivate/re-activate without deleting files.

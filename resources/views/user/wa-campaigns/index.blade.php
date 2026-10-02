@@ -12,10 +12,7 @@
     // disconnected bridge takes the card away on the next render. The plan flag
     // gates it too — the same one WorkspaceEngine::senders and the runner check,
     // so a plan without Email can't reach the builder from here either.
-    $emailCampaign = $__campWsId > 0
-        && (bool) \App\Models\SystemSetting::get('email_enabled', false)
-        && \App\Services\PlanLimitGuard::hasFeature(auth()->user()?->currentWorkspace, 'access_email')
-        && \App\Models\WorkspaceEmailAccount::hasConnected($__campWsId);
+    $emailCampaign = false;
 
     // Any non-WhatsApp channel connected => "New campaign" opens the chooser.
     $campChannelPicker = $smsCampaign || $emailCampaign;

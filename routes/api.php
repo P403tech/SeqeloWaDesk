@@ -27,14 +27,6 @@ Route::post('/instaflow/inbound',
     [\App\Http\Controllers\Api\InstaflowInboundController::class, 'ingest'])
     ->name('instaflow.inbound');
 
-// ───────── MailTrixy (Email) → WaDesk push ─────────
-// The separate MailTrixy deployment pushes each new inbound email here; the
-// controller self-guards on the X-Mailtrixy-Secret shared secret. Serves
-// /api/mailtrixy/inbound.
-Route::post('/mailtrixy/inbound',
-    [\App\Http\Controllers\Api\MailtrixyInboundController::class, 'ingest'])
-    ->name('mailtrixy.inbound');
-
 // ───────── Scheduled / Broadcast / Campaign status callbacks ─────────
 Route::post('/update-schedule-status',
     [\App\Http\Controllers\ScheduledController::class, 'updateStatus'])

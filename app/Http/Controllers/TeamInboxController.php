@@ -695,6 +695,12 @@ class TeamInboxController extends Controller
             });
         }
 
+        // Email pull is part of the MailTrixy channel, which this install does
+        // not ship. Skip the whole block when those classes are absent so the
+        // inbox poll never fatals on a missing model.
+        if (class_exists(\App\Models\WorkspaceEmailAccount::class)
+            && class_exists(\App\Services\Mailtrixy\MailtrixyClient::class)
+            && class_exists(\App\Services\Mailtrixy\MailtrixySyncService::class)) {
         // Email PULL from MailTrixy — the channel has no reliable provider
         // webhook (its push is fire-and-forget, 8s, no retry), so we pull here
         // exactly like the Instagram/Instaflow pull above: existing history +
@@ -783,6 +789,7 @@ class TeamInboxController extends Controller
                 try { \App\Services\Mailtrixy\MailtrixySyncService::reconcile(); }
                 catch (\Throwable $e) { \Illuminate\Support\Facades\Log::warning('[MAILTRIXY] reconcile sweep failed: ' . $e->getMessage()); }
             });
+        }
         }
 
         // SLA breach sweep — GLOBAL key (SlaTracker walks every workspace once).
