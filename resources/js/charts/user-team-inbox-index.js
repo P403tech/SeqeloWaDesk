@@ -4721,8 +4721,6 @@ Limits:
             if (useSaved) useSaved.checked = !!agent.use_saved_replies;
             const shopRouter = form.querySelector('[name="shop_router"]');
             if (shopRouter) shopRouter.checked = !!agent.shop_router;
-            const kbSel = form.querySelector('[name="knowledge_assistant_id"]');
-            if (kbSel) kbSel.value = agent.knowledge_assistant_id ? String(agent.knowledge_assistant_id) : '';
             // Handoff settings
             const handoffEnabled = form.querySelector('[name="handoff_enabled"]');
             if (handoffEnabled) handoffEnabled.checked = agent.handoff_enabled !== false;
@@ -4933,9 +4931,8 @@ Limits:
             list.innerHTML = `<div class="text-[12px] text-ink-500 text-center py-4">No keys saved yet.</div>`;
             return;
         }
-        const providerLabel = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', muse: 'Muse' };
         const providerLabel = {
-            openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', mistral: 'Mistral',
+            openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', muse: 'Muse', mistral: 'Mistral',
             deepseek: 'DeepSeek', xai: 'xAI (Grok)', perplexity: 'Perplexity', groq: 'Groq',
             qwen: 'Alibaba Qwen', moonshot: 'Moonshot (Kimi)', zai: 'Z.ai (GLM)', cohere: 'Cohere',
             nvidia: 'NVIDIA', llama: 'Meta Llama', huggingface: 'Hugging Face', baidu: 'Baidu (Ernie)',

@@ -566,3 +566,4 @@ export default function init() {
   showStep(bootStep >= 1 && bootStep <= TOTAL_STEPS ? bootStep : 1);
   if (state.id) loadSources();
 }
+}
