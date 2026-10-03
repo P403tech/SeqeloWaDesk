@@ -88,7 +88,12 @@ class ScalingSettingsController extends Controller
             // Works with predis OR phpredis; ping throws/returns false if down or
             // the client isn't installed — either way we report "not reachable".
             $res = Redis::connection()->ping();
-            return $res === true || $res === 'PONG' || $res === '+PONG' || (is_string($res) && stripos($res, 'PONG') !== false);
+            if ($res === true) {
+                return true;
+            }
+            $text = is_string($res) ? $res : (is_object($res) ? (string) $res : '');
+
+            return $text !== '' && stripos($text, 'PONG') !== false;
         } catch (\Throwable $e) {
             return false;
         }

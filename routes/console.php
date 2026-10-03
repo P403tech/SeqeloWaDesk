@@ -62,3 +62,10 @@ Schedule::call(function () {
         }
     }
 })->everyMinute()->name('advanced-scaling-sweeps')->withoutOverlapping();
+
+// Idle worker heartbeat. Campaign jobs also mark the worker, but a quiet
+// hour would otherwise leave the admin health dot red.
+Schedule::call(function () {
+    if (! Scaling::enabled()) return;
+    \App\Jobs\ScalingHeartbeatJob::dispatch()->onConnection('redis');
+})->everyMinute()->name('scaling-worker-heartbeat')->withoutOverlapping();

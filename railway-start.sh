@@ -10,6 +10,19 @@ if [ -n "$MYSQLHOST" ]; then
   export DB_PASSWORD="$MYSQLPASSWORD"
 fi
 
+# Railway Redis plugin publishes REDISHOST / REDIS_URL. The image has Predis,
+# not the phpredis extension. A long campaign job must outlive retry_after
+# or Redis will hand the same send to a second worker.
+if [ -n "$REDISHOST" ] && [ -z "$REDIS_HOST" ]; then
+  export REDIS_HOST="$REDISHOST"
+  export REDIS_PORT="${REDISPORT:-6379}"
+  export REDIS_PASSWORD="${REDISPASSWORD:-}"
+fi
+if [ -n "$REDIS_URL" ] || [ -n "$REDIS_HOST" ]; then
+  export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
+  export REDIS_QUEUE_RETRY_AFTER="${REDIS_QUEUE_RETRY_AFTER:-3900}"
+fi
+
 mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache storage/app/training
 php artisan storage:link --force >/dev/null 2>&1 || true
 php artisan view:clear >/dev/null 2>&1 || true
@@ -72,15 +85,27 @@ nginx_pid=$!
 php artisan schedule:work &
 sched_pid=$!
 
+worker_pid=""
+if [ -n "$REDIS_URL" ] || [ -n "$REDIS_HOST" ]; then
+  # --timeout must stay below REDIS_QUEUE_RETRY_AFTER so a long send is not
+  # picked up twice. The loop restarts the worker if it exits.
+  php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600 --max-time=3600 &
+  worker_pid=$!
+fi
+
 while kill -0 "$fpm_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
   if ! kill -0 "$sched_pid" 2>/dev/null; then
     php artisan schedule:work &
     sched_pid=$!
   fi
+  if [ -n "$worker_pid" ] && ! kill -0 "$worker_pid" 2>/dev/null; then
+    php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600 --max-time=3600 &
+    worker_pid=$!
+  fi
   sleep 2
 done
 
-kill "$fpm_pid" "$nginx_pid" "$sched_pid" 2>/dev/null || true
+kill "$fpm_pid" "$nginx_pid" "$sched_pid" ${worker_pid:+$worker_pid} 2>/dev/null || true
 wait "$fpm_pid" 2>/dev/null || true
 wait "$nginx_pid" 2>/dev/null || true
 exit 1
