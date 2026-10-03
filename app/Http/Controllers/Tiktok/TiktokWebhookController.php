@@ -32,12 +32,15 @@ class TiktokWebhookController extends Controller
 
         // Verify the signature when a secret is configured. If none is set yet
         // (initial portal setup), ack 200 so saving the callback URL isn't blocked.
-        if ($secret !== '') {
-            if (! $this->verifySignature($raw, (string) $request->header('TikTok-Signature', ''), $secret)) {
-                Log::warning('[TT-HOOK] signature verification failed');
+        if ($secret === '') {
+            Log::warning('[TT-HOOK] no client secret; event acknowledged and not stored');
 
-                return response('invalid signature', 403);
-            }
+            return response('ok', 200);
+        }
+        if (! $this->verifySignature($raw, (string) $request->header('TikTok-Signature', ''), $secret)) {
+            Log::warning('[TT-HOOK] signature verification failed');
+
+            return response('invalid signature', 403);
         }
 
         $payload = json_decode($raw, true) ?: [];
@@ -82,13 +85,16 @@ class TiktokWebhookController extends Controller
 
         // Business webhooks are signed with the business app secret. Verify when
         // configured; the exact header name is confirmed at integration time.
-        if ($secret !== '') {
-            $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
-            if ($sig !== '' && ! $this->verifySignature($raw, $sig, $secret)) {
-                Log::warning('[TT-BM-HOOK] signature verification failed');
+        if ($secret === '') {
+            Log::warning('[TT-BM-HOOK] no app secret; event acknowledged and not stored');
 
-                return response('invalid signature', 403);
-            }
+            return response('ok', 200);
+        }
+        $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
+        if ($sig === '' || ! $this->verifySignature($raw, $sig, $secret)) {
+            Log::warning('[TT-BM-HOOK] signature verification failed');
+
+            return response('invalid signature', 403);
         }
 
         $payload = json_decode($raw, true) ?: [];
@@ -137,11 +143,14 @@ class TiktokWebhookController extends Controller
     {
         $secret = \App\Services\Tiktok\TiktokBusinessClient::appSecret();
         $raw = $request->getContent();
-        if ($secret !== '') {
-            $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
-            if ($sig !== '' && ! $this->verifySignature($raw, $sig, $secret)) {
-                return response('invalid signature', 403);
-            }
+        if ($secret === '') {
+            Log::warning('[TT-LEAD-HOOK] no app secret; event acknowledged and not stored');
+
+            return response('ok', 200);
+        }
+        $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
+        if ($sig === '' || ! $this->verifySignature($raw, $sig, $secret)) {
+            return response('invalid signature', 403);
         }
 
         $payload = json_decode($raw, true) ?: [];

@@ -76,6 +76,12 @@ class ContactController extends V1Controller
     {
         $wsId = $this->workspaceId();
 
+        \App\Services\PlanLimitGuard::check(
+            $request->user()?->currentWorkspace,
+            'contacts_limit',
+            Contact::where('workspace_id', $wsId)->count(),
+        );
+
         // Build the display name from name parts when `name` is blank,
         // mirroring ContactsController::store.
         $fullName = $request->input('name')

@@ -2403,6 +2403,9 @@ class DevicesController extends Controller
      */
     public function emailAvailable(): JsonResponse
     {
+        if (! class_exists(\App\Services\Mailtrixy\MailtrixyClient::class)) {
+            return response()->json(['ok' => false, 'error' => 'Email is not installed'], 404);
+        }
         $wsId = Auth::user()?->current_workspace_id;
         if (!$wsId) return response()->json(['ok' => false, 'accounts' => []], 422);
 
@@ -2455,6 +2458,10 @@ class DevicesController extends Controller
      */
     public function emailLink(Request $request)
     {
+        if (! class_exists(\App\Services\Mailtrixy\MailtrixyClient::class)
+            || ! class_exists(\App\Models\WorkspaceEmailAccount::class)) {
+            abort(404);
+        }
         $wsId = Auth::user()?->current_workspace_id;
         if (!$wsId) {
             return $request->wantsJson()
@@ -2564,6 +2571,9 @@ class DevicesController extends Controller
      */
     public function emailSync(int $id, Request $request)
     {
+        if (! class_exists(\App\Models\WorkspaceEmailAccount::class)) {
+            abort(404);
+        }
         $wsId = Auth::user()?->current_workspace_id;
         $row  = $wsId
             ? \App\Models\WorkspaceEmailAccount::where('workspace_id', $wsId)->where('id', $id)->first()
@@ -2604,6 +2614,9 @@ class DevicesController extends Controller
      */
     public function emailUnlink(int $id): RedirectResponse
     {
+        if (! class_exists(\App\Models\WorkspaceEmailAccount::class)) {
+            abort(404);
+        }
         $wsId = Auth::user()?->current_workspace_id;
         if ($wsId) {
             \App\Models\WorkspaceEmailAccount::where('workspace_id', $wsId)->where('id', $id)->delete();

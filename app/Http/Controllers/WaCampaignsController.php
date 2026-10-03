@@ -2206,6 +2206,15 @@ class WaCampaignsController extends Controller
         // scheduled, recurring, resumed and REST-dispatched sends alike — and run
         // through the PHP mail transport instead.
         if ($campaign->provider === \App\Services\WorkspaceEngine::ENGINE_EMAIL) {
+            if (! class_exists(\App\Services\Mailtrixy\EmailCampaignRunner::class)) {
+                $campaign->update(['status' => 'failed']);
+                \App\Models\WpCampaignContact::query()
+                    ->where('campaign_id', $campaign->id)
+                    ->where('status', 'queued')
+                    ->update(['status' => 'failed', 'error_message' => 'Email sending is not installed']);
+                Log::warning('[CAMPAIGN] email runner is not installed', ['campaign_id' => $campaign->id]);
+                return;
+            }
             app(\App\Services\Mailtrixy\EmailCampaignRunner::class)->run($campaign, (array) $contactIds);
             return;
         }

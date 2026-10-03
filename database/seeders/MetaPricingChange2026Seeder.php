@@ -28,7 +28,7 @@ class MetaPricingChange2026Seeder extends Seeder
 
         $body =
             '<p>Meta is updating how the <strong>WhatsApp Business Platform (Cloud API)</strong> is billed. '
-            . 'This is a <strong>Meta change, not a WaDesk change</strong> — it applies to every business on the official API, whichever tool they use. '
+            . 'This is a <strong>Meta change, not a Seqelo change</strong> — it applies to every business on the official API, whichever tool they use. '
             . 'The change takes effect on <strong>1 October 2026</strong>. The free WhatsApp and WhatsApp Business phone apps are not affected.</p>'
 
             . '<h2>What is changing</h2>'
@@ -43,7 +43,7 @@ class MetaPricingChange2026Seeder extends Seeder
             . '<ul>'
             . '<li><strong>Marketing templates</strong> are unaffected by this update.</li>'
             . '<li>The <strong>free WhatsApp / WhatsApp Business apps</strong> are not affected — only the Business Platform (API).</li>'
-            . '<li>Billing is handled by <strong>Meta on your WhatsApp account</strong>, not by WaDesk. WaDesk does not add any charge on top.</li>'
+            . '<li>Billing is handled by <strong>Meta on your WhatsApp account</strong>, not by Seqelo. Seqelo does not add any charge on top.</li>'
             . '</ul>'
 
             . '<h2>What it means for you</h2>'
@@ -58,7 +58,7 @@ class MetaPricingChange2026Seeder extends Seeder
             . '<li>Use <strong>utility templates outside the window only when genuinely needed</strong>.</li>'
             . '</ul>'
 
-            . '<p>Nothing in WaDesk changes because of this — your inbox, campaigns, flows and templates all keep working exactly as before. '
+            . '<p>Nothing in Seqelo changes because of this — your inbox, campaigns, flows and templates all keep working exactly as before. '
             . 'The only difference is on your Meta bill. If you have questions about your specific plan or country rates, check Meta\'s current rate card for your audience.</p>';
 
         BlogPost::updateOrCreate(
@@ -69,11 +69,11 @@ class MetaPricingChange2026Seeder extends Seeder
                 'body'             => $body,
                 'category_id'      => $catId,
                 'tags'             => ['pricing', 'Meta', 'service messages', 'WhatsApp Business API', 'October 2026'],
-                'author_name'      => 'WaDesk Team',
+                'author_name'      => 'Seqelo Team',
                 'status'           => 'published',
                 'published_at'     => now(),
                 'is_featured'      => true,
-                'meta_title'       => 'Meta WhatsApp pricing changes 1 October 2026 | WaDesk',
+                'meta_title'       => 'Meta WhatsApp pricing changes 1 October 2026 | Seqelo',
                 'meta_description' => $excerpt,
                 'meta_keywords'    => 'WhatsApp pricing 2026, Meta service message pricing, WhatsApp Business API cost, October 2026',
             ]

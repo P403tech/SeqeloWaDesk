@@ -48,14 +48,17 @@ class FacebookWebhookController extends Controller
 
         $matched = FacebookWebhookSignature::verify($raw, $sig);
         if ($matched === null) {
-            // No secret configured yet, or a forged/garbled signature. When a
-            // secret IS configured we reject; when none is set we still 200 so
-            // Meta's setup handshake isn't blocked before the app secret lands.
+            // A configured secret that does not match is a forged payload.
+            // With no secret at all, acknowledge so Meta keeps the subscription,
+            // but do not store or act on the unsigned body.
             if (FacebookWebhookSignature::configuredSecrets() !== []) {
                 Log::warning('[FB-HOOK] signature verification failed');
 
                 return response('invalid signature', 403);
             }
+            Log::warning('[FB-HOOK] no app secret configured; event acknowledged and not stored');
+
+            return response('ok', 200);
         }
 
         $payload = $request->json()->all();

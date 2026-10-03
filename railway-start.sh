@@ -53,6 +53,7 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
   # Gallery templates live in MySQL (not the image). Re-seed on boot so
   # /flows "Start from a template" is never empty after a deploy.
   php artisan db:seed --class=Database\\Seeders\\FlowTemplateSeeder --force --no-interaction || true
+  php artisan db:seed --class=Database\\Seeders\\MetaPricingChange2026Seeder --force --no-interaction || true
 else
   echo "Skipping migrate (DB_CONNECTION=${DB_CONNECTION:-unset}; no MYSQLHOST)."
 fi
@@ -66,12 +67,20 @@ php-fpm -F &
 fpm_pid=$!
 nginx -c /tmp/nginx-railway.conf -g "daemon off;" &
 nginx_pid=$!
+# Railway has no OS cron. This runs the every-minute schedule, including
+# the stall rescue for campaigns and flows when advanced scaling is on.
+php artisan schedule:work &
+sched_pid=$!
 
 while kill -0 "$fpm_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
+  if ! kill -0 "$sched_pid" 2>/dev/null; then
+    php artisan schedule:work &
+    sched_pid=$!
+  fi
   sleep 2
 done
 
-kill "$fpm_pid" "$nginx_pid" 2>/dev/null || true
+kill "$fpm_pid" "$nginx_pid" "$sched_pid" 2>/dev/null || true
 wait "$fpm_pid" 2>/dev/null || true
 wait "$nginx_pid" 2>/dev/null || true
 exit 1

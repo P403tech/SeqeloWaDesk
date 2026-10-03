@@ -198,6 +198,11 @@ class ContactGroupController extends Controller
                         }
                         $createdContacts[] = $existing;
                     } else {
+                        \App\Services\PlanLimitGuard::check(
+                            $request->user()?->currentWorkspace,
+                            'contacts_limit',
+                            Contact::where('workspace_id', $wsId)->count(),
+                        );
                         $new = Contact::create([
                             'user_id'       => $userId,
                             'workspace_id'  => $wsId,
@@ -452,6 +457,12 @@ class ContactGroupController extends Controller
         $groupIds = $request->filled('group_ids')
             ? array_values(array_unique(array_map('strval', array_map('intval', (array) $request->input('group_ids')))))
             : [];
+
+        \App\Services\PlanLimitGuard::check(
+            $request->user()?->currentWorkspace,
+            'contacts_limit',
+            Contact::where('workspace_id', $wsId)->count(),
+        );
 
         $contact = Contact::create([
             'user_id'        => $userId,

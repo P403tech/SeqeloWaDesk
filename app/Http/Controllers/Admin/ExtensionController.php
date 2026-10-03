@@ -222,6 +222,9 @@ class ExtensionController extends Controller
         // so a re-branded install never shows the literal "MailTrixy" in any
         // user-facing message. The handshake header + service key stay literal
         // (functional identifiers, never re-branded).
+        if (! class_exists(MailtrixyClient::class)) {
+            return back()->with('error', 'Email is not installed on this app.');
+        }
         $brand     = mailtrixy_brand_name();
         $connected = (new MailtrixyClient($url, $secret))->handshake();
         $reason    = $connected ? '' : 'Could not verify a ' . $brand . ' deployment at that URL — check the URL and shared secret.';
