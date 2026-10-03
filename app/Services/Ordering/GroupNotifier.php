@@ -17,7 +17,7 @@ class GroupNotifier
 {
     private function nodeUrl(): string
     {
-        return (string) (SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+        return (string) (SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
     }
 
     /**

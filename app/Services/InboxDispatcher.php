@@ -527,7 +527,7 @@ class InboxDispatcher
                 // only a last-resort fallback.
             }
         }
-        if ($serverUrl === '') $serverUrl = (string) (SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+        if ($serverUrl === '') $serverUrl = (string) (SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
 
         // 1) Outbound: from_number IS the device this chat is paired to —
         //    set by TeamInboxController::reply / AiAgentService from the
@@ -868,6 +868,9 @@ class InboxDispatcher
      */
     private function dispatchLine(InboxMessage $msg): array
     {
+        if (! class_exists(\App\Models\LineChannel::class)) {
+            return ['ok' => false, 'platform' => 'LINE', 'provider_id' => null, 'local_only' => false, 'error' => 'LINE is not installed'];
+        }
         $conv  = $msg->conversation;
         $parts = explode(':', (string) $conv?->raw_jid);   // line : rowId : userId
         $to    = $parts[2] ?? ($parts[1] ?? '');
@@ -933,6 +936,9 @@ class InboxDispatcher
      */
     private function dispatchWeChat(InboxMessage $msg): array
     {
+        if (! class_exists(\App\Models\WeChatChannel::class)) {
+            return ['ok' => false, 'platform' => 'WECHAT', 'provider_id' => null, 'local_only' => false, 'error' => 'WeChat is not installed'];
+        }
         $conv  = $msg->conversation;
         $parts = explode(':', (string) $conv?->raw_jid);   // wechat : rowId : openid
         $to    = $parts[2] ?? '';
@@ -1001,6 +1007,9 @@ class InboxDispatcher
      */
     private function dispatchViber(InboxMessage $msg): array
     {
+        if (! class_exists(\App\Models\ViberChannel::class)) {
+            return ['ok' => false, 'platform' => 'VIBER', 'provider_id' => null, 'local_only' => false, 'error' => 'Viber is not installed'];
+        }
         $conv  = $msg->conversation;
         $parts = explode(':', (string) $conv?->raw_jid);   // viber : rowId : userId
         $to    = $parts[2] ?? '';
@@ -1272,6 +1281,9 @@ class InboxDispatcher
      */
     private function dispatchMailtrixy(InboxMessage $msg): array
     {
+        if (! class_exists(\App\Models\WorkspaceEmailAccount::class)) {
+            return ['ok' => false, 'platform' => 'EMAIL', 'provider_id' => null, 'local_only' => false, 'error' => 'Email is not installed'];
+        }
         $conv = \DB::table('conversations')->where('id', $msg->conversation_id)->first();
         $rawJid = (string) ($conv->raw_jid ?? '');
         $parts = explode(':', $rawJid);
@@ -2135,9 +2147,9 @@ class InboxDispatcher
                 $sandbox = (bool)   ($creds['sandbox']      ?? false);
             }
         }
-        if ($sid === '')   $sid   = (string) \App\Models\SystemSetting::get('twilio_account_sid', env('TWILIO_ACCOUNT_SID', ''));
-        if ($token === '') $token = (string) \App\Models\SystemSetting::get('twilio_auth_token', env('TWILIO_AUTH_TOKEN', ''));
-        if ($from === '')  $from  = (string) \App\Models\SystemSetting::get('twilio_whatsapp_number', env('TWILIO_WHATSAPP_NUMBER', ''));
+        if ($sid === '')   $sid   = (string) \App\Models\SystemSetting::get('twilio_account_sid', config('bridge.twilio.sid'));
+        if ($token === '') $token = (string) \App\Models\SystemSetting::get('twilio_auth_token', config('bridge.twilio.token'));
+        if ($from === '')  $from  = (string) \App\Models\SystemSetting::get('twilio_whatsapp_number', config('bridge.twilio.from'));
         if ($sid === '' || $token === '' || $from === '') {
             return $this->localOnly('T', 'Twilio creds missing for this workspace — connect Twilio at /devices.');
         }

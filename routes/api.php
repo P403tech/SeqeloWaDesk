@@ -27,6 +27,11 @@ Route::post('/instaflow/inbound',
     [\App\Http\Controllers\Api\InstaflowInboundController::class, 'ingest'])
     ->name('instaflow.inbound');
 
+// Node bridge callbacks. Instaflow, Twilio status, Google form responses,
+// and the browser extension stay outside this group because they use
+// different credentials.
+Route::middleware('node.token')->group(function () {
+
 // ───────── Scheduled / Broadcast / Campaign status callbacks ─────────
 Route::post('/update-schedule-status',
     [\App\Http\Controllers\ScheduledController::class, 'updateStatus'])
@@ -228,7 +233,13 @@ Route::post('/flow-node/google/sheet-write',  [$gfn, 'sheetWrite'])->name('api.f
 Route::post('/flow-node/google/sheet-read',   [$gfn, 'sheetRead'])->name('api.flow-node.gsheet-read');
 Route::post('/flow-node/google/doc-generate', [$gfn, 'docGenerate'])->name('api.flow-node.gdoc-generate');
 Route::post('/flow-node/google/form-send',    [$gfn, 'formSend'])->name('api.flow-node.gform-send');
-Route::post('/google/form-response',          [$gfn, 'formResponse'])->name('api.google.form-response');
+
+});
+
+// Google Apps Script posts here with a per-form token, not the Node secret.
+Route::post('/google/form-response', [\App\Http\Controllers\GoogleFlowNodeController::class, 'formResponse'])->name('api.google.form-response');
+
+Route::middleware('node.token')->group(function () {
 
 // ───────── WABA creds + AI call bridge ─────────
 Route::get('/waba-creds',
@@ -333,6 +344,8 @@ Route::get('/keyword-replies',
     [\App\Http\Controllers\AutoReplyController::class, 'lookup'])
     ->name('keyword-replies.lookup');
 
+});
+
 // Twilio MessageStatus webhook. Twilio POSTs delivered/read/failed
 // events here whenever an outbound send (broadcast, chat, inbox-reply,
 // flow, template) changes state. Authenticated via X-Twilio-Signature
@@ -341,6 +354,8 @@ Route::get('/keyword-replies',
 Route::post('/twilio/status',
     [\App\Http\Controllers\TwilioStatusController::class, 'handle'])
     ->name('twilio.status');
+
+Route::middleware('node.token')->group(function () {
 
 // Node campaignService.js calls this on every campaign send to fetch the
 // approved template row (template_body / buttons / attachment / variable_map
@@ -428,6 +443,8 @@ Route::get('/workspace-attributes/{workspaceId}', function (\Illuminate\Http\Req
         'attributes' => (object) $attributes,
     ]);
 })->whereNumber('workspaceId')->name('api.workspace-attributes');
+
+});
 
 // ═════════ WaDesk browser-extension API ═════════
 // Consumed by extension/content.js. Public: app-config + login. The rest

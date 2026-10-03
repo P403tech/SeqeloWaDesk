@@ -213,7 +213,9 @@ return [
     |
     */
 
-    'same_site' => env('SESSION_SAME_SITE', 'lax'),
+    // Locked. Inbox and chat APIs skip CSRF and rely on this cookie
+    // not being sent on cross-site posts. Do not set it to "none".
+    'same_site' => 'lax',
 
     /*
     |--------------------------------------------------------------------------

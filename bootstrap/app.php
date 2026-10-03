@@ -159,6 +159,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin'              => \App\Http\Middleware\EnsureUserIsAdmin::class,
             // Customer REST API key auth — resolves a workspace key and acts
             // as its owner user so existing controllers/services work as-is.
+            'node.token'         => \App\Http\Middleware\EnsureNodeToken::class,
             'auth.apikey'        => \App\Http\Middleware\AuthenticateApiKey::class,
             'auth.apikey.throttle' => \App\Http\Middleware\ApiPlanRateLimit::class,
             'platform.role'      => \App\Http\Middleware\EnsurePlatformRole::class,
@@ -347,9 +348,6 @@ return Application::configure(basePath: dirname(__DIR__))
             // absent (EnsureInstalled 302s them away afterwards), they hold no
             // user data, and there is no authenticated session to ride on.
             'install/*',
-            // Developer file-sync push — a machine-to-machine deploy call with
-            // no browser session; authed by the WD_SYNC_KEY header, not a token.
-            'wd-sync',
             // Team-inbox AJAX API — the whole namespace (send message, retry,
             // voice, media, react, presence, meet, assistants…). These are
             // AUTHENTICATED, SAME-ORIGIN JSON endpoints. With SameSite=Lax

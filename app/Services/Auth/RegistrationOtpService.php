@@ -157,7 +157,7 @@ class RegistrationOtpService
             ? WaProviderConfig::query()->where('workspace_id', $device->workspace_id)->where('provider', 'baileys')->first()
             : null;
         $server = (string) ($bcfg?->creds()['server_url'] ?? '')
-            ?: (string) (SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+            ?: (string) (SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
         if ($server === '') {
             return ['ok' => false, 'error' => 'Unofficial API server is not configured.'];
         }

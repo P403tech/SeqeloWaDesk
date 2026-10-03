@@ -56,7 +56,7 @@ class NodeCacheBuster
      */
     public static function refreshNodeSettings(): ?array
     {
-        $base = (string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') return null;
         try {
             // /api/refresh-settings makes Node re-pull from Laravel synchronously
@@ -79,7 +79,7 @@ class NodeCacheBuster
 
     private static function post(?string $phone): void
     {
-        $base = (string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') return;
         $token = node_token();
         try {

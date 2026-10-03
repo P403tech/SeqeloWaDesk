@@ -31,7 +31,7 @@ class BaileysCatalogService
         // WhatsAppDispatcher): admin-configured baileys_server_url first,
         // then SERVER_URL env. Default port is 8888, NOT 3000 — I had the
         // wrong default originally and Send failed with curl error 7.
-        $url = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', 'http://localhost:8888'));
+        $url = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url', 'http://localhost:8888'));
         return new self(rtrim($url, '/'));
     }
 

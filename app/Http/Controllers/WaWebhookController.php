@@ -97,7 +97,7 @@ class WaWebhookController extends Controller
         $verify  = fn (string $s): bool => $s !== '' && hash_equals('sha256=' . hash_hmac('sha256', $content, $s), $given);
 
         // Primary: the admin/platform app secret (the common single-app case).
-        $adminSecret = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: env('META_APP_SECRET', ''));
+        $adminSecret = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: config('bridge.meta_app_secret'));
         $passed      = $verify($adminSecret);
 
         // Fallback: a WABA connected with override_callback_uri is signed by the
@@ -1892,7 +1892,7 @@ class WaWebhookController extends Controller
             $deviceNumber = $receivingNumber !== ''
                 ? $receivingNumber
                 : ($device ? preg_replace('/\D+/', '', (string) ($device->country_code . $device->phone_number)) : '');
-            $nodeBase = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+            $nodeBase = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
             if ($deviceNumber !== '' && $nodeBase !== '') {
                 // Interactive tap id (button / list reply) so the flow can route
                 // by port; empty for a plain typed reply.
@@ -3685,7 +3685,7 @@ class WaWebhookController extends Controller
         $config    = $this->twilioConfigForNumber($to);
         $authToken = $config ? (string) ($config->creds()['auth_token'] ?? '') : '';
         if ($authToken === '') {
-            $authToken = (string) SystemSetting::get('twilio_auth_token', env('TWILIO_AUTH_TOKEN', ''));
+            $authToken = (string) SystemSetting::get('twilio_auth_token', config('bridge.twilio.token'));
         }
         if ($authToken === '') {
             // Fail closed — unsigned traffic is never accepted.

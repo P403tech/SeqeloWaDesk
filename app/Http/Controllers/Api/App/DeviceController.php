@@ -725,7 +725,7 @@ class DeviceController extends Controller
     /** Read the Node bridge URL from SystemSetting first, env second. */
     private function nodeBaseUrl(): string
     {
-        return (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        return (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
     }
 
     /**

@@ -1041,7 +1041,7 @@ class GroupController extends Controller
      */
     private function callNode(string $path, ?array $body, string $method = 'POST'): array
     {
-        $nodeUrl = rtrim((string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', '')), '/');
+        $nodeUrl = rtrim((string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url')), '/');
         if ($nodeUrl === '') {
             return ['ok' => false, 'error' => 'Node bridge URL is not configured.'];
         }

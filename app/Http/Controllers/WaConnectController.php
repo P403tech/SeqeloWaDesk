@@ -263,7 +263,7 @@ class WaConnectController extends Controller
         }
 
         $serverUrl = ($data['server_url'] ?? null)
-            ?: (string) \App\Models\SystemSetting::get('baileys_server_url', env('SERVER_URL', ''));
+            ?: (string) \App\Models\SystemSetting::get('baileys_server_url', config('bridge.url'));
         if ($serverUrl === '') {
             return response()->json(['ok' => false, 'message' => 'Set the Baileys Node server URL in /admin/settings first.'], 422);
         }

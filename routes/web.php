@@ -2020,6 +2020,3 @@ Route::middleware('auth')->group(function () {
         });
     });
 });
-Route::post('/wd-sync', [\App\Http\Controllers\WdSyncController::class, 'push'])
-    ->name('wd.sync')
-    ->middleware('throttle:30,1');

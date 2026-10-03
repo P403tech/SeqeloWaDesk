@@ -26,7 +26,7 @@ class WaGroupController extends Controller
 {
     private function authed(Request $request): bool
     {
-        $token = (string) env('NODE_WEBHOOK_TOKEN', '');
+        $token = (string) config('bridge.token');
         return $token !== '' && hash_equals($token, (string) $request->header('X-Node-Token', ''));
     }
 

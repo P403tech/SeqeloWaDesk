@@ -35,7 +35,7 @@ class TtFlowBridge
         $flowId = null,
         array $vars = []
     ): bool {
-        $nodeUrl = (string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $nodeUrl = (string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($nodeUrl === '' || $conversationId === '') {
             return false;
         }

@@ -93,7 +93,7 @@ class TelegramAccountBridge
     /** POST to the Node bridge, turning every failure into a readable array. */
     private function call(string $path, array $payload, ?int $timeout = null): array
     {
-        $base = rtrim((string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', '')), '/');
+        $base = rtrim((string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url')), '/');
         if ($base === '') {
             return ['ok' => false, 'error' => $this->serviceUnavailableError()];
         }

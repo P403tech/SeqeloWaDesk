@@ -1158,7 +1158,7 @@ class ChatController extends Controller
             return response()->json(['success' => false, 'message' => 'No device or recipient on this conversation.'], 422);
         }
 
-        $nodeUrl = rtrim((string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', '')), '/');
+        $nodeUrl = rtrim((string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url')), '/');
         if ($nodeUrl === '') {
             return response()->json(['success' => false, 'message' => 'Node bridge URL not configured.'], 500);
         }
@@ -1299,7 +1299,7 @@ class ChatController extends Controller
             $cfg = \App\Models\WaProviderConfig::query()->primaryForWorkspace($c->workspace_id)->first();
             if ($cfg) $serverUrl = (string) ($cfg->creds()['server_url'] ?? '');
             if ($serverUrl === '') {
-                $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+                $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
             }
             if ($serverUrl === '') return;
 

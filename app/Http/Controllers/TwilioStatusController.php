@@ -68,7 +68,7 @@ class TwilioStatusController extends Controller
         }
         // Fallback to admin-default creds for legacy single-tenant installs.
         if ($authToken === '') {
-            $authToken = (string) \App\Models\SystemSetting::get('twilio_auth_token', env('TWILIO_AUTH_TOKEN', ''));
+            $authToken = (string) \App\Models\SystemSetting::get('twilio_auth_token', config('bridge.twilio.token'));
         }
 
         // Validate Twilio signature. Twilio's algorithm: HMAC-SHA1 over

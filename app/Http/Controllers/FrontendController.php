@@ -142,10 +142,17 @@ class FrontendController extends Controller
         if ($page && ! $page->is_published) {
             abort(404);
         }
-        if ($page) {
+        // An empty published row (no sections yet) would render a blank page.
+        // Fall through to the shipped document until an admin writes sections.
+        if ($page && ! empty($page->sections)) {
             return view('frontend.legal.dynamic', ['page' => $page]);
         }
 
-        return view('frontend.legal.' . $slug);
+        $view = 'frontend.legal.' . $slug;
+        if (view()->exists($view)) {
+            return view($view);
+        }
+
+        abort(404);
     }
 }

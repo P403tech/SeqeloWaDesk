@@ -1290,7 +1290,7 @@ class DevicesController extends Controller
         $ourUrl = rtrim(url('/webhooks/whatsapp/inbound'), '/');
 
         $hasSecret       = (string) ($cfg->creds()['app_secret'] ?? '') !== '';
-        $adminSecret     = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: env('META_APP_SECRET', ''));
+        $adminSecret     = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: config('bridge.meta_app_secret'));
         $ownershipVerify = (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true);
 
         $out = [

@@ -31,7 +31,7 @@ class AppointmentReminderScheduler
 {
     public function schedule(Workspace $workspace, Appointment $appt, string $customerPhone, Carbon $remindAt, ?int $scheduleIdOverride = null, ?string $bodyOverride = null): bool
     {
-        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') {
             Log::info('[APPT-REMINDER] no node bridge url configured — skipping reminder for appt ' . $appt->id);
             return false;
@@ -127,7 +127,7 @@ class AppointmentReminderScheduler
      */
     public function unschedule(Appointment $appt): void
     {
-        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') return;
 
         $ids = [-1000000 - $appt->id];

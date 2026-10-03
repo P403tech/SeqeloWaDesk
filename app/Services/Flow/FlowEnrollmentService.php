@@ -657,7 +657,7 @@ class FlowEnrollmentService
         // Canonical Laravel→Node URL — matches WaCampaignsController +
         // WaCallingWebhookController. (The old service used NODE_BRIDGE_URL,
         // a one-off that broke installs that only set SERVER_URL.)
-        $nodeUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $nodeUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($nodeUrl === '') {
             $sub->update(['status' => 'failed', 'failed_at' => now(), 'failure_reason' => 'Node bridge URL not configured (baileys_server_url / SERVER_URL)']);
             return;

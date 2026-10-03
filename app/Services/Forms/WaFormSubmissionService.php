@@ -208,7 +208,7 @@ class WaFormSubmissionService
 
     private function resumeNodeFlow(string $sessionKey, int $formId, array $answers): void
     {
-        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') {
             Log::warning('[WAFORM-SUB] no Node URL — flow cannot resume');
             return;

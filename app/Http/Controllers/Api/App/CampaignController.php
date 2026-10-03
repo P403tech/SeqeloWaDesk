@@ -1011,7 +1011,7 @@ class CampaignController extends Controller
      */
     private function baileysLiveStatus(Device $device): ?bool
     {
-        $base = rtrim((string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', '')), '/');
+        $base = rtrim((string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url')), '/');
         if ($base === '') return null;
         $phone = preg_replace('/\D+/', '', (string) ($device->country_code . $device->phone_number));
         if ($phone === '') return null;

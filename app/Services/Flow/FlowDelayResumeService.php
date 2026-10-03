@@ -156,6 +156,6 @@ class FlowDelayResumeService
 
     private function nodeUrl(): string
     {
-        return (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        return (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
     }
 }

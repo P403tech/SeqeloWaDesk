@@ -3715,7 +3715,7 @@ class WaCampaignsController extends Controller
             return;
         }
 
-        $nodeUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $nodeUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($nodeUrl === '') {
             Log::warning('[CAMPAIGN-FLOW] aborted — NODE bridge URL not configured', [
                 'campaign_id' => $campaign->id,

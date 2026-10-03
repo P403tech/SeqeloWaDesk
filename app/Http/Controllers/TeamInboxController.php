@@ -2206,7 +2206,7 @@ class TeamInboxController extends Controller
             $cfg = \App\Models\WaProviderConfig::query()->primaryForWorkspace($conv->workspace_id)->first();
             if ($cfg) $serverUrl = (string) ($cfg->creds()['server_url'] ?? '');
             if ($serverUrl === '') {
-                $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+                $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
             }
             if ($serverUrl === '') return;
 

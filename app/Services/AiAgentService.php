@@ -911,11 +911,11 @@ class AiAgentService
     private function envKey(string $provider): ?string
     {
         return match ($provider) {
-            'openai'    => env('OPENAI_API_KEY')    ?: null,
-            'anthropic' => env('ANTHROPIC_API_KEY') ?: null,
-            'gemini'    => env('GEMINI_API_KEY')    ?: null,
-            'mistral'   => env('MISTRAL_API_KEY')   ?: null,
-            'muse'      => env('MUSE_API_KEY') ?: env('MODEL_API_KEY') ?: null,
+            'openai'    => config('bridge.ai.openai') ?: null,
+            'anthropic' => config('bridge.ai.anthropic') ?: null,
+            'gemini'    => config('bridge.ai.gemini') ?: null,
+            'mistral'   => config('bridge.ai.mistral') ?: null,
+            'muse'      => config('bridge.ai.muse') ?: config('bridge.ai.model') ?: null,
             default     => null,
         };
     }

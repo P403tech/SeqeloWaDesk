@@ -324,7 +324,7 @@ class GoogleFlowNodeController extends Controller
         // canonical key — using SystemSetting matches WaCampaignsController
         // + WaCallingWebhookController.)
         try {
-            $nodeBase = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+            $nodeBase = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
             if ($nodeBase === '') {
                 Log::warning('[GFlowNode] Node URL not configured (baileys_server_url / SERVER_URL) — flow cannot resume');
             } else {

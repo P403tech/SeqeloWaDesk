@@ -24,8 +24,6 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
     i=$((i + 1))
     sleep 2
   done
-  php artisan migrate:status --no-ansi || true
-  php artisan migrate --force --no-interaction
   php artisan seqelo:use-shipped-brand --no-interaction || true
   php -r '
     require "vendor/autoload.php";
@@ -59,4 +57,21 @@ else
   echo "Skipping migrate (DB_CONNECTION=${DB_CONNECTION:-unset}; no MYSQLHOST)."
 fi
 
-exec php artisan serve --host=0.0.0.0 --port="${PORT:-8000}"
+chown -R www-data:www-data storage bootstrap/cache || true
+
+port="${PORT:-8080}"
+sed "s/__PORT__/${port}/" docker/nginx.railway.conf > /tmp/nginx-railway.conf
+
+php-fpm -F &
+fpm_pid=$!
+nginx -c /tmp/nginx-railway.conf -g "daemon off;" &
+nginx_pid=$!
+
+while kill -0 "$fpm_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
+  sleep 2
+done
+
+kill "$fpm_pid" "$nginx_pid" 2>/dev/null || true
+wait "$fpm_pid" 2>/dev/null || true
+wait "$nginx_pid" 2>/dev/null || true
+exit 1

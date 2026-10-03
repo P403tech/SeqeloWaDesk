@@ -90,7 +90,7 @@ class FlowSessionResolver
      */
     public static function resumeFromWabaCatalogOrderByPhone(int $workspaceId, string $customerPhone, array $orderMeta): void
     {
-        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') {
             Log::warning('[CommerceFlow] WABA resume skipped — no node bridge url');
             return;
@@ -128,7 +128,7 @@ class FlowSessionResolver
 
     private static function ping(string $sessionKey, array $orderMeta): void
     {
-        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $base = (string) (\App\Models\SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($base === '') {
             Log::warning('[CommerceFlow] resume skipped — no node bridge url');
             return;

@@ -37,7 +37,7 @@ class FbFlowBridge
         array $vars = [],
         string $commentId = ''
     ): bool {
-        $nodeUrl = (string) (SystemSetting::get('baileys_server_url', '') ?: env('SERVER_URL', ''));
+        $nodeUrl = (string) (SystemSetting::get('baileys_server_url', '') ?: config('bridge.url'));
         if ($nodeUrl === '' || $psid === '') {
             // Was a SILENT return — the #1 "flow matched but nothing happened"
             // cause: no Node URL configured (baileys_server_url / SERVER_URL), so

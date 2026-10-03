@@ -662,7 +662,7 @@ if (! function_exists('node_token')) {
         } catch (\Throwable $e) {
             $v = '';
         }
-        return $v !== '' ? $v : (string) env('NODE_WEBHOOK_TOKEN', '');
+        return $v !== '' ? $v : (string) config('bridge.token');
     }
 }
 
@@ -682,7 +682,7 @@ if (! function_exists('wd_node_url')) {
             $v = '';
         }
         if ($v === '') {
-            $v = (string) env('SERVER_URL', '');
+            $v = (string) config('bridge.url');
         }
         return rtrim($v, '/');
     }

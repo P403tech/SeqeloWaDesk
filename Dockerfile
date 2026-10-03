@@ -1,13 +1,14 @@
-FROM php:8.2-cli-bookworm
+FROM php:8.2-fpm-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git unzip curl \
+    git unzip curl nginx \
     libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
     libzip-dev libonig-dev libicu-dev libxml2-dev \
  && docker-php-ext-configure gd --with-freetype --with-jpeg \
  && docker-php-ext-install -j$(nproc) pdo_mysql gd zip bcmath intl mbstring exif pcntl opcache \
  && printf "upload_max_filesize=32M\npost_max_size=32M\n" > /usr/local/etc/php/conf.d/uploads.ini \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /etc/nginx/sites-enabled/default
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 # Debian's nodejs is 18; Vite 7 / Tailwind oxide need Node 20.19+ or 22.12+.
@@ -29,13 +30,16 @@ RUN mkdir -p \
       storage/framework/views \
       storage/logs \
       bootstrap/cache \
- && chmod -R ug+rwx storage bootstrap/cache \
- && chmod +x railway-start.sh
+ && chown -R www-data:www-data storage bootstrap/cache \
+ && chmod +x railway-start.sh railway-migrate.sh \
+ && rm -f /usr/local/etc/php-fpm.d/www.conf \
+ && cp docker/php-fpm-railway.conf /usr/local/etc/php-fpm.d/zzz-railway.conf
 
 RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist \
  && npm ci \
  && npm run build \
- && rm -rf node_modules
+ && rm -rf node_modules \
+ && chown -R www-data:www-data storage bootstrap/cache
 
 ENV PORT=8080
 EXPOSE 8080

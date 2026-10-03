@@ -220,7 +220,7 @@ class WhatsAppDispatcher
                 $from = (string) ($cfg->phone_number ?: ($creds['phone_number'] ?? ''));
             }
         }
-        if ($serverUrl === '') $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+        if ($serverUrl === '') $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
         if ($from === '' && $msg->direction === 'out' && $msg->from_number) {
             $from = $msg->from_number;
         }
@@ -333,7 +333,7 @@ class WhatsAppDispatcher
                 $from = (string) ($cfg->phone_number ?: ($creds['phone_number'] ?? ''));
             }
         }
-        if ($serverUrl === '') $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+        if ($serverUrl === '') $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
 
         // Pick the DEVICE phone (NOT the customer phone). Node keys its
         // clients dict by device phone, so passing the customer phone
@@ -698,7 +698,7 @@ class WhatsAppDispatcher
             $serverUrl = (string) ($creds['server_url'] ?? '');
         }
         if ($serverUrl === '') {
-            $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: env('SERVER_URL', ''));
+            $serverUrl = (string) (\App\Models\SystemSetting::get('baileys_server_url') ?: config('bridge.url'));
         }
 
         // Per-message device wins (chat queues stamp from_number per-row
@@ -1397,9 +1397,9 @@ class WhatsAppDispatcher
                 $sandbox = (bool)   ($creds['sandbox']      ?? ($cfg->meta_json['sandbox'] ?? false));
             }
         }
-        if ($sid === '')   $sid   = (string) SystemSetting::get('twilio_account_sid', env('TWILIO_ACCOUNT_SID', ''));
-        if ($token === '') $token = (string) SystemSetting::get('twilio_auth_token', env('TWILIO_AUTH_TOKEN', ''));
-        if ($from === '')  $from  = (string) SystemSetting::get('twilio_whatsapp_number', env('TWILIO_WHATSAPP_NUMBER', ''));
+        if ($sid === '')   $sid   = (string) SystemSetting::get('twilio_account_sid', config('bridge.twilio.sid'));
+        if ($token === '') $token = (string) SystemSetting::get('twilio_auth_token', config('bridge.twilio.token'));
+        if ($from === '')  $from  = (string) SystemSetting::get('twilio_whatsapp_number', config('bridge.twilio.from'));
 
         if ($sid === '' || $token === '' || $from === '') {
             return $this->localOnly('T', 'Twilio creds missing — connect Twilio at /connect or set admin defaults at /admin/settings.');
