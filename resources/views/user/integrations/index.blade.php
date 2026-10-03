@@ -66,7 +66,7 @@ if ($wsId = auth()->user()?->current_workspace_id) {
             <div id="cat-tabs" class="mt-4 flex items-center gap-1 flex-wrap">
                 <button class="cat-tab px-3.5 py-1.5 rounded-full text-[12px] font-semibold bg-wa-deep text-paper-0"
                     data-cat="all">{{ __('All') }} <span
-                        class="ml-1 font-mono text-[10px] opacity-80">12</span></button>
+                        class="ml-1 font-mono text-[10px] opacity-80">15</span></button>
                 <button
                     class="cat-tab px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-ink-600 hover:bg-paper-100"
                     data-cat="ecom">{{ __('E-commerce') }} <span
@@ -74,11 +74,11 @@ if ($wsId = auth()->user()?->current_workspace_id) {
                 <button
                     class="cat-tab px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-ink-600 hover:bg-paper-100"
                     data-cat="crm">{{ __('CRM') }} <span
-                        class="ml-1 font-mono text-[10px] opacity-80">2</span></button>
+                        class="ml-1 font-mono text-[10px] opacity-80">4</span></button>
                 <button
                     class="cat-tab px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-ink-600 hover:bg-paper-100"
                     data-cat="productivity">{{ __('Productivity') }} <span
-                        class="ml-1 font-mono text-[10px] opacity-80">5</span></button>
+                        class="ml-1 font-mono text-[10px] opacity-80">6</span></button>
             </div>
         </section>
 
@@ -128,6 +128,10 @@ if ($wsId = auth()->user()?->current_workspace_id) {
                     <div class="flex items-center justify-between"><span
                             class="text-ink-700">{{ __('HubSpot CRM') }}</span><span
                             class="font-mono text-[10.5px] text-ink-500">{{ __('contacts upserted, deals created') }}</span>
+                    </div>
+                    <div class="flex items-center justify-between"><span
+                            class="text-ink-700">{{ __('Zoho CRM') }}</span><span
+                            class="font-mono text-[10.5px] text-ink-500">{{ __('contacts, leads & deals synced') }}</span>
                     </div>
                     <div class="flex items-center justify-between"><span
                             class="text-ink-700">{{ __('Google Calendar') }}</span><span
@@ -200,6 +204,11 @@ if ($wsId = auth()->user()?->current_workspace_id) {
                 ? \App\Models\SalesforceIntegration::where('workspace_id', auth()->user()->current_workspace_id)->where('status', 'active')->exists()
                 : false);
         window.SALESFORCE_ENABLED = @json((bool) \App\Models\SystemSetting::get('salesforce_enabled', false));
+
+        window.ZOHO_CONNECTED = @json(auth()->user()?->current_workspace_id
+                ? \App\Models\ZohoIntegration::where('workspace_id', auth()->user()->current_workspace_id)->where('status', 'active')->exists()
+                : false);
+        window.ZOHO_ENABLED = @json((bool) \App\Models\SystemSetting::get('zoho_enabled', false));
 
         // Google Calendar connection state — true when the current workspace
         // has a valid access_token + chosen calendar_id stashed in

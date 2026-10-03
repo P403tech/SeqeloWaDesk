@@ -29,6 +29,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (Schema::getConnection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         if (Schema::hasColumn('inbox_messages', 'provider') && Schema::hasColumn('conversations', 'provider')) {
             // UPDATE inbox_messages SET provider = conversations.provider
             //   WHERE conversations.id = inbox_messages.conversation_id

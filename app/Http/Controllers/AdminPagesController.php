@@ -945,6 +945,7 @@ class AdminPagesController extends Controller
             ['label' => 'WooCommerce',         'count' => $countDistinctWs('woocommerce_integrations')],
             ['label' => 'HubSpot CRM',         'count' => $countDistinctWs('hubspot_integrations')],
             ['label' => 'Salesforce CRM',      'count' => $countDistinctWs('salesforce_integrations')],
+            ['label' => 'Zoho CRM',            'count' => $countDistinctWs('zoho_integrations')],
         ];
         foreach ($featureAdoption as &$f) {
             $f['pct'] = $subsTotal > 0 ? (int) round($f['count'] / $payingWs * 100) : 0;
@@ -3255,6 +3256,52 @@ class AdminPagesController extends Controller
         ]]);
 
         return back()->with('success', 'Salesforce settings saved.');
+    }
+
+    public function settingZoho(): View
+    {
+        return view('admin.settings.zoho', [
+            'enabled'           => (bool) \App\Models\SystemSetting::get('zoho_enabled', false),
+            'clientId'          => (string) \App\Models\SystemSetting::get('zoho_client_id', ''),
+            'hasSecret'         => \App\Models\SystemSetting::get('zoho_client_secret', '') !== '',
+            'scopes'            => (string) \App\Models\SystemSetting::get('zoho_scopes', \App\Services\Zoho\ZohoService::DEFAULT_SCOPES),
+            'redirectUri'       => (string) (\App\Models\SystemSetting::get('zoho_redirect_uri') ?: url('/zoho/oauth/callback')),
+            'dataCenter'        => (string) \App\Models\SystemSetting::get('zoho_data_center', 'com'),
+            'dataCenters'       => \App\Services\Zoho\ZohoService::DATA_CENTERS,
+            'integrationsCount' => \App\Models\ZohoIntegration::count(),
+            'activeCount'       => \App\Models\ZohoIntegration::where('status', 'active')->count(),
+            'logsCount'         => \App\Models\ZohoIntegrationLog::count(),
+        ]);
+    }
+
+    public function settingZohoUpdate(\Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    {
+        $validDcs = implode(',', array_keys(\App\Services\Zoho\ZohoService::DATA_CENTERS));
+        $request->validate([
+            'zoho_enabled'       => 'nullable|in:0,1',
+            'zoho_client_id'     => 'nullable|string|max:255',
+            'zoho_client_secret' => 'nullable|string|max:255',
+            'zoho_scopes'        => 'nullable|string|max:500',
+            'zoho_redirect_uri'  => 'nullable|url|max:255',
+            'zoho_data_center'   => 'nullable|in:' . $validDcs,
+        ]);
+
+        \App\Models\SystemSetting::set('zoho_enabled',   $request->boolean('zoho_enabled'), 'bool', 'Toggle Zoho CRM OAuth integration');
+        \App\Models\SystemSetting::set('zoho_client_id', (string) $request->input('zoho_client_id', ''), 'string', 'Zoho CRM Client ID');
+        if ($request->filled('zoho_client_secret')) {
+            \App\Models\SystemSetting::set('zoho_client_secret', (string) $request->input('zoho_client_secret'), 'string', 'Zoho CRM Client Secret');
+        }
+        \App\Models\SystemSetting::set('zoho_scopes',       (string) $request->input('zoho_scopes', \App\Services\Zoho\ZohoService::DEFAULT_SCOPES), 'string', 'Zoho OAuth scopes');
+        \App\Models\SystemSetting::set('zoho_redirect_uri', (string) $request->input('zoho_redirect_uri', ''), 'string', 'Zoho OAuth redirect URI');
+        \App\Models\SystemSetting::set('zoho_data_center',   (string) $request->input('zoho_data_center', 'com'), 'string', 'Zoho Data Center domain');
+
+        \App\Support\Audit::log('settings.zoho_update', ['meta' => [
+            'enabled'    => $request->boolean('zoho_enabled'),
+            'has_id'     => $request->filled('zoho_client_id'),
+            'set_secret' => $request->filled('zoho_client_secret'),
+        ]]);
+
+        return back()->with('success', 'Zoho CRM settings saved.');
     }
 
     // ---- Slack (per-workspace creds; admin holds the platform on/off + setup) ----

@@ -621,6 +621,7 @@ class Package extends Model
                 'integration_woocommerce'      => 'WooCommerce',
                 'integration_hubspot'          => 'HubSpot',
                 'integration_salesforce'       => 'Salesforce',
+                'integration_zoho'             => 'Zoho CRM',
                 'integration_google_calendar'  => 'Google Calendar',
                 'integration_google_sheets'    => 'Google Sheets',
                 'integration_slack'            => 'Slack',

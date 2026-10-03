@@ -1039,6 +1039,16 @@ class UserPagesController extends Controller
     public function webhookDetail(string $id): View { return view('user.webhooks.detail'); }
 
     public function integrations(): View      { return view('user.integrations.index'); }
+
+    public function automationGuide(\Illuminate\Http\Request $request): View
+    {
+        $platform = (string) $request->query('platform', 'zapier');
+        $wsId = auth()->user()?->current_workspace_id;
+        $activeKey = $wsId ? \App\Models\ApiKey::where('workspace_id', $wsId)->whereNull('revoked_at')->latest('id')->first() : null;
+        $webhooks = $wsId ? \App\Models\OutboundWebhook::where('workspace_id', $wsId)->latest('id')->limit(10)->get() : collect();
+
+        return view('user.integrations.automation-guide', compact('platform', 'activeKey', 'webhooks'));
+    }
     // shopifyDashboard() / woocommerceDashboard() removed — Shopify and
     // WooCommerce are now handled by ShopifyController / WoocommerceController.
 

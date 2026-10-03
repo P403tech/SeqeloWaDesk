@@ -25,7 +25,9 @@ return new class extends Migration
         // 1. Make sla_policies.workspace_id nullable. Uses raw SQL because
         //    doctrine/dbal may not be installed and ->nullable()->change()
         //    requires it.
-        DB::statement('ALTER TABLE sla_policies MODIFY workspace_id BIGINT UNSIGNED NULL');
+        if (Schema::getConnection()->getDriverName() === 'mysql') {
+            DB::statement('ALTER TABLE sla_policies MODIFY workspace_id BIGINT UNSIGNED NULL');
+        }
 
         // 2. Remap legacy status values.
         DB::table('support_tickets')->where('status', 'awaiting_support')->update(['status' => 'pending']);

@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (Schema::getConnection()->getDriverName() !== 'mysql') return;
         if (!Schema::hasColumn('ai_call_logs', 'twilio_call_sid')) return;
         DB::statement('ALTER TABLE `ai_call_logs` MODIFY `twilio_call_sid` VARCHAR(191) NULL');
     }

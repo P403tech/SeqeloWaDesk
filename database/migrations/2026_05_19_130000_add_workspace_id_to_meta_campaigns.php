@@ -22,7 +22,7 @@ return new class extends Migration {
             $t->index('workspace_id');
         });
 
-        if (Schema::hasColumn('meta_campaigns', 'user_id')) {
+        if (Schema::getConnection()->getDriverName() === 'mysql' && Schema::hasColumn('meta_campaigns', 'user_id')) {
             DB::statement("
                 UPDATE meta_campaigns m
                 INNER JOIN users u ON u.id = m.user_id

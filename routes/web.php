@@ -496,6 +496,10 @@ Route::middleware('auth')->group(function () {
         [\App\Http\Controllers\SalesforceController::class, 'oauthCallback'])
         ->name('salesforce.oauth.callback');
 
+    Route::get('/zoho/oauth/callback',
+        [\App\Http\Controllers\ZohoController::class, 'oauthCallback'])
+        ->name('zoho.oauth.callback');
+
     // Google Calendar OAuth callback — same exemption rationale as
     // Shopify/HubSpot: anyone with workspace context can complete the
     // OAuth round-trip; the controller validates state + workspace id
@@ -1190,7 +1194,8 @@ Route::middleware('auth')->group(function () {
         });
 
         Route::middleware('workspace.role:admin')->group(function () {
-            Route::get('/integrations',  [UserPagesController::class, 'integrations'])->name('integrations');
+            Route::get('/integrations',            [UserPagesController::class, 'integrations'])->name('integrations');
+            Route::get('/integrations/automation', [UserPagesController::class, 'automationGuide'])->name('integrations.automation');
 
             // Shopify integration — live OAuth + webhook handling.
             // `shopify.token` verifies the App Bridge session token when the
@@ -1240,6 +1245,13 @@ Route::middleware('auth')->group(function () {
             Route::get('/salesforce',                  [$sf, 'index'])->name('salesforce');
             Route::post('/salesforce/connect',         [$sf, 'startOAuth'])->name('salesforce.connect');
             Route::post('/salesforce/{id}/disconnect', [$sf, 'disconnect'])->whereNumber('id')->name('salesforce.disconnect');
+
+            $zh = \App\Http\Controllers\ZohoController::class;
+            Route::get('/zoho',                  [$zh, 'index'])->name('zoho');
+            Route::post('/zoho/connect',         [$zh, 'startOAuth'])->name('zoho.connect');
+            Route::post('/zoho/{id}/disconnect', [$zh, 'disconnect'])->whereNumber('id')->name('zoho.disconnect');
+            Route::post('/zoho/{id}/test',       [$zh, 'test'])->whereNumber('id')->name('zoho.test');
+            Route::post('/zoho/{id}/sync',       [$zh, 'sync'])->whereNumber('id')->name('zoho.sync');
 
             // Slack → WhatsApp: a `/wa send <name>: <msg>` slash command in
             // Slack sends a WhatsApp message via the workspace's device.

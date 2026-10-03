@@ -48,42 +48,44 @@ return new class extends Migration {
             });
         }
 
-        // Step 2 — backfill from user.current_workspace_id for the
-        // owner-based tables. Single SQL UPDATE per table for speed.
-        foreach (['contacts', 'contact_groups', 'broadcasts', 'wa_templates', 'flows', 'webhooks', 'devices', 'notifications'] as $t) {
-            if (!Schema::hasTable($t) || !Schema::hasColumn($t, 'workspace_id') || !Schema::hasColumn($t, 'user_id')) continue;
-            DB::statement("
-                UPDATE {$t} t
-                INNER JOIN users u ON u.id = t.user_id
-                SET t.workspace_id = u.current_workspace_id
-                WHERE t.workspace_id IS NULL
-                  AND u.current_workspace_id IS NOT NULL
-            ");
-        }
+        if (Schema::getConnection()->getDriverName() === 'mysql') {
+            // Step 2 — backfill from user.current_workspace_id for the
+            // owner-based tables. Single SQL UPDATE per table for speed.
+            foreach (['contacts', 'contact_groups', 'broadcasts', 'wa_templates', 'flows', 'webhooks', 'devices', 'notifications'] as $t) {
+                if (!Schema::hasTable($t) || !Schema::hasColumn($t, 'workspace_id') || !Schema::hasColumn($t, 'user_id')) continue;
+                DB::statement("
+                    UPDATE {$t} t
+                    INNER JOIN users u ON u.id = t.user_id
+                    SET t.workspace_id = u.current_workspace_id
+                    WHERE t.workspace_id IS NULL
+                      AND u.current_workspace_id IS NOT NULL
+                ");
+            }
 
-        // Step 3 — messages backfill via conversations (more reliable
-        // than user.current_workspace_id since messages already chain
-        // through a conversation that was workspace-stamped on inbound).
-        if (Schema::hasTable('messages') && Schema::hasColumn('messages', 'workspace_id')) {
-            DB::statement("
-                UPDATE messages m
-                INNER JOIN conversations c ON c.id = m.conversation_id
-                SET m.workspace_id = c.workspace_id
-                WHERE m.workspace_id IS NULL
-                  AND c.workspace_id IS NOT NULL
-            ");
-        }
+            // Step 3 — messages backfill via conversations (more reliable
+            // than user.current_workspace_id since messages already chain
+            // through a conversation that was workspace-stamped on inbound).
+            if (Schema::hasTable('messages') && Schema::hasColumn('messages', 'workspace_id')) {
+                DB::statement("
+                    UPDATE messages m
+                    INNER JOIN conversations c ON c.id = m.conversation_id
+                    SET m.workspace_id = c.workspace_id
+                    WHERE m.workspace_id IS NULL
+                      AND c.workspace_id IS NOT NULL
+                ");
+            }
 
-        // Step 4 — auto_reply_lookups backfill via device → user.
-        if (Schema::hasTable('auto_reply_lookups') && Schema::hasColumn('auto_reply_lookups', 'workspace_id')) {
-            DB::statement("
-                UPDATE auto_reply_lookups arl
-                INNER JOIN devices d ON d.id = arl.device_id
-                INNER JOIN users u   ON u.id = d.user_id
-                SET arl.workspace_id = u.current_workspace_id
-                WHERE arl.workspace_id IS NULL
-                  AND u.current_workspace_id IS NOT NULL
-            ");
+            // Step 4 — auto_reply_lookups backfill via device → user.
+            if (Schema::hasTable('auto_reply_lookups') && Schema::hasColumn('auto_reply_lookups', 'workspace_id')) {
+                DB::statement("
+                    UPDATE auto_reply_lookups arl
+                    INNER JOIN devices d ON d.id = arl.device_id
+                    INNER JOIN users u   ON u.id = d.user_id
+                    SET arl.workspace_id = u.current_workspace_id
+                    WHERE arl.workspace_id IS NULL
+                      AND u.current_workspace_id IS NOT NULL
+                ");
+            }
         }
     }
 

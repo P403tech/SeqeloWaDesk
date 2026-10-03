@@ -47,6 +47,17 @@ export default function init() {
       const SALESFORCE_SVG = `
         <path fill="#00A1E0" d="M9.2 20.2c-1.2-2.4.1-5.1 2.7-5.8.5-2.3 2.6-4 5-4 1.4 0 2.7.5 3.6 1.4 2.2-.9 4.6.1 5.4 2.3.2 0 .4.1.6.1 2 .4 3.4 2.4 3 4.4-.4 1.8-2 3-3.8 3H11.5c-.9 0-1.8-.5-2.3-1.4z"/>`;
 
+      const ZOHO_SVG = `
+        <rect x="4" y="4" width="10" height="10" rx="2" fill="#E42528"/>
+        <rect x="18" y="4" width="10" height="10" rx="2" fill="#226AB4"/>
+        <rect x="4" y="18" width="10" height="10" rx="2" fill="#00965E"/>
+        <rect x="18" y="18" width="10" height="10" rx="2" fill="#F8B12C"/>`;
+
+      // Make (Integromat) — purple rounded tile with the official signature monogram
+      const MAKE_SVG = `
+        <rect x="4" y="4" width="24" height="24" rx="6" fill="#6420AA"/>
+        <path fill="#fff" d="M8.5 21V11l4.5 4.5 4.5-4.5v10h-2.5v-5.2l-2 2-2-2V21H8.5z"/>`;
+
       // Google Calendar — blue calendar tile with 31
       const GCAL_SVG = `
         <rect x="6" y="9" width="20" height="17" rx="2" fill="#4285F4"/>
@@ -98,10 +109,12 @@ export default function init() {
         { id:'gsheets',     name:'Google Sheets',    cat:'productivity', desc:'Edit your shop catalog in a Google Sheet — add a row, tweak a price, click Sync. Every change goes live on your storefront.', tile:brandTile('#E8F5E9', GSHEETS_SVG),     connected: !!window.GSHEETS_CONNECTED,  official:false },
         { id:'hubspot',     name:'HubSpot CRM',      cat:'crm',          desc:'Push contacts and deals into HubSpot whenever a ' + APP + ' conversation triggers an event — new chat, order placed, SKU of interest.', tile:brandTile('#FFE4D6', HUBSPOT_SVG),     connected: !!window.HUBSPOT_CONNECTED,  official:true },
         { id:'salesforce',  name:'Salesforce CRM',   cat:'crm',          desc:'Connect your Salesforce org. Import contacts and send WhatsApp (text, image, video, docs) will follow — connection is live first.', tile:brandTile('#D6E4F5', SALESFORCE_SVG), connected: !!window.SALESFORCE_CONNECTED, official:true },
+        { id:'zoho',        name:'Zoho CRM',         cat:'crm',          desc:'Sync contacts, leads, and sales deals between ' + APP + ' and Zoho CRM.', tile:brandTile('#FEECEC', ZOHO_SVG), connected: !!window.ZOHO_CONNECTED, official:true },
         { id:'gcal',        name:'Google Calendar',  cat:'productivity', desc:'Let customers book appointments inside WhatsApp. ' + APP + ' reads your availability and writes confirmed bookings straight to your calendar.', tile:brandTile('#E8F0FE', GCAL_SVG),        connected: !!window.GCAL_CONNECTED,     official:true },
         { id:'slack',       name:'Slack',            cat:'productivity', desc:'Send a WhatsApp message straight from Slack — type /wa send <name>: <message> and ' + APP + ' delivers it to that contact.', tile:brandTile('#F3ECFA', SLACK_SVG),  connected: !!window.SLACK_CONNECTED,  official:true },
         { id:'trello',      name:'Trello',           cat:'productivity', desc:'When a Trello card is assigned or changes, the right person gets a WhatsApp notification automatically.', tile:brandTile('#E8F0FE', TRELLO_SVG), connected: !!window.TRELLO_CONNECTED, official:true },
         { id:'zapier',      name:'Zapier',           cat:'productivity', desc:'Connect ' + APP + ' to 6,000+ apps with Zapier. Trigger Zaps from inbox and order events, or push data in — powered by webhooks + your API key.', tile:brandTile('#FFE9E0', ZAPIER_SVG), connected:false, official:false },
+        { id:'make',        name:'Make (Integromat)', cat:'productivity', desc:'Visually build WhatsApp automations across 1,500+ apps using webhooks + API.', tile:brandTile('#F0E7FF', MAKE_SVG), connected:false, official:false },
       ];
 
       let activeCat = 'all';
@@ -134,12 +147,14 @@ export default function init() {
                            : a.id === 'woocommerce' ? '/woocommerce'
                            : a.id === 'hubspot'     ? '/hubspot'
                            : a.id === 'salesforce'  ? '/salesforce'
+                           : a.id === 'zoho'        ? '/zoho'
                            : a.id === 'slack'       ? '/slack'
                            : a.id === 'trello'      ? '/trello'
                            : a.id === 'gcal'        ? '/appointments'
                            : a.id === 'gsheets'     ? '/sheets-addon'
                            : a.id === 'wa-catalog'  ? '/catalog'
-                           : a.id === 'zapier'      ? '/webhooks'
+                           : a.id === 'zapier'      ? '/integrations/automation?platform=zapier'
+                           : a.id === 'make'        ? '/integrations/automation?platform=make'
                            : `/connect?platform=${a.id}&mode=manage`;
           const footerConnected = `
               <a href="${manageHref}" class="px-3 py-1.5 rounded-full bg-paper-0 border border-paper-200 hover:bg-paper-50 text-[11.5px] font-medium inline-flex items-center gap-1.5">
@@ -163,9 +178,11 @@ export default function init() {
                           : a.id === 'woocommerce'? '/woocommerce'
                           : a.id === 'hubspot'    ? '/hubspot'
                           : a.id === 'salesforce' ? '/salesforce'
+                          : a.id === 'zoho'       ? '/zoho'
                           : a.id === 'slack'      ? '/slack'
                           : a.id === 'trello'     ? '/trello'
-                          : a.id === 'zapier'     ? '/webhooks'
+                          : a.id === 'zapier'     ? '/integrations/automation?platform=zapier'
+                          : a.id === 'make'       ? '/integrations/automation?platform=make'
                           : a.id === 'gcal'       ? '/appointments/settings'
                           : `/connect?platform=${a.id}`;
           const footerNotConnected = isWaStoreWithShops ? `
@@ -179,7 +196,7 @@ export default function init() {
               </a>` : `
               <a href="${setupHref}" class="ml-auto px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold inline-flex items-center gap-1.5">
                 <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
-                ${a.id === 'ai-crm' ? 'Open &amp; how to use' : (a.id === 'gsheets' || a.id === 'wa-catalog' || a.id === 'zapier' ? 'Set up' : 'Connect now')}
+                ${a.id === 'ai-crm' ? 'Open &amp; how to use' : (a.id === 'gsheets' || a.id === 'wa-catalog' || a.id === 'zapier' || a.id === 'make' ? 'Set up' : 'Connect now')}
               </a>`;
           card.innerHTML = `
             <div class="flex items-start justify-between gap-3">

@@ -43,25 +43,27 @@ return new class extends Migration
         // Group chats ('@g.us') are namespaced 'g:<id>' so a group can never
         // collide with a DM. Widget threads carry a 'widget-…' raw_jid with no
         // real number and are left NULL — they are keyed by visitor, not phone.
-        DB::statement("
-            UPDATE conversations
-               SET contact_digits = CASE
-                   WHEN raw_jid IS NULL OR raw_jid = '' THEN NULL
-                   WHEN raw_jid LIKE 'widget-%' THEN NULL
-                   WHEN raw_jid LIKE '%@g.us' THEN CONCAT('g:', REGEXP_REPLACE(SUBSTRING_INDEX(raw_jid, '@', 1), '[^0-9]', ''))
-                   ELSE NULLIF(REGEXP_REPLACE(SUBSTRING_INDEX(raw_jid, '@', 1), '[^0-9]', ''), '')
-               END
-             WHERE contact_digits IS NULL
-        ");
+        if (Schema::getConnection()->getDriverName() === 'mysql') {
+            DB::statement("
+                UPDATE conversations
+                   SET contact_digits = CASE
+                       WHEN raw_jid IS NULL OR raw_jid = '' THEN NULL
+                       WHEN raw_jid LIKE 'widget-%' THEN NULL
+                       WHEN raw_jid LIKE '%@g.us' THEN CONCAT('g:', REGEXP_REPLACE(SUBSTRING_INDEX(raw_jid, '@', 1), '[^0-9]', ''))
+                       ELSE NULLIF(REGEXP_REPLACE(SUBSTRING_INDEX(raw_jid, '@', 1), '[^0-9]', ''), '')
+                   END
+                 WHERE contact_digits IS NULL
+            ");
 
-        // Rows that only ever had alt_jid populated.
-        DB::statement("
-            UPDATE conversations
-               SET contact_digits = NULLIF(REGEXP_REPLACE(SUBSTRING_INDEX(alt_jid, '@', 1), '[^0-9]', ''), '')
-             WHERE contact_digits IS NULL
-               AND alt_jid IS NOT NULL AND alt_jid <> ''
-               AND alt_jid NOT LIKE 'widget-%'
-        ");
+            // Rows that only ever had alt_jid populated.
+            DB::statement("
+                UPDATE conversations
+                   SET contact_digits = NULLIF(REGEXP_REPLACE(SUBSTRING_INDEX(alt_jid, '@', 1), '[^0-9]', ''), '')
+                 WHERE contact_digits IS NULL
+                   AND alt_jid IS NOT NULL AND alt_jid <> ''
+                   AND alt_jid NOT LIKE 'widget-%'
+            ");
+        }
     }
 
     public function down(): void

@@ -36,3 +36,8 @@ public/*.bak
 
 # Local Shop Manager chat demo — keep on disk, do not ship until ready
 /demo/shop-manager-chat/
+
+# Local preview scratch files
+local-preview-router.php
+public/_local_preview*
+

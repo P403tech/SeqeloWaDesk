@@ -534,6 +534,25 @@
                         class="text-wa-deep group-hover:underline">{{ __('Open') }}</span></div>
             </a>
 
+            <a href="{{ url('/admin/settings/zoho') }}"
+                class="group bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card hover:border-wa-deep transition">
+                <div class="flex items-start justify-between gap-3">
+                    <span class="w-11 h-11 rounded-2xl bg-[#FEECEC] text-[#E42528] grid place-items-center">
+                        <svg viewBox="0 0 24 24" class="w-6 h-6" fill="currentColor">
+                            <path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/>
+                        </svg>
+                    </span>
+                    <span class="font-mono text-[10px] text-ink-500">15c</span>
+                </div>
+                <h2 class="font-serif text-[24px] leading-tight mt-4">{{ __('Zoho CRM settings') }}</h2>
+                <p class="text-[12.5px] text-ink-600 mt-2">
+                    {{ __('OAuth 2.0 app credentials: Client ID, Secret, Data Center (.com, .eu, .in, etc.). Workspaces then 1-click connect their Zoho CRM.') }}
+                </p>
+                <div class="mt-4 flex items-center justify-between text-[11px] font-mono text-ink-500">
+                    <span>{{ __('OAuth app / regions') }}</span><span
+                        class="text-wa-deep group-hover:underline">{{ __('Open') }}</span></div>
+            </a>
+
             {{-- ─── Google integration — one OAuth client powers Calendar/Meet/Sheets/Docs/Forms ─── --}}
             <a href="{{ url('/admin/settings/google-calendar') }}"
                 class="group bg-paper-0 border border-paper-200 rounded-2xl p-5 shadow-card hover:border-wa-deep transition">

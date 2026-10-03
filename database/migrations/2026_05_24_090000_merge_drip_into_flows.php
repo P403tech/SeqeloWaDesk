@@ -77,7 +77,7 @@ return new class extends Migration {
             }
         }
 
-        if (Schema::hasTable('drip_subscribers') && Schema::hasTable('drip_campaigns')) {
+        if (Schema::getConnection()->getDriverName() === 'mysql' && Schema::hasTable('drip_subscribers') && Schema::hasTable('drip_campaigns')) {
             // Join drip_subscribers → drip_campaigns to get flow_id, then
             // copy across. INSERT ... SELECT keeps this in-DB and fast.
             DB::statement("

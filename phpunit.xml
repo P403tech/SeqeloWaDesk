@@ -18,6 +18,8 @@
         </include>
     </source>
     <php>
+        <server name="APP_URL" value="http://localhost"/>
+        <server name="SCRIPT_NAME" value="/index.php"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

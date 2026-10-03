@@ -52,7 +52,7 @@ return new class extends Migration {
                     'is_active'   => true,
                     'sort_order'  => $order,
                     'updated_at'  => $now,
-                    'created_at'  => DB::raw('COALESCE(created_at, NOW())'),
+                    'created_at'  => Schema::getConnection()->getDriverName() === 'mysql' ? DB::raw('COALESCE(created_at, NOW())') : $now,
                 ],
             );
         }
