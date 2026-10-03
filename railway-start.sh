@@ -67,6 +67,26 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
   # /flows "Start from a template" is never empty after a deploy.
   php artisan db:seed --class=Database\\Seeders\\FlowTemplateSeeder --force --no-interaction || true
   php artisan db:seed --class=Database\\Seeders\\MetaPricingChange2026Seeder --force --no-interaction || true
+  # The admin bridge URL overrides SERVER_URL. When this deploy moves the
+  # bridge onto the private network, replace only an empty value or the old
+  # public *.up.railway.app address. A custom host the admin typed stays.
+  if [ -n "$SERVER_URL" ]; then
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $env = rtrim((string) getenv("SERVER_URL"), "/");
+      if ($env === "" || !str_contains($env, ".railway.internal")) exit(0);
+      $cur = (string) App\Models\SystemSetting::get("baileys_server_url", "");
+      $replace = $cur === "" || str_contains($cur, ".up.railway.app");
+      if ($replace && $cur !== $env) {
+        App\Models\SystemSetting::set("baileys_server_url", $env, "string", "Default URL of the Node bridge.");
+        echo "Bridge URL moved to the private network.\n";
+      }
+    ' || true
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "${SERVER_URL}/" || true)
+    echo "Bridge private check HTTP ${code:-0}"
+  fi
   # One-shot switch. Set SEQELO_ENABLE_SCALING=1 for a deploy, then remove it.
   # Later boots must not override an admin who turned scaling back off.
   if [ "$SEQELO_ENABLE_SCALING" = "1" ]; then
