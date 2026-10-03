@@ -67,6 +67,28 @@ if [ "${DB_CONNECTION}" = "mysql" ] && [ -n "$DB_HOST" ]; then
   # /flows "Start from a template" is never empty after a deploy.
   php artisan db:seed --class=Database\\Seeders\\FlowTemplateSeeder --force --no-interaction || true
   php artisan db:seed --class=Database\\Seeders\\MetaPricingChange2026Seeder --force --no-interaction || true
+  # One-shot switch. Set SEQELO_ENABLE_SCALING=1 for a deploy, then remove it.
+  # Later boots must not override an admin who turned scaling back off.
+  if [ "$SEQELO_ENABLE_SCALING" = "1" ]; then
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      try {
+        $pong = Illuminate\Support\Facades\Redis::connection()->ping();
+        $text = is_object($pong) ? (string) $pong : (string) $pong;
+        if ($pong !== true && stripos($text, "PONG") === false) {
+          echo "Scaling left off: Redis did not answer.\n";
+          exit(0);
+        }
+        App\Models\SystemSetting::set("scaling_mode", "cron_queue", "string", "Advanced scaling: node | cron_queue");
+        App\Models\SystemSetting::set("queue_connection", "redis", "string", "Queue connection when scaling on");
+        echo "Advanced scaling enabled.\n";
+      } catch (Throwable $e) {
+        echo "Scaling left off: ".substr($e->getMessage(), 0, 160)."\n";
+      }
+    ' || true
+  fi
 else
   echo "Skipping migrate (DB_CONNECTION=${DB_CONNECTION:-unset}; no MYSQLHOST)."
 fi
