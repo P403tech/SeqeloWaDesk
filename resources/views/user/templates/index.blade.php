@@ -31,81 +31,7 @@
                     match the chosen Meta category.
                 </x-side-tip>
 
-                <div class="hairline border border-paper-200 rounded-2xl bg-paper-0 p-2 shadow-card" id="side-rail">
-                    <div class="mono font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 px-3 pt-2 pb-1.5">
-                        {{ __('Campaigns') }}</div>
-                    <a class="rail-link flex items-center justify-between px-3 py-2 rounded-xl text-[13px] text-ink-700 hover:bg-paper-50"
-                        href="{{ url('/wa-campaigns') }}">
-                        <span class="flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="1.6">
-                                <circle cx="8" cy="8" r="6" />
-                                <path d="M8 5v3l2 2" />
-                            </svg>
-                            {{ __('Campaign Overview') }}
-                        </span>
-                    </a>
-                    {{-- Template Messages — collapsed by default. JS in
- user-templates-index toggles both aria-expanded and
- the max-h/opacity classes when the user clicks. --}}
-                    <button type="button" id="tpl-msg-toggle" aria-expanded="false"
-                        class="rail-link w-full flex items-center justify-between px-3 py-2 rounded-xl text-ink-700 hover:bg-paper-50 text-[13px] font-medium">
-                        <span class="flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="1.6">
-                                <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
-                                <path d="M2.5 6h11M6 13.5V6" />
-                            </svg>
-                            {{ __('Template Messages') }}
-                        </span>
-                        <svg id="tpl-msg-chev" viewBox="0 0 12 12" class="w-3 h-3 transition-transform" fill="none"
-                            stroke="currentColor" stroke-width="1.6">
-                            <path d="M3 4l3 3 3-3" />
-                        </svg>
-                    </button>
-                    <div id="tpl-msg-sub"
-                        class="overflow-hidden transition-[max-height,opacity] duration-200 max-h-0 opacity-0">
-                        <a class="rail-sub flex items-center justify-between pl-9 pr-3 py-2 rounded-xl bg-paper-50 text-ink-900 text-[12.5px] font-medium"
-                            href="{{ url('/templates') }}">
-                            <span>{{ __('Template Library') }}</span>
-                        </a>
-                        <a class="rail-sub flex items-center justify-between pl-9 pr-3 py-2 rounded-xl text-ink-700 text-[12.5px] hover:bg-paper-50"
-                            href="{{ url('/wa-campaigns') }}">
-                            <span>{{ __('WhatsApp') }}</span>
-                        </a>
-                    </div>
-                    <a class="rail-link flex items-center justify-between px-3 py-2 rounded-xl text-[13px] text-ink-700 hover:bg-paper-50"
-                        href="{{ url('/scheduled') }}">
-                        <span class="flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="1.6">
-                                <rect x="2" y="3" width="12" height="11" rx="1.5" />
-                                <path d="M2 6h12M5 1v3M11 1v3" />
-                            </svg>
-                            {{ __('Scheduled Campaigns') }}
-                        </span>
-                    </a>
-                    <a class="rail-link flex items-center justify-between px-3 py-2 rounded-xl text-[13px] text-ink-700 hover:bg-paper-50"
-                        href="{{ url('/analytics') }}">
-                        <span class="flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="1.6">
-                                <path d="M2 11l3-5 3 3 3-6 3 4" />
-                            </svg>
-                            {{ __('Performance') }}
-                        </span>
-                    </a>
-                    <a class="rail-link flex items-center justify-between px-3 py-2 rounded-xl text-[13px] text-ink-700 hover:bg-paper-50"
-                        href="{{ url('/wa-campaigns') }}">
-                        <span class="flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="1.6">
-                                <path d="M3 5h10v8H3zM3 5l5 4 5-4" />
-                            </svg>
-                            {{ __('Drafts') }}
-                        </span>
-                    </a>
-                </div>
+                @include('user.templates._campaigns_rail', ['railKey' => 'yours'])
 
                 <div class="hairline border border-paper-200 rounded-2xl bg-paper-0 p-2 shadow-card">
                     <div class="mono font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 px-3 pt-2 pb-1.5">
@@ -154,13 +80,16 @@
                             {{ __('Campaigns / Templates') }}</div>
                         <h1
                             class="serif font-serif font-normal tracking-[-0.01em] text-[30px] sm:text-[36px] lg:text-[44px] leading-[1.0] tracking-tight">
-                            {{ __('Template') }} <span class="italic text-wa-deep">{{ __('library') }}</span>.</h1>
+                            {{ __('Your') }} <span class="italic text-wa-deep">{{ __('templates') }}</span>.</h1>
                         <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-                            {{ __('Pick a starter or submit your own. All templates must adhere to') }} <a
+                            {{ __('Templates you submitted for this workspace. Start faster from the') }}
+                            <a href="{{ route('user.templates.samples') }}"
+                                class="text-wa-deep font-medium underline decoration-wa-deep/40">{{ __('sample library') }}</a>.
+                            {{ __('All templates must adhere to') }} <a
                                 href="https://developers.facebook.com/docs/whatsapp/message-templates/guidelines/"
                                 target="_blank" rel="noopener"
                                 class="text-wa-deep font-medium underline decoration-wa-deep/40">{{ __("WhatsApp's guidelines") }}</a>
-                            before they're approved by Meta.</p>
+                            {{ __('before they\'re approved by Meta.') }}</p>
                     </div>
                     <div class="flex shrink-0 items-center gap-2 pb-1">
                         @if (!empty($canImportMeta))

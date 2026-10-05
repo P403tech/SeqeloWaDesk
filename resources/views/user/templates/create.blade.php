@@ -22,6 +22,14 @@
         // only sender/device the form can resolve is a WhatsApp Business number.
         $isCatalog = request()->query('type') === 'catalog';
         $catalogHasWaba = in_array('waba', $channels ?? [], true);
+        $sample = is_array($sample ?? null) ? $sample : null;
+        $sv = function (string $formKey, ?string $sampleKey = null, $default = '') use ($sample) {
+            $sampleKey = $sampleKey ?? $formKey;
+            $fromSample = $sample[$sampleKey] ?? $default;
+
+            return old($formKey, $fromSample);
+        };
+        $sampleButtons = is_array($sample['buttons'] ?? null) ? $sample['buttons'] : [];
         // Built here (raw PHP) rather than inline in the textarea's Blade echo —
         // a literal {{name}} inside a {{ }} echo makes the Blade compiler choke
         // ("Unclosed '(' does not match '}'").
@@ -37,7 +45,7 @@
     <div class="hairline-b border-b border-paper-200 bg-paper-0 sticky top-0 z-20">
         <div class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-3 flex items-center justify-between gap-4 flex-wrap">
             <div class="flex items-center gap-3 min-w-0">
-                <a href="{{ url('/templates') }}"
+                <a href="{{ $sample ? route('user.templates.samples') : url('/templates') }}"
                     class="w-8 h-8 rounded-full hairline border border-paper-200 bg-paper-0 hover:bg-paper-50 flex items-center justify-center"
                     title="{{ __('Back to templates') }}">
                     <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -91,6 +99,18 @@
                 </ul>
             </div>
         @endif
+        @if ($sample)
+            <div
+                class="mb-4 rounded-2xl border border-wa-green/40 bg-wa-mint px-4 py-3 text-[12.5px] text-wa-deep flex items-start gap-2.5">
+                <span class="text-[18px] leading-none">{{ $sample['emoji'] ?? '✦' }}</span>
+                <div>
+                    <div class="font-semibold">{{ __('Started from sample: :name', ['name' => $sample['header'] ?? $sample['slug']]) }}</div>
+                    <div class="text-[11.5px] text-ink-600 mt-0.5">
+                        {{ __('Edit the brand name, links, and dates, then submit for Meta review. Samples are starting copy — they are not pre-approved.') }}
+                    </div>
+                </div>
+            </div>
+        @endif
         <form id="templateForm" method="POST" action="{{ route('user.templates.store') }}"
             enctype="multipart/form-data" class="grid grid-cols-1 xl:grid-cols-[1fr_342px] gap-5">
             @csrf
@@ -133,7 +153,7 @@
                                 for="tpl-name">{{ __('Template name') }} <span
                                     class="req text-accent-coral">*</span></label>
                             <input id="tpl-name" name="template_name" type="text"
-                                value="{{ old('template_name') }}"
+                                value="{{ $sv('template_name', 'slug') }}"
                                 class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
                                 placeholder="{{ __('spring_promo_v3') }}" maxlength="60" required>
                             <div class="hint text-[10.5px] text-ink-500 mt-1 leading-[1.35]">
@@ -152,12 +172,12 @@
                             <select id="tpl-category" name="meta_category"
                                 class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
                                 required>
-                                <option value="marketing" @selected(old('meta_category') === 'marketing')>{{ __('Marketing') }}</option>
-                                <option value="utility" @selected(old('meta_category') === 'utility' || !old('meta_category'))>{{ __('Utility') }}</option>
-                                <option value="authentication" @selected(old('meta_category') === 'authentication')>{{ __('Authentication') }}
+                                <option value="marketing" @selected($sv('meta_category', 'meta_category', 'utility') === 'marketing')>{{ __('Marketing') }}</option>
+                                <option value="utility" @selected($sv('meta_category', 'meta_category', 'utility') === 'utility')>{{ __('Utility') }}</option>
+                                <option value="authentication" @selected($sv('meta_category') === 'authentication')>{{ __('Authentication') }}
                                 </option>
                             </select>
-                            <input type="hidden" name="category" value="{{ old('category', 'utility') }}">
+                            <input type="hidden" name="category" value="{{ $sv('category', 'utility') }}">
                             <div class="hint text-[10.5px] text-ink-500 mt-1 leading-[1.35]">
                                 {{ __('Determines Meta review path.') }}</div>
                         </div>
@@ -170,7 +190,7 @@
                                 class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
                                 required>
                                 @foreach (wa_template_languages() as $code => $label)
-                                    <option value="{{ $code }}" @selected(old('language', 'en_US') === $code)>{{ $label }}</option>
+                                    <option value="{{ $code }}" @selected($sv('language', 'language', 'en_US') === $code)>{{ $label }}</option>
                                 @endforeach
                             </select>
                             <div class="hint text-[10.5px] text-ink-500 mt-1 leading-[1.35]">
@@ -336,8 +356,8 @@
                                     for="header-type">{{ __('Type') }}</label>
                                 <select id="header-type"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="text">{{ __('Text') }}</option>
-                                    <option value="none">{{ __('None') }}</option>
+                                    <option value="text" @selected($sv('header') !== '')>{{ __('Text') }}</option>
+                                    <option value="none" @selected($sv('header') === '')>{{ __('None') }}</option>
                                 </select>
                             </div>
                             <div>
@@ -346,7 +366,7 @@
                                     for="tpl-header">{{ __('Header text') }} <span
                                         class="sec-meta font-mono text-[10px] text-ink-500">max 60 / supports
                                         @{{ 1 }}</span></label>
-                                <input id="tpl-header" name="header" type="text" value="{{ old('header') }}"
+                                <input id="tpl-header" name="header" type="text" value="{{ $sv('header') }}"
                                     maxlength="60"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
                                     placeholder="Hi @{{ 1 }}, welcome aboard!">
@@ -405,7 +425,7 @@
  to the `placeholder` attr so the body is real. --}}
                                 <textarea id="tpl-body" name="template_body" data-attr-input maxlength="1024" rows="5" required
                                     class="ed-ta w-full border-0 px-[11px] py-[9px] text-[12.5px] text-ink-900 resize-y min-h-[110px] leading-[1.5] font-sans outline-none placeholder:text-[#9CA8A4]"
-                                    placeholder="{{ $bodyPlaceholder }}">{{ old('template_body') }}</textarea>
+                                    placeholder="{{ $bodyPlaceholder }}">{{ $sv('template_body', 'body') }}</textarea>
                             </div>
 
                             {{-- Variable mapping — records WHICH attribute each positional
@@ -541,7 +561,7 @@
                             <span
                                 class="sec-meta font-mono text-[10px] text-ink-500">{{ __('optional / max 60') }}</span>
                         </div>
-                        <input id="tpl-footer" name="footer" type="text" value="{{ old('footer') }}"
+                        <input id="tpl-footer" name="footer" type="text" value="{{ $sv('footer') }}"
                             maxlength="60"
                             class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
                             placeholder="{{ __('Reply STOP to unsubscribe') }}">
@@ -594,24 +614,28 @@
                                 data-bt="mix">{{ __('Mix') }}</span>
                         </div>
                         <div id="btn-list" class="space-y-2">
-                            {{-- Static seed row — operators usually want at least
- one CTA. Names match the controller's
- processButtons() input arrays. --}}
+                            @php $btnSeed = count($sampleButtons) ? $sampleButtons : [['type' => 'visit_website', 'text' => '', 'value' => '']]; @endphp
+                            @foreach ($btnSeed as $btn)
+                                @php
+                                    $bt = old('button_type.'.$loop->index, $btn['type'] ?? 'visit_website');
+                                    $bx = old('button_text.'.$loop->index, $btn['text'] ?? '');
+                                    $bv = old('button_value.'.$loop->index, $btn['value'] ?? '');
+                                @endphp
                             <div class="btn-row grid grid-cols-[140px_1fr_1fr_28px] gap-1.5 items-center"
                                 data-kind="cta">
                                 <select name="button_type[]"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 cta-action">
-                                    <option value="visit_website">{{ __('Visit website') }}</option>
-                                    <option value="quick_reply">{{ __('Quick reply') }}</option>
-                                    <option value="call_phone">{{ __('Call phone') }}</option>
-                                    <option value="copy_code">{{ __('Copy code') }}</option>
+                                    <option value="visit_website" @selected($bt === 'visit_website')>{{ __('Visit website') }}</option>
+                                    <option value="quick_reply" @selected($bt === 'quick_reply')>{{ __('Quick reply') }}</option>
+                                    <option value="call_phone" @selected($bt === 'call_phone')>{{ __('Call phone') }}</option>
+                                    <option value="copy_code" @selected($bt === 'copy_code')>{{ __('Copy code') }}</option>
                                 </select>
                                 <input type="text" name="button_text[]"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 cta-text"
-                                    maxlength="25" placeholder="{{ __('Button text') }}">
+                                    maxlength="25" placeholder="{{ __('Button text') }}" value="{{ $bx }}">
                                 <input type="text" name="button_value[]"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 cta-value"
-                                    placeholder="https://...">
+                                    placeholder="https://..." value="{{ $bv }}">
                                 <span
                                     class="iconbtn w-7 h-7 rounded-[7px] inline-flex items-center justify-center text-ink-500 cursor-pointer transition hover:bg-[#FFEDE8] hover:text-accent-coral"
                                     onclick="removeBtn(this)" title="{{ __('Remove') }}"><svg viewBox="0 0 16 16"
@@ -619,6 +643,7 @@
                                         <path d="M4 4l8 8M12 4l-8 8" />
                                     </svg></span>
                             </div>
+                            @endforeach
                         </div>
                         <button type="button" id="btn-add" onclick="addBtnRow()"
                             class="mt-2.5 inline-flex items-center gap-1.5 text-[12px] font-medium text-wa-deep hover:underline">

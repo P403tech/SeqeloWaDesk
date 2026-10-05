@@ -871,6 +871,7 @@ Route::middleware('auth')->group(function () {
 
         Route::prefix('templates')->middleware('workspace.role:manager')->name('templates.')->group(function () {
             Route::get('/',                    [TemplatesController::class, 'index'])->name('index');
+            Route::get('/samples',             [TemplatesController::class, 'samples'])->name('samples');
             Route::get('/create',              [TemplatesController::class, 'create'])->name('create');
             Route::post('/',                   [TemplatesController::class, 'store'])->name('store');
             // Pull Instagram templates from a REMOTE Instaflow into the library

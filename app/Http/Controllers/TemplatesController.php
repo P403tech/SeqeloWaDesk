@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\SystemSetting;
 use App\Models\WaProviderConfig;
 use App\Models\WaTemplate;
+use App\Support\WaTemplateSampleLibrary;
 use App\Services\Waba\TemplateClient;
 use App\Services\Waba\TemplateImporter;
 use App\Services\Waba\TemplateLinter;
@@ -238,6 +239,23 @@ class TemplatesController extends Controller
         return view('user.templates.index', $payload);
     }
 
+    /**
+     * Ready-made WhatsApp copy gallery (Festival / Ecommerce / Education…).
+     * "Use sample" opens /templates/create?sample={slug} with the form filled.
+     */
+    public function samples(Request $request): View
+    {
+        $category = (string) $request->query('category', 'all');
+        if ($category !== 'all' && ! isset(WaTemplateSampleLibrary::CATEGORIES[$category])) {
+            $category = 'all';
+        }
+        $search = (string) $request->query('q', '');
+        $samples = WaTemplateSampleLibrary::filter($search, $category);
+        $categoryCounts = WaTemplateSampleLibrary::categoryCounts($search);
+
+        return view('user.templates.samples', compact('samples', 'category', 'search', 'categoryCounts'));
+    }
+
     public function create(): View
     {
         // Twilio Content SID is only relevant when the workspace's active
@@ -335,7 +353,13 @@ class TemplatesController extends Controller
                 ])->values();
         }
 
-        return view('user.templates.create', compact('isTwilio', 'channels', 'defaultChannel', 'wabaConfigs', 'primaryWabaId', 'catalogProducts'));
+        $sampleSlug = (string) request()->query('sample', '');
+        $sample = $sampleSlug !== '' ? WaTemplateSampleLibrary::find($sampleSlug) : null;
+
+        return view('user.templates.create', compact(
+            'isTwilio', 'channels', 'defaultChannel', 'wabaConfigs',
+            'primaryWabaId', 'catalogProducts', 'sample',
+        ));
     }
 
     /**
