@@ -38,6 +38,12 @@ class TemplatesController extends Controller
 
     public function index(Request $request)
     {
+        // Customer landing: Templates MUST show the sample library, not an empty
+        // "Your templates" grid. Submitted templates stay on ?view=yours.
+        if (!$request->wantsJson() && !$request->boolean('partial') && $request->query('view') !== 'yours') {
+            return $this->samples($request);
+        }
+
         $userId = Auth::id();
         $category = $request->string('category')->toString() ?: 'all';
         $status   = $request->string('status')->toString()   ?: 'all';
@@ -219,12 +225,18 @@ class TemplatesController extends Controller
             // WABA should still be able to import its Meta templates.)
             'canImportMeta'    => WaProviderConfig::query()
                 ->where('workspace_id', $wsId)->where('provider', 'waba')->exists(),
+            'sampleCards'      => WaTemplateSampleLibrary::all(),
+            'showSampleLibrary'=> $all->isEmpty(),
         ];
 
         if ($request->wantsJson() || $request->boolean('partial')) {
             return response()->json([
                 'ok'             => true,
-                'cards'          => view('user.templates._cards', ['templates' => $templates])->render(),
+                'cards'          => view('user.templates._cards', [
+                    'templates'         => $templates,
+                    'sampleCards'       => $payload['sampleCards'],
+                    'showSampleLibrary' => $payload['showSampleLibrary'],
+                ])->render(),
                 'categoryCounts' => $payload['categoryCounts'],
                 'statusCounts'   => $payload['statusCounts'],
                 'channelCounts'  => $payload['channelCounts'],

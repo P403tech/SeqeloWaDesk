@@ -76,7 +76,7 @@ window.WA_CURRENCY = (function () {
     { title:'WA Campaigns',      desc:'Campaign & broadcast queues',                href:'/wa-campaigns',tag:'page', kw:'broadcast drip sequence campaign' },
     { title:'Scheduled',         desc:'Queued / scheduled sends',                   href:'/scheduled',   tag:'page', kw:'queue later schedule' },
     { title:'Message history',   desc:'Searchable message archive',                 href:'/message-history', tag:'page', kw:'archive logs sent delivered'},
-    { title:'Templates',         desc:'Approved WABA template library',             href:'/templates',   tag:'page', kw:'meta template hsm' },
+    { title:'Templates',         desc:'WhatsApp template sample library',           href:'/templates', tag:'page', kw:'meta template hsm sample' },
     { title:'Auto reply',        desc:'Keyword-based auto replies',                 href:'/auto-reply',  tag:'page', kw:'keyword autoresponder bot' },
     // ── Automation & AI ──
     { title:'Flows',             desc:'Automated flow library',                     href:'/flows',       tag:'page', kw:'automation journey workflow' },

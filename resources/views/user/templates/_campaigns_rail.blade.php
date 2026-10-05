@@ -36,7 +36,7 @@
             <span>{{ __('Template Library') }}</span>
         </a>
         <a class="rail-sub flex items-center justify-between pl-9 pr-3 py-2 rounded-xl text-[12.5px] {{ $railKey === 'yours' ? 'bg-paper-50 text-ink-900 font-medium' : 'text-ink-700 hover:bg-paper-50' }}"
-            href="{{ route('user.templates.index') }}">
+            href="{{ route('user.templates.index', ['view' => 'yours']) }}">
             <span>{{ __('Your Templates') }}</span>
         </a>
     </div>

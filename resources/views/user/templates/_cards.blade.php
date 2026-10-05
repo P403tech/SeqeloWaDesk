@@ -206,17 +206,31 @@
         </div>
     </div>
 @empty
-    {{-- "Create template" opens the WhatsApp/Instagram + format modal (same as
-         the header button) instead of jumping straight to the create form, so the
-         channel step is never skipped. actionButtonAttrs renders a <button> only
-         when actionHref is absent — so we omit actionHref here. --}}
-    @include('user.partials.empty-state', [
-        'class' => 'col-span-full',
-        'message' =>
-            'No templates match the current filters. Try clearing filters or submit a new template for review.',
-        'resetHref' => url('/templates'),
-        'actionButtonAttrs' =>
-            "onclick=\"document.getElementById('type-modal').classList.remove('hidden');var c=document.getElementById('tpl-step-channel');if(c){c.classList.remove('hidden');document.getElementById('tpl-step-format').classList.add('hidden');}\"",
-        'actionLabel' => 'Create template',
-    ])
+    @if (!empty($showSampleLibrary) && !empty($sampleCards))
+        <div class="col-span-full space-y-4">
+            <div class="bg-paper-0 border border-dashed border-paper-200 rounded-2xl px-6 py-5 text-center">
+                <div class="font-serif text-[22px] leading-tight text-ink-900">{{ __('Start from a sample') }}</div>
+                <p class="mt-1.5 text-[13px] text-ink-500 max-w-2xl mx-auto">
+                    {{ __('You have not submitted a template yet. Pick ready-made copy below, tweak it, then send it to Meta for approval.') }}
+                </p>
+                <a href="{{ route('user.templates.samples') }}"
+                    class="inline-block mt-3 text-[12.5px] font-semibold text-wa-deep hover:underline">{{ __('Open full template library') }}</a>
+            </div>
+            @include('user.templates._sample_grid', ['samples' => $sampleCards])
+        </div>
+    @else
+        {{-- "Create template" opens the WhatsApp/Instagram + format modal (same as
+             the header button) instead of jumping straight to the create form, so the
+             channel step is never skipped. actionButtonAttrs renders a <button> only
+             when actionHref is absent — so we omit actionHref here. --}}
+        @include('user.partials.empty-state', [
+            'class' => 'col-span-full',
+            'message' =>
+                'No templates match the current filters. Try clearing filters or submit a new template for review.',
+            'resetHref' => url('/templates'),
+            'actionButtonAttrs' =>
+                "onclick=\"document.getElementById('type-modal').classList.remove('hidden');var c=document.getElementById('tpl-step-channel');if(c){c.classList.remove('hidden');document.getElementById('tpl-step-format').classList.add('hidden');}\"",
+            'actionLabel' => 'Create template',
+        ])
+    @endif
 @endforelse

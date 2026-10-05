@@ -149,6 +149,8 @@
                     </div>
                 </div>
 
+                @include('user.templates._library_tabs', ['libTab' => 'yours'])
+
                 {{-- Result banner for the "Sync from Meta" action (success/status or the
                      real Meta error, e.g. token invalid / app missing capability). --}}
                 @if (session('status'))
@@ -342,7 +344,11 @@
                 <!-- TEMPLATE GRID -->
                 <div id="tpl-grid"
                     class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start transition-opacity">
-                    @include('user.templates._cards', ['templates' => $templates])
+                    @include('user.templates._cards', [
+                        'templates' => $templates,
+                        'sampleCards' => $sampleCards ?? [],
+                        'showSampleLibrary' => $showSampleLibrary ?? (($totalCount ?? 0) === 0),
+                    ])
                 </div>
 
                 <div id="tpl-pagination">

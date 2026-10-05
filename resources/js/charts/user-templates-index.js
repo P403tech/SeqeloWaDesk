@@ -105,9 +105,10 @@ async function fetchPartial(state, { silent = false } = {}) {
     if (state.q)                               params.append('q',        state.q);
     if (state.sort && state.sort !== 'newest') params.append('sort',     state.sort);
     if (Number(state.page || 1) > 1)           params.append('page',     state.page);
-    const visible = '/templates' + (params.toString() ? '?' + params.toString() : '');
+    const visible = '/templates?view=yours' + (params.toString() ? '&' + params.toString() : '');
     history.pushState({}, '', visible);
 
+    params.append('view', 'yours');
     params.append('partial', '1');
     const grid = $('tpl-grid');
     if (grid) grid.classList.add('opacity-60');
