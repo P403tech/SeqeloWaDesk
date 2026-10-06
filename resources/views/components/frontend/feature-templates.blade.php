@@ -16,16 +16,16 @@
             </div>
             <div class="lg:col-span-7 flex flex-wrap items-end lg:justify-end pb-3 gap-3 text-[11px] mono text-ink-500">
                 <span
-                    data-fc="feature-templates.meta1">{{ fc('feature-templates.meta1', '71 ' . __('starters')) }}</span><span
+                    data-fc="feature-templates.meta1">{{ fc('feature-templates.meta1', '16 ' . __('sample templates')) }}</span><span
                     class="text-ink-400">·</span>
                 <span
-                    data-fc="feature-templates.meta2">{{ fc('feature-templates.meta2', '9 ' . __('industries')) }}</span><span
+                    data-fc="feature-templates.meta2">{{ fc('feature-templates.meta2', '5 ' . __('categories')) }}</span><span
                     class="text-ink-400">·</span>
                 <span
-                    data-fc="feature-templates.meta3">{{ fc('feature-templates.meta3', __('pre-validated')) }}</span><span
+                    data-fc="feature-templates.meta3">{{ fc('feature-templates.meta3', __('Meta-safe copy')) }}</span><span
                     class="text-ink-400">·</span>
                 <span class="text-wa-deep"
-                    data-fc="feature-templates.meta4">{{ fc('feature-templates.meta4', '18 ' . __('min approval')) }}</span>
+                    data-fc="feature-templates.meta4">{{ fc('feature-templates.meta4', __('submit to Meta')) }}</span>
             </div>
         </div>
 
@@ -33,18 +33,18 @@
             data-fc="feature-templates.headline">
             {!! fc(
                 'feature-templates.headline',
-                '71 ' .
+                '16 ' .
                     __('starters.') .
                     '<br>' .
-                    __('Approved in') .
-                    ' <span class="italic text-wa-deep">18 ' .
-                    __('minutes.') .
+                    __('Submit to') .
+                    ' <span class="italic text-wa-deep">' .
+                    __('Meta.') .
                     '</span>',
             ) !!}
         </h2>
         <p class="text-[15.5px] text-ink-700 max-w-2xl leading-relaxed reveal" style="--d:120ms"
             data-fc="feature-templates.body">
-            {{ fc('feature-templates.body', __("Carousel, utility, OTP, marketing — every template pre-validated against Meta's policy before submission. Rejection rate under 4%.")) }}
+            {{ fc('feature-templates.body', __('Festival, ecommerce, education, healthcare, and utility samples. Use a starter, brand it, then submit to Meta. Approval time is Meta’s — we keep copy inside their body and footer rules.')) }}
         </p>
 
         {{-- 3 live template preview cards --}}
@@ -160,7 +160,7 @@
                 <h3 class="serif text-[36px] leading-[1.05]" data-fc="feature-templates.how_title">
                     {{ fc('feature-templates.how_title', __('How it works.')) }}</h3>
                 <p class="text-[13px] text-ink-600 mt-3 leading-relaxed" data-fc="feature-templates.how_body">
-                    {{ fc('feature-templates.how_body', __('Browse the library, customize variables, hit "submit to Meta." :brand pre-flights against current policy and serves you back any reasons for likely rejection — before you click send.', ['brand' => brand_name()])) }}
+                    {{ fc('feature-templates.how_body', __('Browse the sample library, customize variables, then submit to Meta. Starters follow current body and footer rules so you are not sending copy Meta will auto-reject for empty variables or a missing opt-out.', ['brand' => brand_name()])) }}
                 </p>
 
                 <div class="mt-6 hairline rounded-2xl bg-white p-5">
@@ -182,7 +182,7 @@
 
             <div class="col-span-12 lg:col-span-8">
                 <ol class="space-y-3">
-                    @foreach ([['A', fc('feature-templates.step1_title', __('Pick a starter or duplicate your own')), fc('feature-templates.step1_desc', __('9 industries, 71 templates. Filter by language, category, or compliance tier.'))], ['B', fc('feature-templates.step2_title', __('Edit variables & preview live')), fc('feature-templates.step2_desc', __('Side-by-side WhatsApp preview updates as you type. Test with sample data.'))], ['C', fc('feature-templates.step3_title', __('Submit · we pre-validate against Meta policy')), fc('feature-templates.step3_desc', __('We flag promotional words in utility templates, missing opt-ins, banned characters — before you send.'))], ['D', fc('feature-templates.step4_title', __('Approved · median 18 minutes')), fc('feature-templates.step4_desc', __('Rejection rate stays under 4%. Use immediately in flows, campaigns, or the API.'))]] as [$letter, $title, $desc])
+                    @foreach ([['A', fc('feature-templates.step1_title', __('Pick a starter or write your own')), fc('feature-templates.step1_desc', __('16 sample templates across festival, ecommerce, education, healthcare, and utility. Use sample opens the create form filled in.'))], ['B', fc('feature-templates.step2_title', __('Edit variables & preview live')), fc('feature-templates.step2_desc', __('Side-by-side WhatsApp preview updates as you type. Named tokens become {{1}} {{2}} on save.'))], ['C', fc('feature-templates.step3_title', __('Submit to Meta for review')), fc('feature-templates.step3_desc', __('We keep bodies from starting or ending on a variable, and prefill a STOP footer on marketing samples.'))], ['D', fc('feature-templates.step4_title', __('Use once Meta approves')), fc('feature-templates.step4_desc', __('Approved templates are available in campaigns, flows, the inbox, and the API. Review time is set by Meta.'))]] as [$letter, $title, $desc])
                         <li class="hairline rounded-2xl bg-white p-4 flex items-start gap-4">
                             <span class="serif text-[34px] text-wa-deep leading-none">{{ $letter }}</span>
                             <div>

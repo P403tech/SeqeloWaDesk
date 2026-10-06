@@ -36,7 +36,7 @@
                         class="recipient-mode-tile border border-wa-deep bg-[#F0F8F6] rounded-xl p-3 cursor-pointer">
                         <input class="sr-only" type="radio" name="recipient_mode" value="groups" checked>
                         <div class="font-serif text-[15px] leading-tight">{{ __('Contact groups') }}</div>
-                        <p class="mt-1 text-[11px] text-ink-500">{{ __('Use saved segments.') }}</p>
+                        <p class="mt-1 text-[11px] text-ink-500">{{ __('Use contact groups.') }}</p>
                     </label>
                     <label data-mode-tab="contacts"
                         class="recipient-mode-tile border border-paper-200 rounded-xl p-3 cursor-pointer hover:bg-paper-50">

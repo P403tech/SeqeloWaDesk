@@ -223,7 +223,7 @@
                 class="serif text-[88px] leading-[0.92] tracking-[-0.02em] mb-12 reveal">
                 {!! fc(
                     'about.timeline.headline',
-                    __('From flower shop<br>to <span class="italic text-wa-deep">240M / month.</span>'),
+                    __('From flower shop<br>to <span class="italic text-wa-deep">inbox, campaigns, flows.</span>'),
                 ) !!}
             </h2>
 
@@ -232,7 +232,7 @@
         ['Q1 2024', __('Founded'), __('Priya & Dario start building :brand out of a Bengaluru garage. First commit lands on a Tuesday.', ['brand' => brand_name()]), true],
         ['Q2 2024', __('Seed round · $4.2M'), __('Y Combinator + Sequoia Surge back the team. First two engineers join, ship broadcasts module.'), true],
         ['Q3 2024', __('First 100 customers'), __('Bloomly Flowers signs up. Maison & Co. migrates from Wati. Inbox + Flows go live the same week.'), true],
-        ['Q4 2024', __('SOC 2 Type II'), __('Independent audit completed. EU office opens in Berlin. Templates library hits 71 starters.'), true],
+        ['Q4 2024', __('SOC 2 Type II'), __('Independent audit completed. EU office opens in Berlin. Template sample library ships.'), true],
         ['Q1 2025', __('AI Copilot · v4.0'), __('Describe a flow in plain English, get a 14-node graph in 2.4 seconds. Adoption hits 67% in week one.'), true],
         ['Q2 2025', __('Crossed 1,000 teams'), __('Marigold & Co · Lagos, Pebble · Mumbai, FORMAS · São Paulo all migrate in the same week.'), true],
         ['Q1 2026', __('AI Flow Generation · v4.2'), __('Latest release — full-stack flow generation, version control, public roadmap. 4,218 teams shipping.'), false],
@@ -295,7 +295,7 @@
             </div>
 
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-5 reveal" style="--d:120ms">
-                @foreach ([['240M', __('messages / month'), __('across 38 markets')], ['4,218', __('teams'), __('shipping every day')], ['$0', __('per-agent fees'), __('and never will be')], ['96%', __('CSAT'), '12,400 ' . __('ratings')], ['142%', __('net retention'), __('over 12 months')], ['18m', __('template approval'), __('median, under 4% reject')], ['42s', __('first response'), __('SLA, business hours')], ['99.98%', __('uptime'), __('rolling 90 days')]] as [$big, $label, $sub])
+                @foreach ([['16', __('sample templates'), __('festival to utility')], ['Cloud API', __('WhatsApp'), __('plus unofficial connect')], ['$0', __('per-agent fees'), __('workspace plans')], ['Groups', __('& tags'), __('plus CSV audiences')], ['SLA', __('inbox timers'), __('on eligible plans')], ['Meta', __('reviews templates'), __('time varies by category')], ['Notes', __('& saved replies'), __('on every thread')], ['API', __('& webhooks'), __('plus Zapier and Make')]] as [$big, $label, $sub])
                     <div class="hairline rounded-2xl bg-white p-6">
                         <div data-fc="about.numbers.item{{ $loop->iteration }}-big"
                             class="serif text-[56px] leading-none tabular text-wa-deep">

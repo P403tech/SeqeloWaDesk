@@ -52,7 +52,7 @@
 
     $items = $items ?? [
         ['q' => fcp("{$ns}.faq1_q", __('Do I need a WhatsApp Business API account to start?')), 'a' => fcp("{$ns}.faq1_a", __('No — :brand can provision a WABA on your behalf via Meta\'s embedded signup. If you already have one, connect it directly. Twilio is also supported.', ['brand' => brand_name()])), 'open' => true],
-        ['q' => fcp("{$ns}.faq2_q", __('How long does template approval take?')), 'a' => fcp("{$ns}.faq2_a", __('Median 18 minutes. We pre-validate so the rejection rate stays under 4%.'))],
+        ['q' => fcp("{$ns}.faq2_q", __('How long does template approval take?')), 'a' => fcp("{$ns}.faq2_a", __('Meta reviews each template. Times vary by category and country — often hours, sometimes a day. We keep sample copy inside Meta’s body and footer rules so you are not rejected for empty variables or a missing opt-out.'))],
         ['q' => fcp("{$ns}.faq3_q", __('Can I migrate from AiSensy, Wati, Interakt, Gupshup?')), 'a' => fcp("{$ns}.faq3_a", __('Yes — one-click importers for all four, plus free white-glove migration on Pro & Scale.'))],
         ['q' => fcp("{$ns}.faq4_q", __('What payment gateways are supported?')), 'a' => fcp("{$ns}.faq4_a", __('22 gateways including Razorpay, Stripe, PayPal, Paystack, Flutterwave, Instamojo.'))],
         ['q' => fcp("{$ns}.faq5_q", __('Where is my data stored?')), 'a' => fcp("{$ns}.faq5_a", __('SOC 2 Type II, ISO 27001, GDPR, HIPAA-eligible. EU, US, or India residency on Scale.'))],

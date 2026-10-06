@@ -837,7 +837,7 @@
                                 class="recipient-mode-tile border border-wa-deep bg-[#F0F8F6] rounded-2xl p-4 cursor-pointer">
                                 <input class="sr-only" type="radio" name="recipient_mode" value="groups" checked>
                                 <div class="font-serif text-[18px] leading-tight">{{ __('Contact groups') }}</div>
-                                <p class="mt-1.5 text-[12px] text-ink-500">{{ __('Use saved segments and tags.') }}
+                                <p class="mt-1.5 text-[12px] text-ink-500">{{ __('Use contact groups and tags.') }}
                                 </p>
                             </label>
                             <label data-mode-tab="csv"
@@ -858,11 +858,8 @@
                         {{-- Pane: Contact groups + individual contacts checkboxes --}}
                         <div data-mode-pane="groups">
 
-                            {{-- Tag audience. The tile above has always PROMISED
- "saved segments and tags", but only groups were ever
- rendered — so there was no way to send to a tag at all.
- Ticking a tag adds every contact carrying it (resolved
- workspace-scoped through the contact_tag pivot). --}}
+                            {{-- Tag audience: every contact carrying the tag
+                             (workspace-scoped through the contact_tag pivot). --}}
                             @if (!empty($tags) && count($tags))
                                 <div class="mb-4">
                                     <div class="text-[11.5px] font-semibold text-ink-700 mb-2">{{ __('Send to tags') }}

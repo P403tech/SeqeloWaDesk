@@ -1996,6 +1996,8 @@ class TeamInboxController extends Controller
                     // thread being archived or re-opened, unlike conversation.ctwa.
                     'attribution'       => is_array($profile->attribution) ? $profile->attribution : null,
                     'is_unsubscribed'   => (bool) $profile->is_unsubscribed,
+                    'lead_score'        => (int) ($profile->lead_score ?? 0),
+                    'lead_grade'        => (string) ($profile->lead_grade ?? ''),
                 ];
             }
         } catch (\Throwable $e) { /* contact lookup non-fatal */ }

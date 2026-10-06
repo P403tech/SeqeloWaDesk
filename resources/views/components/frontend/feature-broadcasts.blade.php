@@ -44,7 +44,7 @@
         </h2>
         <p class="text-[15.5px] text-ink-700 max-w-2xl leading-relaxed reveal" style="--d:120ms"
             data-fc="feature-broadcasts.body">
-            {{ fc('feature-broadcasts.body', __('Audience builder with 30+ filters, A/B test variants, recurring sends, throttle-by-quality-rating — and a per-recipient timezone scheduler so your 9am promo lands at 9am, everywhere.')) }}
+            {{ fc('feature-broadcasts.body', __('Pick recipients from contact groups, tags, a CSV, or pasted numbers. A/B variants, per-recipient timezone, and campaign analytics — without claiming filters the product does not have yet.')) }}
         </p>
 
         <div class="mt-14 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -207,10 +207,10 @@
                         {{ fc('feature-broadcasts.rail_title', __('Inside this feature')) }}</div>
                     <ul class="divide-y divide-paper-200">
                         @foreach ([
-        ['01', fc('feature-broadcasts.rail1_title', __('Audience builder · 30+ filters')), fc('feature-broadcasts.rail1_desc', __('Stack tags, geos, order history, custom attributes, opt-in source. Saved segments refresh in real-time.'))],
+        ['01', fc('feature-broadcasts.rail1_title', __('Audience · groups and tags')), fc('feature-broadcasts.rail1_desc', __('Send to contact groups, tags, a CSV upload, or pasted numbers. Named saved segments are next.'))],
         ['02', fc('feature-broadcasts.rail2_title', __('A/B variants · auto-winner')), fc('feature-broadcasts.rail2_desc', __('Test up to 4 variants. :brand promotes the winner once statistical significance is hit.', ['brand' => brand_name()]))],
         ['03', fc('feature-broadcasts.rail3_title', __('Per-recipient timezones')), fc('feature-broadcasts.rail3_desc', __('9am promo lands at 9am everywhere. Quiet-hours respected per market & per region.'))],
-        ['04', fc('feature-broadcasts.rail4_title', __('Quality-rating protection')), fc('feature-broadcasts.rail4_desc', __('Automatic throttle if Meta downgrades you. We pause, retry, and re-warm in the background.'))],
+        ['04', fc('feature-broadcasts.rail4_title', __('Quality rating on the number')), fc('feature-broadcasts.rail4_desc', __('See Meta quality and messaging limits on the Channels page so you know before a big send.'))],
         ['05', fc('feature-broadcasts.rail5_title', __('Click-tracked URLs · UTM in/out')), fc('feature-broadcasts.rail5_desc', __('Every link shortened, signed, and attributable. UTMs auto-passed to Stripe & GA4.'))],
         ['06', fc('feature-broadcasts.rail6_title', __('Recurring & trigger-based')), fc('feature-broadcasts.rail6_desc', __('Weekly newsletters, monthly digests, or fire-on-event from a Stripe webhook.'))],
     ] as [$num, $title, $desc])
@@ -228,7 +228,7 @@
                         <span class="text-[12px] text-ink-700"
                             data-fc="feature-broadcasts.footer_note">{!! fc(
                                 'feature-broadcasts.footer_note',
-                                __('Used by') . ' <b>3,128 ' . __('teams') . '</b> · 240M ' . __('messages/mo'),
+                                __('Groups, tags, CSV, and A/B on every campaign.'),
                             ) !!}</span>
                         <a href="{{ fc('feature-broadcasts.cta_url', '#') }}"
                             class="text-[12.5px] text-wa-deep font-semibold"

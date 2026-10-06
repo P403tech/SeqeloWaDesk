@@ -2323,13 +2323,10 @@ Starts @{{ meet_start }}</textarea>
                     <span id="ct-business-num" class="font-mono text-ink-900 font-semibold"></span>
                 </div>
             </div>
-            {{-- Omni Attributes — contact profile fields (email / phone / language
-                 / address) + any custom attributes. Rendered per-conversation by
-                 renderContactAttributes() from state.active.contact_profile; the
-                 whole card hides when there's nothing to show. --}}
+            {{-- Sales & profile — lead score, CTWA source, email/phone, custom attributes. --}}
             <div id="ct-attributes-section" class="px-4 py-3 border-b border-paper-200 bg-paper-0 hidden">
                 <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500 mb-2">
-                    {{ __('Attributes') }}</div>
+                    {{ __('Sales & profile') }}</div>
                 <div id="ct-attributes" class="space-y-1.5"></div>
             </div>
             <div id="ct-stats"

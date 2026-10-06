@@ -5199,6 +5199,14 @@ Limits:
             const v = (val == null ? '' : String(val)).trim();
             if (v !== '') rows.push([label, v]);
         };
+        const tr = (str) => (window.t ? window.t(str) : str);
+        const score = Number(p.lead_score || 0);
+        const grade = String(p.lead_grade || '').trim().toUpperCase();
+        if (grade || score > 0) {
+            add(tr('Lead score'), grade ? `${score} · ${grade}` : String(score));
+        }
+        if (p.is_unsubscribed) add(tr('Marketing'), tr('Unsubscribed'));
+
         add('Email', p.email);
         add('Phone', p.mobile);
         add('Language', p.language);
@@ -5208,12 +5216,10 @@ Limits:
         // Thread-level first (conversation.ctwa, captured on the ad tap), falling
         // back to the contact's own stored first-touch so an older customer still
         // shows where they originally came from.
-        // This file has no module-level t(); it uses the window.t guard inline.
-        const tr = (str) => (window.t ? window.t(str) : str);
         const ctwa = state.active?.ctwa || p.attribution?.first || null;
-        if (ctwa && (ctwa.source_id || ctwa.ctwa_clid)) {
+        if (ctwa && (ctwa.source_id || ctwa.ctwa_clid || ctwa.headline)) {
             add(tr('Came from'), ctwa.source_type === 'post' ? tr('Facebook post') : tr('Click-to-WhatsApp ad'));
-            add(tr('Ad'), ctwa.headline || ctwa.source_id);
+            add(tr('Ad'), ctwa.headline || ctwa.source_id || ctwa.ctwa_clid);
         }
         const ca = p.custom_attributes || {};
         Object.keys(ca).forEach(k => {
