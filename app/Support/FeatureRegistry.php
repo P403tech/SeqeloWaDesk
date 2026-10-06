@@ -78,38 +78,42 @@ class FeatureRegistry
                 ['key' => 'chatbot-widgets','label' => 'Chatbot Widgets',      'path' => '/chatbot-widgets'],
                 ['key' => 'warmer',         'label' => 'WhatsApp Warmer',      'path' => '/warmer'],
             ],
-            // Messaging CHANNELS map to their REAL channel flag (`*_enabled`,
-            // the same switch as the Channel Settings page), NOT a separate
-            // feature_show_ flag — so turning one off here removes it from the
-            // connect modal, the nav, campaigns and the engine together (one
-            // switch, everywhere). They default OFF, matching the channel's
-            // actual state. Channels with several pages (Facebook, TikTok) put
-            // the channel switch on the primary row; the extra pages stay
-            // per-page visibility toggles.
+            // Channel pages use feature_show_* so closing an app hides it from
+            // customers without wiping Channel Settings engine flags.
             'Channels' => [
                 ['key' => 'devices',        'label' => 'Channels (Devices)',   'path' => '/devices'],
                 ['key' => 'metaads',        'label' => 'Meta Ads',             'path' => '/meta-ads'],
                 ['key' => 'lead-ads',       'label' => 'Lead Ads',             'path' => '/lead-ads'],
-                ['key' => 'social-posts',   'label' => 'Social Posts',         'path' => '/social-posts'],
-                ['key' => 'social-calendar','label' => 'Social Calendar',      'path' => '/social-calendar'],
-                ['key' => 'instagram-posts','label' => 'Instagram Posts',      'path' => '/instagram/posts',    'flag' => 'instagram_enabled', 'default' => false],
-                ['key' => 'facebook-posts', 'label' => 'Facebook (channel)',   'path' => '/facebook/posts',     'flag' => 'facebook_enabled',  'default' => false],
+                ['key' => 'social-posts',   'label' => 'Social Posts',         'path' => '/social/posts'],
+                ['key' => 'social-calendar','label' => 'Social Calendar',      'path' => '/social/calendar'],
+                ['key' => 'instagram-posts','label' => 'Instagram Posts',      'path' => '/instagram/posts'],
+                ['key' => 'facebook-posts', 'label' => 'Facebook (channel)',   'path' => '/facebook/posts'],
                 ['key' => 'facebook-setup', 'label' => 'Messenger Setup',      'path' => '/facebook/setup'],
                 ['key' => 'facebook-broadcasts',    'label' => 'Facebook Broadcasts',   'path' => '/facebook/broadcasts'],
                 ['key' => 'facebook-comment-rules', 'label' => 'FB Comment Auto-reply', 'path' => '/facebook/comment-rules'],
-                ['key' => 'tiktok-accounts','label' => 'TikTok (channel)',     'path' => '/tiktok/accounts',    'flag' => 'tiktok_enabled',    'default' => false],
+                ['key' => 'tiktok-accounts','label' => 'TikTok (channel)',     'path' => '/tiktok/accounts'],
                 ['key' => 'tiktok-posts',   'label' => 'TikTok Posts',         'path' => '/tiktok/posts'],
-                ['key' => 'telegram',       'label' => 'Telegram',             'path' => '/telegram',           'flag' => 'telegram_enabled',  'default' => false],
-                ['key' => 'sms',            'label' => 'SMS',                  'path' => '/sms',                'flag' => 'sms_enabled',       'default' => false],
-                ['key' => 'line',           'label' => 'LINE',                 'path' => '/line',               'flag' => 'line_enabled',      'default' => false],
-                ['key' => 'viber',          'label' => 'Viber',                'path' => '/viber',              'flag' => 'viber_enabled',     'default' => false],
-                ['key' => 'wechat',         'label' => 'WeChat',               'path' => '/wechat',             'flag' => 'wechat_enabled',    'default' => false],
-                ['key' => 'email',          'label' => 'Email',                'path' => '/email',              'flag' => 'email_enabled',     'default' => false],
+                ['key' => 'telegram',       'label' => 'Telegram',             'path' => '/telegram'],
+                ['key' => 'sms',            'label' => 'SMS',                  'path' => '/sms'],
+                ['key' => 'line',           'label' => 'LINE',                 'path' => '/line'],
+                ['key' => 'viber',          'label' => 'Viber',                'path' => '/viber'],
+                ['key' => 'wechat',         'label' => 'WeChat',               'path' => '/wechat'],
+                ['key' => 'email',          'label' => 'Email',                'path' => '/email'],
+                ['key' => 'threads-posts',  'label' => 'Threads',              'path' => '/threads/posts'],
+                ['key' => 'openaiads',      'label' => 'OpenAI Ads',           'path' => '/openai-ads'],
                 ['key' => 'wa-links',       'label' => 'WhatsApp Link Generator', 'path' => '/wa-links'],
             ],
             'Sales & CRM' => [
                 ['key' => 'crm-dashboard',  'label' => 'CRM Dashboard',        'path' => '/crm'],
                 ['key' => 'sdr',            'label' => 'AI SDR',               'path' => '/sdr'],
+                ['key' => 'ai-crm',         'label' => 'AI CRM',               'path' => '/ai-crm'],
+                ['key' => 'companies',      'label' => 'Companies',            'path' => '/companies'],
+                ['key' => 'payments',       'label' => 'Payments',             'path' => '/payments'],
+                ['key' => 'tasks',          'label' => 'Tasks',                'path' => '/tasks'],
+                ['key' => 'projects',       'label' => 'Projects',             'path' => '/projects'],
+                ['key' => 'proposals',      'label' => 'Proposals',            'path' => '/proposals'],
+                ['key' => 'estimates',      'label' => 'Estimates',            'path' => '/estimates'],
+                ['key' => 'calendar',       'label' => 'Calendar',             'path' => '/calendar'],
             ],
             'Store' => [
                 ['key' => 'store',          'label' => 'Store',                'path' => '/store'],
@@ -155,9 +159,25 @@ class FeatureRegistry
         return $out;
     }
 
+    /**
+     * Nav / header keys that refer to the same registry row under another name.
+     * Unknown keys used to skip the gate (always visible) — that is why CRM
+     * stayed in the customer header after admin closed "CRM Dashboard".
+     */
+    public static function resolveKey(string $key): string
+    {
+        return match ($key) {
+            'crm' => 'crm-dashboard',
+            'openai-ads' => 'openaiads',
+            'meta-ads' => 'metaads',
+            default => $key,
+        };
+    }
+
     /** The item for a key, or null. */
     public static function find(string $key): ?array
     {
+        $key = self::resolveKey($key);
         foreach (self::all() as $it) {
             if (($it['key'] ?? null) === $key) {
                 return $it;
@@ -171,6 +191,12 @@ class FeatureRegistry
     public static function flagOf(array $it): string
     {
         return (string) ($it['flag'] ?? self::FLAG_PREFIX . $it['key']);
+    }
+
+    /** Customer-visibility flag — never the engine *_enabled row. */
+    public static function showFlagOf(array $it): string
+    {
+        return self::FLAG_PREFIX.$it['key'];
     }
 
     /** The default (when the flag was never written): ON unless the item says otherwise. */
@@ -206,6 +232,19 @@ class FeatureRegistry
         return $best;
     }
 
+    /** True when this URL may appear on the customer dashboard. */
+    public static function hrefVisible(string $href): bool
+    {
+        $path = parse_url($href, PHP_URL_PATH) ?: $href;
+        $path = '/' . ltrim((string) $path, '/');
+        $feature = self::matchPath($path);
+        if ($feature === null) {
+            return true;
+        }
+
+        return self::visible((string) $feature['key']);
+    }
+
     /** Flat list of every feature key in the registry. */
     public static function keys(): array
     {
@@ -228,6 +267,11 @@ class FeatureRegistry
     /** Per-request memo so one nav render doesn't re-read the same flag N times. */
     private static array $memo = [];
 
+    public static function flushMemo(): void
+    {
+        self::$memo = [];
+    }
+
     /**
      * Is this feature visible? Unknown keys (anything not in the registry) are
      * always visible, so this can be dropped into any nav filter safely.
@@ -238,11 +282,18 @@ class FeatureRegistry
         if ($it === null) {
             return true; // unknown keys are never gated
         }
-        if (! array_key_exists($key, self::$memo)) {
-            self::$memo[$key] = (bool) SystemSetting::get(self::flagOf($it), self::defaultOf($it));
+        $memoKey = (string) $it['key'];
+        if (! array_key_exists($memoKey, self::$memo)) {
+            $stored = SystemSetting::get(self::showFlagOf($it), null);
+            if ($stored === null) {
+                // Older Feature Toggles saved the engine flag (`instagram_enabled`
+                // etc). Honour that OFF so a previously closed app stays closed.
+                $stored = SystemSetting::get(self::flagOf($it), self::defaultOf($it));
+            }
+            self::$memo[$memoKey] = (bool) $stored;
         }
 
-        return self::$memo[$key];
+        return self::$memo[$memoKey];
     }
 
     /** Current on/off state for every feature — powers the admin toggle grid. */

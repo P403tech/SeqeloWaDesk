@@ -1566,9 +1566,11 @@ class AdminPagesController extends Controller
     {
         $on = array_map('strval', (array) $request->input('show', []));
 
+        \App\Support\FeatureRegistry::flushMemo();
+
         foreach (\App\Support\FeatureRegistry::all() as $it) {
             \App\Models\SystemSetting::set(
-                \App\Support\FeatureRegistry::flagOf($it),
+                \App\Support\FeatureRegistry::showFlagOf($it),
                 in_array((string) $it['key'], $on, true),
                 'bool',
                 'Feature visibility toggle (admin) — show "' . $it['key'] . '" in the user dashboard.'

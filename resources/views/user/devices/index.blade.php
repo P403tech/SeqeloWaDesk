@@ -59,7 +59,8 @@
     // Facebook Pages channel (core). Availability is admin-enabled; the connect
     // flow + connected Pages are read here directly (no controller change). Like
     // Instagram, it's a bolt-on channel — not a WhatsApp send engine.
-    $hasFacebook = (bool) \App\Models\SystemSetting::get('facebook_enabled', false);
+    $hasFacebook = (bool) \App\Models\SystemSetting::get('facebook_enabled', false)
+        && \App\Support\FeatureRegistry::visible('facebook-posts');
     $__fbWsId = (int) (auth()->user()?->current_workspace_id ?? 0);
     if ($hasFacebook) {
         // Inline, cache-gated hourly token health check (no-cron policy).
@@ -75,7 +76,8 @@
     $hasFacebookRows = $hasFacebook && $fbPageCount > 0;
 
     // TikTok channel (core) — same inline treatment as Facebook.
-    $hasTiktok = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false);
+    $hasTiktok = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false)
+        && \App\Support\FeatureRegistry::visible('tiktok-accounts');
     if ($hasTiktok) {
         try { \App\Services\Tiktok\TiktokTokenRefreshSweeper::run($__fbWsId); } catch (\Throwable $e) {}
     }
@@ -86,7 +88,8 @@
 
     // Telegram channel (core) — Bot API bots + optional MTProto account, both
     // connected on /telegram. Same inline treatment as TikTok.
-    $hasTelegram = (bool) \App\Models\SystemSetting::get('telegram_enabled', false);
+    $hasTelegram = (bool) \App\Models\SystemSetting::get('telegram_enabled', false)
+        && \App\Support\FeatureRegistry::visible('telegram');
     $telegramBots = ($hasTelegram && class_exists(\App\Models\TelegramBot::class))
         ? \App\Models\TelegramBot::allForWorkspace($__fbWsId)
         : collect();
@@ -97,7 +100,8 @@
 
     // SMS channel (core) — Twilio / MSG91. Connected on /sms (reuses the Twilio
     // keys). Gated on the admin sms_enabled toggle, like telegram/tiktok.
-    $hasSms = (bool) \App\Models\SystemSetting::get('sms_enabled', false);
+    $hasSms = (bool) \App\Models\SystemSetting::get('sms_enabled', false)
+        && \App\Support\FeatureRegistry::visible('sms');
 
     // LINE, WeChat, Viber, and Email are not part of this install.
     $hasLine = false;
@@ -107,7 +111,8 @@
     $emailAccounts = collect();
 
     // Threads (Meta) — publishing channel; connects on /threads/posts (OAuth).
-    $hasThreads = (bool) \App\Models\SystemSetting::get('threads_enabled', false);
+    $hasThreads = (bool) \App\Models\SystemSetting::get('threads_enabled', false)
+        && \App\Support\FeatureRegistry::visible('threads-posts');
 
     $showChooser = $multiEngine || $hasInstagram || $hasFacebook || $hasTiktok || $hasTelegram || $hasSms || $hasLine || $hasWeChat || $hasViber || $hasEmail || $hasThreads;
 

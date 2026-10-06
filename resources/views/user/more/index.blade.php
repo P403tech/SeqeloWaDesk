@@ -115,7 +115,7 @@
                         // strip — it has a permanent card in the "All tools" grid
                         // below instead, so it reads like every other tool.
                     ];
-                    $__demotedNav = array_filter($__primaryNav, fn ($k) => !in_array($k, $__barKeys, true), ARRAY_FILTER_USE_KEY);
+                    $__demotedNav = array_filter($__primaryNav, fn ($k) => !in_array($k, $__barKeys, true) && \App\Support\FeatureRegistry::visible($k), ARRAY_FILTER_USE_KEY);
                 @endphp
                 @if (!empty($__demotedNav))
                     <div class="mb-5">
@@ -158,6 +158,14 @@
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-more-tools
                     data-hidden-features="{{ json_encode(\App\Support\FeatureRegistry::hiddenPaths()) }}">
+                    @if ($__hidden = \App\Support\FeatureRegistry::hiddenPaths())
+                        <style>
+                            @foreach ($__hidden as $__hp)
+                            [data-more-tools] a[href$="{{ $__hp }}"],
+                            [data-more-tools] a[href*="{{ $__hp }}?"] { display: none !important; }
+                            @endforeach
+                        </style>
+                    @endif
                     {{-- Unified Inbox moved to the main header nav — its hero card
                          used to live here, removed to avoid duplicating the entry. --}}
 
@@ -211,8 +219,10 @@
                          OR a connected remote Instaflow). Route is plan-gated
                          (instagram_posts); the paywall handles plans without it. --}}
                     @php
-                        $igAvailable = \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected()
-                            || (bool) \App\Models\SystemSetting::get('instagram_enabled', false);
+                        $igAvailable = (
+                            \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected()
+                            || (bool) \App\Models\SystemSetting::get('instagram_enabled', false)
+                        ) && \App\Support\FeatureRegistry::visible('instagram-posts');
                     @endphp
                     @if ($igAvailable)
                         <a href="{{ url('/instagram/posts') }}"
@@ -239,7 +249,8 @@
                     @endif
 
                     {{-- Facebook Posts — compose + schedule to a connected Facebook Page. --}}
-                    @php $fbAvailable = (bool) \App\Models\SystemSetting::get('facebook_enabled', false); @endphp
+                    @php $fbAvailable = (bool) \App\Models\SystemSetting::get('facebook_enabled', false)
+                        && \App\Support\FeatureRegistry::visible('facebook-posts'); @endphp
                     @if ($fbAvailable)
                         <a href="{{ url('/facebook/posts') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
@@ -262,7 +273,8 @@
 
                     {{-- SMS — connect a number; texts land in the unified inbox and
                          campaigns gain an SMS sender. Gated on the sms_enabled toggle. --}}
-                    @php $smsAvailable = (bool) \App\Models\SystemSetting::get('sms_enabled', false); @endphp
+                    @php $smsAvailable = (bool) \App\Models\SystemSetting::get('sms_enabled', false)
+                        && \App\Support\FeatureRegistry::visible('sms'); @endphp
                     @if ($smsAvailable)
                         <a href="{{ url('/sms') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
@@ -337,7 +349,8 @@
 
                     {{-- TikTok — connect account, insights and posting. Gated on the
                          tiktok_enabled channel toggle (route is plan-gated access_tiktok). --}}
-                    @php $ttAvailable = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false); @endphp
+                    @php $ttAvailable = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false)
+                        && \App\Support\FeatureRegistry::visible('tiktok-accounts'); @endphp
                     @if ($ttAvailable)
                         <a href="{{ url('/tiktok/accounts') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">

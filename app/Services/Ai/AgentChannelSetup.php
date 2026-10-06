@@ -72,7 +72,8 @@ class AgentChannelSetup
 
     private static function facebook(int $wsId): array
     {
-        $platform = (bool) SystemSetting::get('facebook_enabled', false);
+        $platform = (bool) SystemSetting::get('facebook_enabled', false)
+            && \App\Support\FeatureRegistry::visible('facebook-posts');
         $accounts = [];
         try {
             if ($wsId > 0 && class_exists(FacebookPage::class)) {
@@ -100,7 +101,9 @@ class AgentChannelSetup
     private static function instagram(int $wsId): array
     {
         $client = InstaflowClient::fromSettings();
-        $platform = $client->isConfigured();
+        $platform = (
+            (bool) SystemSetting::get('instagram_enabled', false) || $client->isConfigured()
+        ) && \App\Support\FeatureRegistry::visible('instagram-posts');
         $accounts = [];
         try {
             if ($wsId > 0 && class_exists(WorkspaceIgAccount::class)) {
@@ -130,7 +133,8 @@ class AgentChannelSetup
     {
         $platform = false;
         try {
-            $platform = TiktokClient::enabled();
+            $platform = TiktokClient::enabled()
+                && \App\Support\FeatureRegistry::visible('tiktok-accounts');
         } catch (\Throwable $e) {
         }
         $accounts = [];
@@ -163,7 +167,8 @@ class AgentChannelSetup
     {
         $platform = false;
         try {
-            $platform = app(ShopifyService::class)->isEnabled();
+            $platform = app(ShopifyService::class)->isEnabled()
+                && \App\Support\FeatureRegistry::visible('shopify');
         } catch (\Throwable $e) {
         }
         $accounts = [];

@@ -56,10 +56,13 @@ class UserNav
         // tagged 'ig' => true are dropped when Instagram isn't available.
         $igAvailable = false;
         try {
-            $igAvailable = \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected()
-                || (bool) SystemSetting::get('instagram_enabled', false);
+            $igAvailable = (
+                \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected()
+                || (bool) SystemSetting::get('instagram_enabled', false)
+            ) && \App\Support\FeatureRegistry::visible('instagram-posts');
         } catch (\Throwable $e) {
-            $igAvailable = (bool) SystemSetting::get('instagram_enabled', false);
+            $igAvailable = (bool) SystemSetting::get('instagram_enabled', false)
+                && \App\Support\FeatureRegistry::visible('instagram-posts');
         }
 
         // The workspace whose PLAN decides which 'feature'-tagged items show.
@@ -68,31 +71,40 @@ class UserNav
         $workspace = auth()->user()?->currentWorkspace ?? null;
 
         // Facebook channel availability — items tagged 'fb' => true drop when off.
-        $fbAvailable = (bool) SystemSetting::get('facebook_enabled', false);
+        $fbAvailable = (bool) SystemSetting::get('facebook_enabled', false)
+            && \App\Support\FeatureRegistry::visible('facebook-posts');
 
         // TikTok channel availability — items tagged 'tt' => true drop when off.
-        $ttAvailable = (bool) SystemSetting::get('tiktok_enabled', false);
+        $ttAvailable = (bool) SystemSetting::get('tiktok_enabled', false)
+            && \App\Support\FeatureRegistry::visible('tiktok-accounts');
 
         // Telegram channel availability — items tagged 'tg' => true drop when off.
-        $tgAvailable = (bool) SystemSetting::get('telegram_enabled', false);
+        $tgAvailable = (bool) SystemSetting::get('telegram_enabled', false)
+            && \App\Support\FeatureRegistry::visible('telegram');
 
         // SMS channel availability — items tagged 'sms' => true drop when off.
-        $smsAvailable = (bool) SystemSetting::get('sms_enabled', false);
+        $smsAvailable = (bool) SystemSetting::get('sms_enabled', false)
+            && \App\Support\FeatureRegistry::visible('sms');
 
         // LINE channel availability — items tagged 'line' => true drop when off.
-        $lineAvailable = (bool) SystemSetting::get('line_enabled', false);
+        $lineAvailable = (bool) SystemSetting::get('line_enabled', false)
+            && \App\Support\FeatureRegistry::visible('line');
 
         // WeChat channel availability — items tagged 'wechat' => true drop when off.
-        $wechatAvailable = (bool) SystemSetting::get('wechat_enabled', false);
+        $wechatAvailable = (bool) SystemSetting::get('wechat_enabled', false)
+            && \App\Support\FeatureRegistry::visible('wechat');
 
         // Viber channel availability — items tagged 'viber' => true drop when off.
-        $viberAvailable = (bool) SystemSetting::get('viber_enabled', false);
+        $viberAvailable = (bool) SystemSetting::get('viber_enabled', false)
+            && \App\Support\FeatureRegistry::visible('viber');
 
         // Email channel availability — items tagged 'email' => true drop when off.
-        $emailAvailable = (bool) SystemSetting::get('email_enabled', false);
+        $emailAvailable = (bool) SystemSetting::get('email_enabled', false)
+            && \App\Support\FeatureRegistry::visible('email');
 
         // Threads channel availability — items tagged 'threads' => true drop when off.
-        $threadsAvailable = (bool) SystemSetting::get('threads_enabled', false);
+        $threadsAvailable = (bool) SystemSetting::get('threads_enabled', false)
+            && \App\Support\FeatureRegistry::visible('threads-posts');
 
         // WhatsApp Forms (Meta Flows) are a WABA / Cloud-API exclusive feature —
         // items tagged 'waba' => true drop unless this workspace has a CONNECTED

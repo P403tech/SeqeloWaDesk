@@ -12,6 +12,7 @@
             'gemini' => ['bg' => 'bg-[#D9E5F2]', 'text' => 'text-[#13478A]', 'dot' => 'bg-[#3D6FB5]', 'label' => 'Gemini'],
             'muse' => ['bg' => 'bg-[#E8F1FF]', 'text' => 'text-[#0668E1]', 'dot' => 'bg-[#0668E1]', 'label' => 'Muse'],
             'mistral' => ['bg' => 'bg-[#FFEFE5]', 'text' => 'text-[#9A4A1A]', 'dot' => 'bg-[#E07A3D]', 'label' => 'Mistral'],
+        ];
         // Bespoke colour themes for the providers that have brand colours; every
         // other supported provider (deepseek, mistral, xai, openrouter, …) uses
         // the neutral theme but still shows its OWN name. Previously the map only
@@ -290,36 +291,14 @@
                         </div>
                     </div>
 
-                  <div class="overflow-x-auto">
-                   <div class="min-w-[820px] lg:min-w-0">
-                    <div
-                        class="px-4 py-2.5 grid grid-cols-[1.6fr_120px_120px_120px_140px_180px] items-center gap-3 border-b border-paper-200 bg-paper-50 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
-                        <div>{{ __('Agent') }}</div>
-                        <div>{{ __('Provider') }}</div>
-                        <div>{{ __('Knowledge') }}</div>
-                        <div>{{ __('Tone') }}</div>
-                        <div>{{ __('Updated') }}</div>
-                        <div class="text-right pr-2">{{ __('Actions') }}</div>
-                    </div>
-
-                    <div id="ait-list">
-                        @forelse ($assistants as $a)
-                            @php
-                                $accent = $accentPalette[$a->id % 4];
-                                $status = $statusPill[$a->status] ?? $statusPill['active'];
-                                $provKey = (string) $a->ai_provider;
-                                $provider = ($providerThemes[$provKey] ?? $providerDefaultTheme)
-                                    + ['label' => $providerLabels[$provKey] ?? ($provKey !== '' ? ucfirst($provKey) : 'OpenAI')];
-                            @endphp
-                            <div class="ait-row grid grid-cols-[1.6fr_120px_120px_120px_140px_180px] items-center gap-3 px-4 py-3 border-b border-paper-200 last:border-0 hover:bg-paper-50/60"
-                                data-search-haystack="{{ Str::lower($a->name . ' ' . $a->slug) }}">
-
             <div id="ait-list" class="p-4 sm:p-5">
                 @forelse ($assistants as $a)
                     @php
                         $accent = $accentPalette[$a->id % 4];
                         $status = $statusPill[$a->status] ?? $statusPill['active'];
-                        $provider = $providerPill[$a->ai_provider] ?? $providerPill['openai'];
+                        $provKey = (string) $a->ai_provider;
+                        $provider = ($providerThemes[$provKey] ?? $providerDefaultTheme)
+                            + ['label' => $providerLabels[$provKey] ?? ($providerPill[$provKey]['label'] ?? ($provKey !== '' ? ucfirst($provKey) : 'OpenAI'))];
                     @endphp
                     <article
                         class="ait-row group mb-3 last:mb-0 rounded-2xl border border-paper-200 bg-paper-0 hover:border-wa-green/40 hover:bg-wa-mint/15 transition p-4 sm:p-5"

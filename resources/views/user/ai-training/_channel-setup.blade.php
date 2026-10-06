@@ -51,6 +51,7 @@
     </div>
 
     {{-- Facebook --}}
+    @if (! empty($cs['facebook']['platform']))
     <div class="border border-paper-200 rounded-2xl overflow-hidden">
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -95,8 +96,10 @@
             @endif
         </div>
     </div>
+    @endif
 
     {{-- Instagram --}}
+    @if (! empty($cs['instagram']['platform']))
     <div class="border border-paper-200 rounded-2xl overflow-hidden">
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -129,8 +132,10 @@
             </div>
         @endif
     </div>
+    @endif
 
     {{-- TikTok --}}
+    @if (! empty($cs['tiktok']['platform']))
     <div class="border border-paper-200 rounded-2xl overflow-hidden">
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -163,8 +168,10 @@
             </div>
         @endif
     </div>
+    @endif
 
     {{-- Shopify --}}
+    @if (! empty($cs['shopify']['platform']))
     <div class="border border-paper-200 rounded-2xl overflow-hidden">
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -205,4 +212,5 @@
             </div>
         @endif
     </div>
+    @endif
 </div>

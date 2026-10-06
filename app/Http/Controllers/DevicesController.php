@@ -1939,7 +1939,9 @@ class DevicesController extends Controller
         //   • the in-place native add-on — admin flips instagram_enabled at
         //     /admin/settings/instagram and connects via /instagram/connect.
         $instagramNative = (bool) \App\Models\SystemSetting::get('instagram_enabled', false);
-        $hasInstagram    = \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected() || $instagramNative;
+        $hasInstagram    = (
+                \App\Services\Instaflow\InstaflowClient::fromSettings()->isConnected() || $instagramNative
+            ) && \App\Support\FeatureRegistry::visible('instagram-posts');
         if (! $wsId || ! $hasInstagram) {
             $instagramAccounts = collect();
         } elseif ($instagramNative) {
@@ -1968,14 +1970,16 @@ class DevicesController extends Controller
         // (mirrors Instagram). Passed in the payload so the AJAX refresh — which
         // re-renders _channel_rows — keeps the Facebook rows instead of dropping
         // them (same reason the WABA/Twilio/Instagram rows moved into that partial).
-        $hasFacebook   = (bool) \App\Models\SystemSetting::get('facebook_enabled', false);
+        $hasFacebook   = (bool) \App\Models\SystemSetting::get('facebook_enabled', false)
+            && \App\Support\FeatureRegistry::visible('facebook-posts');
         $facebookPages = ($hasFacebook && $wsId)
             ? \App\Models\FacebookPage::forWorkspace((int) $wsId)->orderBy('name')->get()
             : collect();
 
         // TikTok accounts (core channel) — same treatment as Facebook: woven into
         // the Connected channels table as rows, available when admin enabled it.
-        $hasTiktok      = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false);
+        $hasTiktok      = (bool) \App\Models\SystemSetting::get('tiktok_enabled', false)
+            && \App\Support\FeatureRegistry::visible('tiktok-accounts');
         if ($hasTiktok && $wsId) {
             try { \App\Services\Tiktok\TiktokTokenRefreshSweeper::run((int) $wsId); } catch (\Throwable $e) {}
         }
@@ -1985,7 +1989,8 @@ class DevicesController extends Controller
 
         // SMS numbers (Twilio / MSG91) — woven into the same Connected channels
         // table as rows (like Facebook/Instagram/TikTok), when admin enabled SMS.
-        $smsSenders = ($wsId && (bool) \App\Models\SystemSetting::get('sms_enabled', false))
+        $smsSenders = ($wsId && (bool) \App\Models\SystemSetting::get('sms_enabled', false)
+                && \App\Support\FeatureRegistry::visible('sms'))
             ? \App\Models\WaProviderConfig::query()->forWorkspace((int) $wsId)
                 ->where('provider', 'sms')->orderBy('id')->get()
             : collect();
