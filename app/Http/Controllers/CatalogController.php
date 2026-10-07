@@ -85,30 +85,7 @@ class CatalogController extends Controller
         // view payload kept passing `$engine`, so /catalog died with
         // "Undefined variable $engine" before rendering anything. Same source as
         // sendPage() so both tabs agree on which engine is primary.
-        $engine = \App\Services\WorkspaceEngine::for($wsId);
-
-        $devices = collect();
-        foreach (\App\Models\Device::query()
-                ->forCurrentWorkspace()
-                ->where('status', 'connected')
-                ->orderByDesc('active')->get() as $d) {
-            $devices->push($d);
-        }
-        foreach (\App\Models\WaProviderConfig::query()
-                ->where('workspace_id', $wsId)
-                ->whereIn('provider', [\App\Services\WorkspaceEngine::ENGINE_WABA, \App\Services\WorkspaceEngine::ENGINE_TWILIO])
-                ->where('status', \App\Models\WaProviderConfig::STATUS_CONNECTED)
-                ->orderByDesc('connected_at')->get() as $c) {
-            $devices->push((object) [
-                'id'           => $c->id,
-                'device_name'  => $c->display_label ?: strtoupper((string) $c->provider),
-                'country_code' => '',
-                'phone_number' => $c->phone_number,
-                'status'       => 'connected',
-            ]);
-        }
-
-        $hasBaileysDevice = $devices->isNotEmpty();
+        $devicePayload = $this->catalogDevicePayload((int) $wsId);
 
         return view('user.catalog.index', [
             'tab'              => 'setup',
