@@ -191,6 +191,49 @@
             </div>
         </div>
 
+        {{-- LLM errors --}}
+        <div class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
+            <div class="px-5 py-4 border-b border-paper-200 flex items-center justify-between gap-3">
+                <div>
+                    <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('LLM errors') }}</div>
+                    <div class="text-[13px] text-ink-600 mt-1">{{ __('Missing keys, last provider failures, and live agents that cannot resolve a key.') }}</div>
+                </div>
+                <a href="{{ url('/admin/api-keys') }}" class="text-[11.5px] text-wa-deep font-semibold hover:underline shrink-0">{{ __('Fix keys') }}</a>
+            </div>
+            @if (!empty($llmErrors['blocked']))
+                <div class="px-5 py-3 bg-accent-coral/5 border-b border-paper-200">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-accent-coral mb-2">{{ __('Agents with no usable key') }}</div>
+                    <div class="space-y-1.5">
+                        @foreach ($llmErrors['blocked'] as $b)
+                            <div class="flex items-start justify-between gap-3 text-[12.5px]">
+                                <div class="min-w-0">
+                                    <span class="font-medium text-ink-900">{{ $b['assistant'] }}</span>
+                                    <span class="text-ink-400"> · {{ $b['workspace'] }}</span>
+                                </div>
+                                <div class="text-[11px] font-mono text-ink-500 shrink-0">{{ $b['provider'] }}{{ $b['model'] ? ' / '.$b['model'] : '' }}</div>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+            <div class="divide-y divide-paper-100">
+                @forelse ($llmErrors['recent'] as $err)
+                    <div class="px-5 py-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-[13px] font-medium text-ink-900 capitalize">{{ $err['provider'] ?: __('unknown') }}</div>
+                            <div class="text-[11px] font-mono text-ink-400 shrink-0">{{ \Illuminate\Support\Carbon::parse($err['at'])->diffForHumans() }}</div>
+                        </div>
+                        <div class="text-[12px] text-ink-600 mt-0.5 leading-snug">{{ $err['message'] }}</div>
+                        <div class="text-[11px] text-ink-400 mt-1">{{ $err['workspace'] }}@if (!empty($err['model'])) · {{ $err['model'] }}@endif</div>
+                    </div>
+                @empty
+                    @if (empty($llmErrors['blocked']))
+                        <div class="px-5 py-8 text-center text-[12.5px] text-ink-400">{{ __('No recent provider errors recorded.') }}</div>
+                    @endif
+                @endforelse
+            </div>
+        </div>
+
         {{-- AI key health --}}
         <div class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card p-5">
             <div class="flex items-center justify-between mb-4">

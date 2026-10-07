@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminAiKey;
+use App\Support\Audit;
 use Illuminate\Http\Request;
 
 /**
@@ -345,6 +346,17 @@ class AdminAiKeyController extends Controller
         }
         $row->save();
 
+        Audit::log('admin.ai_key.updated', [
+            'layer'    => 'platform',
+            'resource' => $row,
+            'meta'     => [
+                'provider'      => $row->provider,
+                'key_replaced'  => !empty($data['api_key']),
+                'default_model' => $row->default_model,
+                'is_active'     => (bool) $row->is_active,
+            ],
+        ]);
+
         return back()->with('success', $row->name . ($row->is_active ? ' saved + activated.' : ' settings saved.'));
     }
 
@@ -356,6 +368,15 @@ class AdminAiKeyController extends Controller
             return back()->with('error', 'Add an API key before activating.');
         }
         $row->update(['is_active' => !$row->is_active]);
+
+        Audit::log($row->is_active ? 'admin.ai_key.activated' : 'admin.ai_key.deactivated', [
+            'layer'    => 'platform',
+            'resource' => $row,
+            'meta'     => [
+                'provider'  => $row->provider,
+                'is_active' => (bool) $row->is_active,
+            ],
+        ]);
 
         return back()->with('success', $row->is_active ? 'Activated.' : 'Deactivated.');
     }

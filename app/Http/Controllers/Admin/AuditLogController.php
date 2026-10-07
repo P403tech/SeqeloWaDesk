@@ -28,43 +28,16 @@ class AuditLogController extends Controller
         // WHERE) + uncapped `q` (which an attacker could use to spike
         // CPU via huge LIKE patterns). Now from/to must be ISO dates
         // and `q` is capped to 191 chars.
-        $data = $request->validate([
-            'q'            => 'nullable|string|max:191',
-            'event'        => 'nullable|string|max:120',
-            'result'       => 'nullable|in:success,failure,warning',
-            'layer'        => 'nullable|in:platform,workspace',
-            'workspace_id' => 'nullable|integer',
-            'from'         => 'nullable|date_format:Y-m-d',
-            'to'           => 'nullable|date_format:Y-m-d',
-        ]);
+        $filters = $this->validatedFilters($request);
+        $q       = $filters['q'];
+        $event   = $filters['event'];
+        $result  = $filters['result'];
+        $layer   = $filters['layer'];
+        $wsId    = $filters['workspace_id'];
+        $from    = $filters['from'];
+        $to      = $filters['to'];
 
-        $q       = trim((string) ($data['q']      ?? ''));
-        $event   = (string) ($data['event']  ?? '');
-        $result  = (string) ($data['result'] ?? '');
-        $layer   = (string) ($data['layer']  ?? '');
-        $wsId    = (int)    ($data['workspace_id'] ?? 0);
-        $from    = (string) ($data['from']   ?? '');
-        $to      = (string) ($data['to']     ?? '');
-
-        $query = AuditLog::query()->latest('created_at');
-
-        if ($event)  $query->where('action', $event);
-        if ($result) $query->where('result', $result);
-        if ($layer)  $query->where('layer', $layer);
-        if ($wsId)   $query->where('workspace_id', $wsId);
-        if ($from)   $query->where('created_at', '>=', $from . ' 00:00:00');
-        if ($to)     $query->where('created_at', '<=', $to   . ' 23:59:59');
-        if ($q) {
-            // Escape LIKE wildcards so `_` and `%` in the search text
-            // match literally instead of acting as SQL wildcards (which
-            // would let an attacker craft queries that match anything).
-            $needle = '%' . self::escapeLike($q) . '%';
-            $query->where(function ($w) use ($needle) {
-                $w->where('action', 'like', $needle)
-                  ->orWhere('ip', 'like', $needle)
-                  ->orWhere('payload', 'like', $needle);
-            });
-        }
+        $query = $this->applyFilters(AuditLog::query()->latest('created_at'), $filters);
 
         $rows = $query->paginate(12)->withQueryString();
 
@@ -166,26 +139,17 @@ class AuditLogController extends Controller
         // Same input validation as index() so an attacker can't bypass
         // it by going straight to /admin/audit-log/export with crafted
         // params.
-        $data = $request->validate([
-            'event'  => 'nullable|string|max:120',
-            'result' => 'nullable|in:success,failure,warning',
-            'from'   => 'nullable|date_format:Y-m-d',
-            'to'     => 'nullable|date_format:Y-m-d',
-        ]);
+        $filters = $this->validatedFilters($request);
 
         $filename = 'audit-log-' . now()->format('Y-m-d-His') . '.csv';
 
-        return response()->streamDownload(function () use ($data) {
+        return response()->streamDownload(function () use ($filters) {
             $out = fopen('php://output', 'w');
             // UTF-8 BOM so Excel opens with correct encoding.
             fwrite($out, "\xEF\xBB\xBF");
             self::putCsvSafe($out, ['Time', 'Layer', 'Actor ID', 'Action', 'Subject', 'Workspace', 'IP', 'Result', 'Payload']);
 
-            AuditLog::query()
-                ->when($data['result'] ?? null, fn ($q, $v) => $q->where('result', $v))
-                ->when($data['event']  ?? null, fn ($q, $v) => $q->where('action', $v))
-                ->when($data['from']   ?? null, fn ($q, $v) => $q->where('created_at', '>=', $v . ' 00:00:00'))
-                ->when($data['to']     ?? null, fn ($q, $v) => $q->where('created_at', '<=', $v . ' 23:59:59'))
+            $this->applyFilters(AuditLog::query(), $filters)
                 ->orderByDesc('created_at')
                 ->chunk(500, function ($chunk) use ($out) {
                     foreach ($chunk as $row) {
@@ -204,6 +168,70 @@ class AuditLogController extends Controller
                 });
             fclose($out);
         }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * Shared filter validation for index + CSV so the download matches
+     * what the operator is looking at (including search, layer, workspace).
+     *
+     * @return array{q:string,event:string,result:string,layer:string,workspace_id:int,from:string,to:string}
+     */
+    private function validatedFilters(Request $request): array
+    {
+        $data = $request->validate([
+            'q'            => 'nullable|string|max:191',
+            'event'        => 'nullable|string|max:120',
+            'result'       => 'nullable|in:success,failure,warning',
+            'layer'        => 'nullable|in:platform,workspace',
+            'workspace_id' => 'nullable|integer',
+            'from'         => 'nullable|date_format:Y-m-d',
+            'to'           => 'nullable|date_format:Y-m-d',
+        ]);
+
+        return [
+            'q'            => trim((string) ($data['q'] ?? '')),
+            'event'        => (string) ($data['event'] ?? ''),
+            'result'       => (string) ($data['result'] ?? ''),
+            'layer'        => (string) ($data['layer'] ?? ''),
+            'workspace_id' => (int) ($data['workspace_id'] ?? 0),
+            'from'         => (string) ($data['from'] ?? ''),
+            'to'           => (string) ($data['to'] ?? ''),
+        ];
+    }
+
+    /**
+     * @param  array{q:string,event:string,result:string,layer:string,workspace_id:int,from:string,to:string}  $filters
+     */
+    private function applyFilters($query, array $filters)
+    {
+        if ($filters['event'] !== '') {
+            $query->where('action', $filters['event']);
+        }
+        if ($filters['result'] !== '') {
+            $query->where('result', $filters['result']);
+        }
+        if ($filters['layer'] !== '') {
+            $query->where('layer', $filters['layer']);
+        }
+        if ($filters['workspace_id'] > 0) {
+            $query->where('workspace_id', $filters['workspace_id']);
+        }
+        if ($filters['from'] !== '') {
+            $query->where('created_at', '>=', $filters['from'] . ' 00:00:00');
+        }
+        if ($filters['to'] !== '') {
+            $query->where('created_at', '<=', $filters['to'] . ' 23:59:59');
+        }
+        if ($filters['q'] !== '') {
+            $needle = '%' . self::escapeLike($filters['q']) . '%';
+            $query->where(function ($w) use ($needle) {
+                $w->where('action', 'like', $needle)
+                    ->orWhere('ip', 'like', $needle)
+                    ->orWhere('payload', 'like', $needle);
+            });
+        }
+
+        return $query;
     }
 
     /**

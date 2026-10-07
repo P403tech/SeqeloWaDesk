@@ -50,6 +50,7 @@ class AiDashboardController extends Controller
             'sourceSplit'   => $this->sourceSplit($has, $from),
             'keys'          => $this->keyStatus(),
             'voice'         => $this->voiceUsage($from),
+            'llmErrors'     => $this->llmErrors(),
         ]);
     }
 
@@ -149,6 +150,84 @@ class AiDashboardController extends Controller
         $rows = $this->base($has, $from)
             ->select('billed_against', DB::raw('SUM(total_tokens) as t'))->groupBy('billed_against')->pluck('t', 'billed_against');
         return ['admin' => (int) ($rows['admin'] ?? 0), 'workspace' => (int) ($rows['workspace'] ?? 0)];
+    }
+
+    /**
+     * Recent provider failures + active agents whose provider has no usable key.
+     */
+    private function llmErrors(): array
+    {
+        $recent = \App\Support\AiProviderErrorInbox::recent(15);
+        $wsIds = collect($recent)->pluck('workspace_id')->filter()->unique()->values();
+        $names = $wsIds->isEmpty()
+            ? collect()
+            : \App\Models\Workspace::whereIn('id', $wsIds)->pluck('name', 'id');
+        $recent = array_map(function ($row) use ($names) {
+            $id = (int) ($row['workspace_id'] ?? 0);
+            $row['workspace'] = $id > 0 ? ($names[$id] ?? ('Workspace #' . $id)) : __('Platform');
+            return $row;
+        }, $recent);
+
+        $blocked = [];
+        try {
+            $live = \App\Models\AdminAiKey::query()->get()
+                ->filter(fn ($k) => $k->isReady())
+                ->map(fn ($k) => strtolower((string) $k->provider))
+                ->all();
+
+            $byok = [];
+            if (Schema::hasTable('ai_provider_keys')) {
+                foreach (DB::table('ai_provider_keys')->where('is_active', true)->get(['workspace_id', 'provider', 'api_key']) as $row) {
+                    if (empty($row->api_key)) {
+                        continue;
+                    }
+                    $byok[(int) $row->workspace_id . '|' . strtolower((string) $row->provider)] = true;
+                }
+            }
+
+            if (Schema::hasTable('ai_chat_assistants')) {
+                $q = DB::table('ai_chat_assistants')->where('status', 'active');
+                if (Schema::hasColumn('ai_chat_assistants', 'deleted_at')) {
+                    $q->whereNull('deleted_at');
+                }
+                foreach ($q->select('id', 'name', 'workspace_id', 'ai_provider', 'ai_model')->limit(250)->get() as $a) {
+                    $provider = \App\Services\AiAgentService::providerForModel(
+                        (string) $a->ai_provider,
+                        (string) $a->ai_model
+                    );
+                    if (in_array($provider, $live, true)) {
+                        continue;
+                    }
+                    if (isset($byok[(int) $a->workspace_id . '|' . $provider])) {
+                        continue;
+                    }
+                    $blocked[] = [
+                        'assistant'    => (string) $a->name,
+                        'workspace_id' => (int) $a->workspace_id,
+                        'provider'     => $provider,
+                        'model'        => (string) $a->ai_model,
+                    ];
+                    if (count($blocked) >= 12) {
+                        break;
+                    }
+                }
+            }
+
+            if ($blocked !== []) {
+                $bNames = \App\Models\Workspace::whereIn('id', collect($blocked)->pluck('workspace_id'))->pluck('name', 'id');
+                foreach ($blocked as &$b) {
+                    $b['workspace'] = $bNames[$b['workspace_id']] ?? ('Workspace #' . $b['workspace_id']);
+                }
+                unset($b);
+            }
+        } catch (\Throwable $e) {
+            $blocked = [];
+        }
+
+        return [
+            'recent'  => $recent,
+            'blocked' => $blocked,
+        ];
     }
 
     /** Live state of every configured AI key — platform (AdminAiKey) + BYOK. */

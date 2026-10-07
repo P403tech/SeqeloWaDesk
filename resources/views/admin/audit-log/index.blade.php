@@ -18,6 +18,7 @@
                     'event' => $event,
                     'result' => $result,
                     'layer' => $layer,
+                    'workspace_id' => $wsId ?: '',
                     'from' => $from,
                     'to' => $to,
                 ],
@@ -125,14 +126,17 @@
                     ];
                 @endphp
                 @foreach ($layerOptions as $value => $opt)
-                    <a href="{{ route('admin.audit-log.index', array_filter(['layer' => $value, 'q' => $q, 'event' => $event, 'result' => $result, 'from' => $from, 'to' => $to])) }}"
+                    <a href="{{ route('admin.audit-log.index', array_filter(['layer' => $value, 'q' => $q, 'event' => $event, 'result' => $result, 'workspace_id' => $wsId ?: null, 'from' => $from, 'to' => $to])) }}"
                         class="inline-flex items-center gap-1.5 px-4 py-[7px] rounded-full text-[13px] cursor-pointer transition {{ $layer === $value ? 'bg-ink-900 text-paper-0' : 'text-ink-600 hover:bg-paper-50' }}">
                         {{ $opt['label'] }} <span
                             class="font-mono text-[11px] opacity-80">({{ number_format($opt['count']) }})</span>
                     </a>
                 @endforeach
                 <div class="flex-1"></div>
-                <select name="event" onchange="this.form.submit()"
+                @if ($wsId)
+                    <input type="hidden" name="workspace_id" value="{{ $wsId }}">
+                @endif
+                <select name="event" onchange="this.form.submit()">
                     class="hairline border border-paper-200 rounded-full px-3 py-1.5 text-[12px] bg-paper-0 hover:bg-paper-50 focus:outline-none focus:border-wa-deep">
                     <option value="">{{ __('All events') }}</option>
                     @foreach ($eventOptions as $opt)

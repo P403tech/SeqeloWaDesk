@@ -113,6 +113,23 @@ class AiAgentService
 
     public function lastProviderError(): ?string { return $this->lastProviderError; }
 
+    private function recordProviderError(string $provider, string $model, int $workspaceId): void
+    {
+        if (! $this->lastProviderError) {
+            return;
+        }
+        try {
+            \App\Support\AiProviderErrorInbox::record(
+                $provider,
+                $this->lastProviderError,
+                $workspaceId,
+                $model
+            );
+        } catch (\Throwable $e) {
+            // Never fail a customer send because the ops inbox could not write.
+        }
+    }
+
     public function __construct(private InboxDispatcher $dispatcher, private WalletService $wallet)
     {
     }
@@ -831,6 +848,7 @@ class AiAgentService
         // active global key from admin_ai_keys. No env fallback — admin
         // is the single source of truth, otherwise a stale .env key could
         // silently override a deliberately deactivated admin row.
+        $this->lastProviderError = null;
         $provider = self::providerForModel($provider, $model);
         $workspace = $workspaceId > 0 ? \App\Models\Workspace::find($workspaceId) : null;
         $apiKey = \App\Services\AiKeyResolver::keyFor($workspace, $provider);
@@ -838,6 +856,7 @@ class AiAgentService
         if (!$apiKey) {
             $this->lastProviderError = "No {$provider} API key. Add one under Admin → API keys.";
             Log::warning("[AI-AGENT] No API key for provider={$provider} workspace={$workspaceId}");
+            $this->recordProviderError($provider, $model, $workspaceId);
             return null;
         }
 
@@ -889,9 +908,20 @@ class AiAgentService
                 } catch (\Throwable $e) { /* metering is best-effort */ }
             }
 
+            if ($reply === null) {
+                if (! $this->lastProviderError) {
+                    $this->lastProviderError = "Provider {$provider} returned no content — check API key + model id.";
+                }
+                $this->recordProviderError($provider, $model, $workspaceId);
+            }
+
             return $reply;
         } catch (\Throwable $e) {
             Log::error("[AI-AGENT] provider={$provider} model={$model} error: " . $e->getMessage());
+            if (! $this->lastProviderError) {
+                $this->lastProviderError = $e->getMessage();
+            }
+            $this->recordProviderError($provider, $model, $workspaceId);
             return null;
         }
     }
@@ -917,6 +947,7 @@ class AiAgentService
 
         if (trim($apiKey) === '') {
             $this->lastProviderError = "No API key is configured for {$provider}.";
+            $this->recordProviderError($provider, $model, 0);
             return null;
         }
         try {

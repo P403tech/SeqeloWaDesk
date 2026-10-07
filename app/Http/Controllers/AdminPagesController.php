@@ -1568,6 +1568,7 @@ class AdminPagesController extends Controller
         $on = array_map('strval', (array) $request->input('show', []));
 
         \App\Support\FeatureRegistry::flushMemo();
+        $before = \App\Support\FeatureRegistry::states();
 
         foreach (\App\Support\FeatureRegistry::all() as $it) {
             \App\Models\SystemSetting::set(
@@ -1577,6 +1578,30 @@ class AdminPagesController extends Controller
                 'Feature visibility toggle (admin) — show "' . $it['key'] . '" in the user dashboard.'
             );
         }
+
+        \App\Support\FeatureRegistry::flushMemo();
+        $after = \App\Support\FeatureRegistry::states();
+        $turnedOn = [];
+        $turnedOff = [];
+        foreach ($after as $key => $isOn) {
+            if (($before[$key] ?? true) === $isOn) {
+                continue;
+            }
+            if ($isOn) {
+                $turnedOn[] = $key;
+            } else {
+                $turnedOff[] = $key;
+            }
+        }
+
+        \App\Support\Audit::log('admin.features.updated', [
+            'layer' => 'platform',
+            'meta'  => [
+                'turned_on'  => $turnedOn,
+                'turned_off' => $turnedOff,
+                'on_count'   => count(array_filter($after)),
+            ],
+        ]);
 
         return back()->with('success', __('Feature visibility updated.'));
     }
