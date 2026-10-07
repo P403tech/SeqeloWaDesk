@@ -3558,10 +3558,11 @@ export default function init() {
         if (!open) return;
         setError(null);
         setLoading(false);
-        if (!model && AI_MODELS_CACHE.length) setModel(AI_MODELS_CACHE[0].value);
       }, [open]);
       if (!open) return null;
-      const selectedEntry = AI_MODELS_CACHE.find(m => m.value === model);
+      const selectedEntry = AI_MODELS_CACHE.find(m => m.value === model)
+        || AI_MODELS_CACHE[0]
+        || null;
       const generate = async () => {
         if (!prompt.trim() || !selectedEntry) return;
         setError(null);
@@ -3590,7 +3591,13 @@ export default function init() {
             setLoading(false);
             return;
           }
-          onGenerate(j.flow, selectedEntry.label || selectedEntry.value);
+          try {
+            onGenerate(j.flow, selectedEntry.label || selectedEntry.value);
+          } catch (applyErr) {
+            setError(applyErr?.message || 'Generated JSON could not be applied to the canvas.');
+            setLoading(false);
+            return;
+          }
           setLoading(false);
           setPrompt('');
           onClose();
@@ -3629,7 +3636,7 @@ export default function init() {
                   <div className="grid gap-2 ${models.length >= 3 ? 'grid-cols-3' : models.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}">
                     ${models.map(m => html`
                       <button key=${m.id} onClick=${() => setModel(m.id)}
-                        className=${'flex flex-col items-start gap-1 p-3 rounded-xl border transition ' + (model === m.id ? 'border-wa-deep bg-wa-mint/30' : 'border-paper-200 bg-paper-0 hover:bg-paper-50')}>
+                        className=${'flex flex-col items-start gap-1 p-3 rounded-xl border transition ' + ((selectedEntry?.value || model) === m.id ? 'border-wa-deep bg-wa-mint/30' : 'border-paper-200 bg-paper-0 hover:bg-paper-50')}>
                         <span className="flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full" style=${{ background: m.dot }}></span>
                           <span className="text-[12.5px] font-semibold truncate">${m.label}</span>
@@ -4277,7 +4284,7 @@ export default function init() {
         Promise.all([
           fetchJson('/templates/api/list?type=standard'),
           fetchJson('/flows/api/list'),
-          fetchJson('/flows/api/ai-models'),
+          fetchJson((APP_BASE || '') + '/flows/api/ai-models'),
           fetchJson('/team-inbox/api/teams'),
           fetchJson('/team-inbox/api/tags'),
           fetchJson('/team-inbox/api/ai-agents'),

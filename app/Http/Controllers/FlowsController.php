@@ -1003,12 +1003,17 @@ class FlowsController extends Controller
             ], 422);
         }
 
+        $data['provider'] = \App\Services\AiAgentService::providerForModel(
+            (string) $data['provider'],
+            (string) $data['model']
+        );
+
         $resolved = \App\Services\AiKeyResolver::resolve($workspace, $data['provider']);
         if (!$resolved['key']) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'no_key',
-                'message' => 'Admin has not enabled this provider in /admin/api-keys. Pick another provider or contact your admin.',
+                'message' => 'No API key for '.$data['provider'].'. Add one under Settings → AI keys, or ask your admin to enable it in Admin → API keys.',
             ], 422);
         }
 
@@ -1129,6 +1134,23 @@ SYS;
             temperature:  0.4,
             jsonMode:     true, // force a strict JSON object (Gemini responseMimeType / OpenAI+Anthropic json_object)
         );
+
+        // Some models (Gemini thinking, Muse, older OpenAI-compat) reject
+        // responseMimeType / json_object. Retry as plain text — the prompt
+        // already demands a JSON object and we strip fences below.
+        $why = $ai->lastProviderError();
+        if (! $raw && is_string($why) && preg_match('/json_object|responseMimeType|response_format|json mode/i', $why)) {
+            $raw = $ai->callProvider(
+                provider:     $data['provider'],
+                model:        $data['model'],
+                workspaceId:  (int) ($workspace?->id ?? 0),
+                systemPrompt: $systemPrompt,
+                userPrompt:   $data['prompt'],
+                maxTokens:    8000,
+                temperature:  0.4,
+                jsonMode:     false,
+            );
+        }
 
         if (!$raw) {
             // Say what the provider ACTUALLY reported. "check API key + model

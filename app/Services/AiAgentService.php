@@ -134,6 +134,16 @@ class AiAgentService
     {
     }
 
+    /** JSON-mode (flow generator) needs a finished object; 30s cuts it off mid-write. */
+    private function httpTimeout(?array $image, bool $jsonMode): int
+    {
+        if ($jsonMode) {
+            return 90;
+        }
+
+        return $image ? 60 : 30;
+    }
+
     /**
      * If the conversation has an AI agent assigned and auto_respond is on,
      * generate a reply and store + dispatch it. Returns the Message or null.
@@ -865,13 +875,17 @@ class AiAgentService
         // burn more than this, regardless of what the assistant/node requested.
         // Blank/0 = no extra cap (use whatever was requested). Prevents runaway
         // token spend on top of the per-plan monthly cap (AiTokenMeter).
-        try {
-            $adminRow = \App\Models\AdminAiKey::where('provider', $provider)->first();
-            $adminCap = (int) ($adminRow?->extra_config_array['max_tokens'] ?? 0);
-            if ($adminCap > 0 && $maxTokens > $adminCap) {
-                $maxTokens = $adminCap;
-            }
-        } catch (\Throwable $e) { /* never block a send on the cap lookup */ }
+        // JSON-mode callers (flow generator) need a finished object — a 512/4k
+        // cap truncates mid-JSON and surfaces as "not valid flow JSON".
+        if (! $jsonMode) {
+            try {
+                $adminRow = \App\Models\AdminAiKey::where('provider', $provider)->first();
+                $adminCap = (int) ($adminRow?->extra_config_array['max_tokens'] ?? 0);
+                if ($adminCap > 0 && $maxTokens > $adminCap) {
+                    $maxTokens = $adminCap;
+                }
+            } catch (\Throwable $e) { /* never block a send on the cap lookup */ }
+        }
 
         try {
             // 20 AI brands as first-class providers. Anthropic + Gemini have
@@ -1007,7 +1021,7 @@ class AiAgentService
 
         $res = Http::withToken($key)
             ->acceptJson()
-            ->timeout(30)
+            ->timeout($this->httpTimeout(null, $jsonMode))
             ->post('https://api.mistral.ai/v1/chat/completions', $payload);
         if ($res->ok()) {
             return trim((string) ($res->json('choices.0.message.content') ?? '')) ?: null;
@@ -1040,7 +1054,7 @@ class AiAgentService
 
         $res = Http::withToken($key)
             ->acceptJson()
-            ->timeout(60)
+            ->timeout($this->httpTimeout(null, $jsonMode))
             ->post('https://api.meta.ai/v1/chat/completions', $payload);
         if ($res->ok()) {
             $text = trim((string) ($res->json('choices.0.message.content') ?? ''));
@@ -1106,7 +1120,7 @@ class AiAgentService
                 'HTTP-Referer' => (string) config('app.url', ''),
                 'X-Title'      => (string) \App\Models\SystemSetting::get('app_name', 'WaDesk'),
             ])
-            ->timeout($image ? 60 : 30)
+            ->timeout($this->httpTimeout($image, $jsonMode))
             ->post(rtrim($baseUrl, '/') . '/chat/completions', $payload);
         if ($res->ok()) {
             return trim((string) ($res->json('choices.0.message.content') ?? '')) ?: null;
@@ -1143,7 +1157,7 @@ class AiAgentService
         $res = Http::withHeaders([
             'x-api-key'         => $key,
             'anthropic-version' => '2023-06-01',
-        ])->timeout($image ? 60 : 30)->post('https://api.anthropic.com/v1/messages', [
+        ])->timeout($this->httpTimeout($image, $jsonMode))->post('https://api.anthropic.com/v1/messages', [
             'model'      => $model,
             'max_tokens' => $maxTokens,
             'system'     => $system,
@@ -1183,7 +1197,7 @@ class AiAgentService
         if ($jsonMode) {
             $generationConfig['responseMimeType'] = 'application/json';
         }
-        $res = Http::timeout($image ? 60 : 30)->post(
+        $res = Http::timeout($this->httpTimeout($image, $jsonMode))->post(
             "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$key}",
             [
                 'contents'         => [['parts' => $parts]],
