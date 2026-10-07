@@ -50,8 +50,9 @@
     </div>
 
     <section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-6">
+        <script type="application/json" id="wcl-builder-defaults">@json($defaults)</script>
         <div id="wcl-builder" class="grid grid-cols-1 xl:grid-cols-[1fr_342px] gap-5 items-start"
-            data-mode="{{ $mode }}" data-defaults='@json($defaults)'
+            data-mode="{{ $mode }}"
             data-existing-slug="{{ $existingSlug }}" data-existing-short="{{ $existingShort }}">
 
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">

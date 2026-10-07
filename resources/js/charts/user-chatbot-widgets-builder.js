@@ -15,7 +15,15 @@ export default function init() {
   if (!root) return;
 
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-  const defaults = JSON.parse(root.dataset.defaults || '{}');
+  let defaults = {};
+  try {
+    const raw = document.getElementById('cbw-builder-defaults')?.textContent
+      || root.getAttribute('data-defaults')
+      || '{}';
+    defaults = JSON.parse(raw);
+  } catch (e) {
+    defaults = {};
+  }
   let token = root.dataset.token || '';
   const state = { ...defaults };
 

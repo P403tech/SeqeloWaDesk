@@ -1550,8 +1550,9 @@ class AdminPagesController extends Controller
     {
         $groups = \App\Support\FeatureRegistry::groups();
         $states = \App\Support\FeatureRegistry::states();
+        $customerPreview = \App\Support\FeatureRegistry::customerPreview();
 
-        return view('admin.settings.features', compact('groups', 'states'));
+        return view('admin.settings.features', compact('groups', 'states', 'customerPreview'));
     }
 
     /**

@@ -313,6 +313,42 @@ export default function init() {
   }
 
   document.getElementById('ait-save')?.addEventListener('click', () => saveAssistant());
+
+  document.getElementById('ait-test-send')?.addEventListener('click', async () => {
+    const input = document.getElementById('ait-test-input');
+    const out = document.getElementById('ait-test-out');
+    const status = document.getElementById('ait-test-status');
+    const message = String(input?.value || '').trim();
+    if (!message) { toast('Type a test message first.', 'error'); return; }
+    if (status) status.textContent = 'Sending…';
+    if (out) { out.classList.add('hidden'); out.textContent = ''; }
+    const { ok, json, status: http } = await api('/ai-training/api/test', {
+      method: 'POST',
+      body: {
+        id: state.id || null,
+        message,
+        name: state.name,
+        system_prompt: state.system_prompt,
+        tone: state.tone,
+        language: state.language,
+        ai_provider: state.ai_provider,
+        ai_model: state.ai_model,
+        reply_max_tokens: parseInt(state.reply_max_tokens, 10) || 400,
+        temperature: parseFloat(state.temperature) || 0.7,
+        handoff_enabled: !!state.handoff_enabled,
+        handoff_keyword: state.handoff_keyword,
+        handoff_message: state.handoff_message,
+      },
+    });
+    if (status) status.textContent = '';
+    if (!ok) {
+      const msg = errorText(json, http);
+      if (out) { out.textContent = msg; out.classList.remove('hidden'); }
+      toast(msg, 'error');
+      return;
+    }
+    if (out) { out.textContent = json.reply || ''; out.classList.remove('hidden'); }
+  });
   document.getElementById('ait-finish')?.addEventListener('click', async () => {
     const ok = await saveAssistant();
     if (ok) window.location.href = window.appUrl('/ai-training');

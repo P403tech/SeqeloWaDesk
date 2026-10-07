@@ -77,4 +77,19 @@ class AiTrainingPageTest extends TestCase
             'ai_model' => 'gemini-2.5-flash-lite',
         ]);
     }
+
+    public function test_test_chat_reports_missing_key_instead_of_hanging(): void
+    {
+        $user = $this->actingWorkspaceAdmin();
+
+        $response = $this->actingAs($user)->postJson(route('user.ai-training.api.assistant.test'), [
+            'message' => 'Hello',
+            'name' => 'Sadaf',
+            'ai_provider' => 'openai',
+            'ai_model' => 'gpt-4o-mini',
+        ]);
+        $response->assertStatus(422);
+        $response->assertJsonPath('ok', false);
+        $this->assertNotEmpty($response->json('message'));
+    }
 }

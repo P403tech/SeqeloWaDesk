@@ -310,6 +310,60 @@ class AiTrainingController extends Controller
         return response()->json(['ok' => true, 'id' => $assistant->id, 'slug' => $assistant->slug]);
     }
 
+    public function apiTestAssistant(Request $request): JsonResponse
+    {
+        $user = Auth::user();
+        $wsId = (int) ($user?->current_workspace_id ?? 0);
+        if (!$wsId) return response()->json(['ok' => false, 'error' => 'no_workspace'], 400);
+
+        $data = $request->validate([
+            'id'            => 'nullable|integer',
+            'message'       => 'required|string|max:2000',
+            'name'          => 'nullable|string|max:120',
+            'system_prompt' => 'nullable|string|max:16000',
+            'tone'          => 'nullable|string|max:32',
+            'language'      => 'nullable|string|max:16',
+            'ai_provider'   => 'nullable|string|max:40',
+            'ai_model'      => 'nullable|string|max:80',
+            'reply_max_tokens' => 'nullable|integer|min:50|max:4000',
+            'temperature'   => 'nullable|numeric|min:0|max:2',
+            'handoff_enabled' => 'nullable|boolean',
+            'handoff_keyword' => 'nullable|string|max:60',
+            'handoff_message' => 'nullable|string|max:1000',
+        ]);
+
+        $assistant = !empty($data['id'])
+            ? AiChatAssistant::where('workspace_id', $wsId)->find($data['id'])
+            : null;
+        if (!$assistant) {
+            $assistant = new AiChatAssistant();
+            $assistant->workspace_id = $wsId;
+            $assistant->user_id = $user->id;
+        }
+
+        if (! empty($data['ai_model'])) {
+            $data['ai_provider'] = \App\Services\AiAgentService::providerForModel(
+                (string) ($data['ai_provider'] ?? $assistant->ai_provider ?? ''),
+                (string) $data['ai_model']
+            );
+        }
+        $assistant->fill($data);
+
+        $out = app(\App\Services\AiChat\AiChatService::class)->testReply(
+            $assistant,
+            (string) $data['message']
+        );
+        if (! ($out['ok'] ?? false)) {
+            return response()->json([
+                'ok'      => false,
+                'error'   => $out['error'] ?? 'test_failed',
+                'message' => $out['error'] ?? 'Test reply failed.',
+            ], 422);
+        }
+
+        return response()->json(['ok' => true, 'reply' => $out['reply']]);
+    }
+
     public function apiDeleteAssistant(int $id): JsonResponse
     {
         $wsId = (int) (Auth::user()?->current_workspace_id ?? 0);

@@ -42,4 +42,16 @@ class FeatureToggleVisibilityTest extends TestCase
         $this->assertFalse(FeatureRegistry::visible('openaiads'));
         $this->assertFalse(FeatureRegistry::hrefVisible(url('/openai-ads')));
     }
+
+    public function test_customer_preview_lists_closed_apps(): void
+    {
+        SystemSetting::set(FeatureRegistry::FLAG_PREFIX.'ai-training', false, 'bool');
+        FeatureRegistry::flushMemo();
+
+        $preview = FeatureRegistry::customerPreview();
+        $hiddenKeys = array_column($preview['hidden'], 'key');
+        $this->assertContains('ai-training', $hiddenKeys);
+        $this->assertSame('access_ai_chat_assistant', FeatureRegistry::planGate('ai-training'));
+        $this->assertSame('access_chatbot_widgets', FeatureRegistry::planGate('chatbot-widgets'));
+    }
 }

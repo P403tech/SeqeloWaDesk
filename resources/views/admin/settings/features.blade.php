@@ -51,6 +51,47 @@
                     {{ session('success') }}</div>
             @endif
 
+            @php
+                $hiddenApps = $customerPreview['hidden'] ?? [];
+                $shownApps = $customerPreview['shown'] ?? [];
+                $planGated = array_values(array_filter($shownApps, fn ($row) => ! empty($row['plan'])));
+            @endphp
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card p-4">
+                    <div class="font-serif text-[18px] text-ink-900">{{ __('Customers cannot see') }}</div>
+                    <p class="text-[12px] text-ink-500 mt-1 mb-3">{{ __('Saved Feature toggles. Save the form below, then this list updates. Plan flags still apply on top.') }}</p>
+                    @if (count($hiddenApps) === 0)
+                        <p class="text-[13px] text-ink-600">{{ __('Every listed app is currently visible in customer nav.') }}</p>
+                    @else
+                        <ul class="space-y-1.5 max-h-56 overflow-y-auto">
+                            @foreach ($hiddenApps as $row)
+                                <li class="text-[13px] text-ink-800 flex items-baseline justify-between gap-2">
+                                    <span>{{ __($row['label']) }}</span>
+                                    <span class="font-mono text-[11px] text-ink-400">{{ $row['path'] }}</span>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </section>
+                <section class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card p-4">
+                    <div class="font-serif text-[18px] text-ink-900">{{ __('Still plan-gated') }}</div>
+                    <p class="text-[12px] text-ink-500 mt-1 mb-3">{{ __('These stay in the customer nav when the toggle is on, but a workspace whose package lacks the flag still hits a paywall.') }}</p>
+                    @if (count($planGated) === 0)
+                        <p class="text-[13px] text-ink-600">{{ __('No extra plan gates mapped for visible apps.') }}</p>
+                    @else
+                        <ul class="space-y-1.5">
+                            @foreach ($planGated as $row)
+                                <li class="text-[13px] text-ink-800 flex items-baseline justify-between gap-2">
+                                    <span>{{ __($row['label']) }}</span>
+                                    <span class="font-mono text-[11px] text-ink-400">{{ $row['plan'] }}</span>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                    <p class="text-[12px] text-ink-500 mt-3">{{ __(':count apps remain visible to customers.', ['count' => count($shownApps)]) }}</p>
+                </section>
+            </div>
+
             <div data-feat-tabs>
                 {{-- Tab bar: one tab per group. --}}
                 <div class="flex flex-wrap gap-0.5 border-b border-paper-200" role="tablist">

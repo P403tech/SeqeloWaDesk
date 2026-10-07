@@ -102,6 +102,49 @@ class AiChatService
     }
 
     /**
+     * Wizard playground — same persona + knowledge as live replies, no
+     * conversation row. Returns the model text or the provider error so the
+     * operator can see why an agent looks dead before they resume it.
+     *
+     * @return array{ok: bool, reply?: string, error?: string}
+     */
+    public function testReply(AiChatAssistant $assistant, string $visitorMessage): array
+    {
+        $system  = $this->systemPrompt($assistant);
+        $context = $this->contextFor($assistant);
+        if ($context !== '') {
+            $system .= "\n\n--- Knowledge base ---\n" . $context . "\n--- End knowledge base ---";
+        }
+        $web = \App\Services\Ai\AgentWebsiteContext::promptBlock($assistant);
+        if ($web !== '') {
+            $system .= "\n\n--- Website pages to share ---\n".$web."\n--- End website pages ---";
+        }
+
+        $user = "Visitor just said:\n" . trim($visitorMessage)
+              . "\n\nReply briefly and helpfully. Plain text only, no role prefix.";
+
+        $reply = $this->provider->callProvider(
+            provider:     (string) $assistant->ai_provider,
+            model:        (string) $assistant->ai_model,
+            workspaceId:  (int) $assistant->workspace_id,
+            systemPrompt: $system,
+            userPrompt:   $user,
+            maxTokens:    (int) ($assistant->reply_max_tokens ?: 400),
+            temperature:  (float) ($assistant->temperature ?? 0.7),
+        );
+
+        if (!$reply || trim($reply) === '') {
+            return [
+                'ok'    => false,
+                'error' => $this->provider->lastProviderError()
+                    ?: 'The provider returned no text. Check the API key and model id.',
+            ];
+        }
+
+        return ['ok' => true, 'reply' => trim($reply)];
+    }
+
+    /**
      * Compose the system prompt: persona + tone + language + handoff hint.
      */
     private function systemPrompt(AiChatAssistant $assistant): string

@@ -228,8 +228,20 @@
                                     <div class="text-[12px] text-ink-500 font-mono truncate mt-0.5">
                                         /{{ $a->slug }} · {{ $a->ai_model }}
                                     </div>
+                                    @php
+                                        $keySrc = 'none';
+                                        try {
+                                            $keySrc = \App\Services\AiKeyResolver::resolve($workspace, $provKey)['source'] ?? 'none';
+                                        } catch (\Throwable $e) {
+                                            $keySrc = 'none';
+                                        }
+                                    @endphp
                                     @if ($a->status === 'paused')
                                         <div class="text-[11.5px] text-accent-coral mt-1">{{ __('Paused — it will not auto-reply until you Resume.') }}</div>
+                                    @elseif ($keySrc === 'none')
+                                        <div class="text-[11.5px] text-accent-coral mt-1">{{ __('No :provider API key — add one under Admin → API keys, or this agent cannot reply.', ['provider' => $provider['label']]) }}</div>
+                                    @else
+                                        <div class="text-[11.5px] text-ink-500 mt-1">{{ __('Ready to auto-reply with :provider.', ['provider' => $provider['label']]) }}</div>
                                     @endif
                                     <div class="flex flex-wrap gap-1 mt-1.5">
                                         @if ($a->channel_whatsapp ?? true)

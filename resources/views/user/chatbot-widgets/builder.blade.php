@@ -68,9 +68,10 @@
     </div>
 
     <section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-6">
+        <script type="application/json" id="cbw-builder-defaults">@json($defaults)</script>
+        <script type="application/json" id="cbw-builder-assistants">@json($assistantsJs)</script>
         <div id="cbw-builder" class="grid grid-cols-1 xl:grid-cols-[1fr_342px] gap-5 items-start"
-            data-mode="{{ $mode }}" data-defaults='@json($defaults)'
-            data-assistants='@json($assistantsJs)' data-token="{{ $embedToken }}">
+            data-mode="{{ $mode }}" data-token="{{ $embedToken }}">
 
             {{-- ============ MAIN CARD ============ --}}
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">

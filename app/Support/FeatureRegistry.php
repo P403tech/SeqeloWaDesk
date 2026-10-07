@@ -323,4 +323,50 @@ class FeatureRegistry
 
         return array_values($paths);
     }
+
+    /**
+     * Plan feature key that still gates the route after admin Features
+     * leaves the app visible. Null = no extra plan gate in this map.
+     */
+    public static function planGate(string $key): ?string
+    {
+        return match (self::resolveKey($key)) {
+            'ai-training' => 'access_ai_chat_assistant',
+            'chatbot-widgets' => 'access_chatbot_widgets',
+            'ai-assistants' => 'access_ai_agents',
+            'wa-forms' => 'access_wa_forms',
+            'wa-links' => 'access_wa_links',
+            default => null,
+        };
+    }
+
+    /**
+     * What customers currently see vs cannot see, from saved Features.
+     * Login-only flags (no path) are omitted.
+     *
+     * @return array{hidden: list<array{key:string,label:string,path:string,plan:?string}>, shown: list<array{key:string,label:string,path:string,plan:?string}>}
+     */
+    public static function customerPreview(): array
+    {
+        $hidden = [];
+        $shown = [];
+        foreach (self::all() as $it) {
+            if (empty($it['path'])) {
+                continue;
+            }
+            $row = [
+                'key'   => (string) $it['key'],
+                'label' => (string) $it['label'],
+                'path'  => (string) $it['path'],
+                'plan'  => self::planGate((string) $it['key']),
+            ];
+            if (self::visible((string) $it['key'])) {
+                $shown[] = $row;
+            } else {
+                $hidden[] = $row;
+            }
+        }
+
+        return ['hidden' => $hidden, 'shown' => $shown];
+    }
 }

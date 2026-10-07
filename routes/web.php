@@ -1450,6 +1450,7 @@ Route::middleware('auth')->group(function () {
                 Route::post('/ai-training/{id}/duplicate',          [$aitc, 'duplicate'])->whereNumber('id')->name('ai-training.duplicate');
                 Route::post('/ai-training/{id}/status',             [$aitc, 'setStatus'])->whereNumber('id')->name('ai-training.status');
                 Route::post('/ai-training/api/assistant',           [$aitc, 'apiSaveAssistant'])->name('ai-training.api.assistant.save');
+                Route::post('/ai-training/api/test',                [$aitc, 'apiTestAssistant'])->name('ai-training.api.assistant.test');
                 Route::delete('/ai-training/api/assistant/{id}',    [$aitc, 'apiDeleteAssistant'])->whereNumber('id')->name('ai-training.api.assistant.delete');
                 Route::get('/ai-training/api/assistants',           [$aitc, 'apiListAssistants'])->name('ai-training.api.assistants.list');
                 Route::get('/ai-training/api/sources',              [$aitc, 'apiListSources'])->name('ai-training.api.sources.list');
