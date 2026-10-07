@@ -193,110 +193,13 @@
                         class="hairline border border-paper-200 rounded-full pl-9 pr-3 py-2 text-[12.5px] bg-white w-full focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
                 </div>
             </div>
-            </aside>
-
-            <section class="space-y-5">
-                <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-                    <div class="min-w-0">
-                        <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500 mb-2">
-                            {{ __('Workspace') }}</div>
-                        <h1 class="font-serif font-normal tracking-tight text-[32px] sm:text-[38px] lg:text-[44px] leading-none">AI <span
-                                class="italic text-wa-deep">{{ __('Training') }}</span></h1>
-                        <p class="text-[13px] text-ink-600 mt-2">
-                            {{ __("Build smart agents that speak in your brand's voice — train them on URLs, text, Q&A pairs, and plain-text files.") }}
-                        </p>
-                    </div>
-                    <div class="flex items-center flex-wrap gap-2">
-                        <span
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-wa-mint text-wa-deep border border-wa-green/40 font-mono">
-                            <span class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>
-                            {{ $stats['active'] }} {{ __('active') }}
-                        </span>
-                        <a href="{{ url('/ai-training/create') }}"
-                            class="px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal flex items-center gap-2">
-                            <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <path d="M8 3v10M3 8h10" />
-                            </svg>
-                            New smart agent
-                        </a>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span
-                                class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Total agents') }}</span>
-                        </div>
-                        <div class="mt-2 flex items-baseline gap-2"><span
-                                class="font-serif text-[30px] leading-none">{{ $stats['all'] }}</span><span
-                                class="text-[11px] text-ink-500">{{ $stats['active'] }} {{ __('active') }}</span>
-                        </div>
-                    </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span
-                                class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Knowledge entries') }}</span>
-                        </div>
-                        <div class="mt-2 flex items-baseline gap-2"><span
-                                class="font-serif text-[30px] leading-none">{{ number_format($stats['sources']) }}</span><span
-                                class="text-[11px] text-ink-500">{{ $stats['ready'] }} {{ __('indexed') }}</span>
-                        </div>
-                    </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span
-                                class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Avg / agent') }}</span>
-                        </div>
-                        <div class="mt-2 flex items-baseline gap-2"><span
-                                class="font-serif text-[30px] leading-none">{{ $stats['all'] > 0 ? number_format($stats['sources'] / $stats['all'], 1) : '0' }}</span><span
-                                class="text-[11px] text-ink-500">{{ __('entries') }}</span></div>
-                    </div>
-                    <div class="bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card">
-                        <div class="flex items-center justify-between"><span
-                                class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Health') }}</span><span
-                                class="text-[10px] text-wa-deep font-mono">{{ $stats['all'] > 0 ? round(($stats['active'] / max($stats['all'], 1)) * 100) : 0 }}%</span>
-                        </div>
-                        <div class="mt-2 flex items-baseline gap-2"><span
-                                class="font-serif text-[30px] leading-none">{{ $stats['all'] > 0 && $stats['active'] === $stats['all'] ? 'healthy' : ($stats['all'] === 0 ? 'empty' : 'attention') }}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-paper-0 border border-paper-200 rounded-[14px] shadow-card overflow-hidden">
-
-                    <div class="px-4 py-3 border-b border-paper-200 flex items-center justify-between gap-4 flex-wrap">
-                        <div class="flex items-center gap-1 bg-paper-50 rounded-full p-1">
-                            <button type="button"
-                                class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'all' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">{{ __('All') }}
-                                <span class="ml-1 font-mono text-[10px] opacity-80">{{ $stats['all'] }}</span></button>
-                            <button type="button"
-                                class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'active' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">{{ __('Active') }}
-                                <span
-                                    class="ml-1 font-mono text-[10px] opacity-80">{{ $stats['active'] }}</span></button>
-                            <button type="button"
-                                class="status-tab px-3 py-1.5 rounded-full text-[12px] font-semibold {{ $currentStatus === 'paused' ? 'bg-wa-deep text-paper-0' : 'text-ink-600 hover:bg-paper-100' }}">{{ __('Paused') }}
-                                <span
-                                    class="ml-1 font-mono text-[10px] opacity-80">{{ max(0, $stats['all'] - $stats['active']) }}</span></button>
-                        </div>
-                        <div class="flex items-center gap-2 w-full sm:w-auto">
-                            <div class="relative w-full sm:w-auto">
-                                <svg viewBox="0 0 16 16"
-                                    class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-ink-500"
-                                    fill="none" stroke="currentColor" stroke-width="1.5">
-                                    <circle cx="7" cy="7" r="5" />
-                                    <path d="m11 11 3 3" />
-                                </svg>
-                                <input id="ait-search" type="search" placeholder="{{ __('Search by name or slug…') }}"
-                                    class="hairline border border-paper-200 rounded-lg pl-9 pr-3 py-2 text-[12.5px] bg-white w-full sm:w-72 focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                            </div>
-                        </div>
-                    </div>
 
             <div id="ait-list" class="p-4 sm:p-5">
                 @forelse ($assistants as $a)
                     @php
                         $accent = $accentPalette[$a->id % 4];
                         $status = $statusPill[$a->status] ?? $statusPill['active'];
-                        $provKey = (string) $a->ai_provider;
+                        $provKey = \App\Services\AiAgentService::providerForModel((string) $a->ai_provider, (string) $a->ai_model);
                         $provider = ($providerThemes[$provKey] ?? $providerDefaultTheme)
                             + ['label' => $providerLabels[$provKey] ?? ($providerPill[$provKey]['label'] ?? ($provKey !== '' ? ucfirst($provKey) : 'OpenAI'))];
                     @endphp
@@ -325,6 +228,9 @@
                                     <div class="text-[12px] text-ink-500 font-mono truncate mt-0.5">
                                         /{{ $a->slug }} · {{ $a->ai_model }}
                                     </div>
+                                    @if ($a->status === 'paused')
+                                        <div class="text-[11.5px] text-accent-coral mt-1">{{ __('Paused — it will not auto-reply until you Resume.') }}</div>
+                                    @endif
                                     <div class="flex flex-wrap gap-1 mt-1.5">
                                         @if ($a->channel_whatsapp ?? true)
                                             <span class="px-1.5 py-0.5 rounded-md bg-wa-mint text-wa-deep text-[10px] font-medium">{{ __('WhatsApp') }}</span>

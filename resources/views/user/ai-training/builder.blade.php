@@ -80,7 +80,8 @@
     </div>
 
     <section class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-6">
-        <div id="ait-builder" data-mode="{{ $mode }}" data-defaults='@json($defaults)'>
+        <script type="application/json" id="ait-builder-defaults">@json($defaults)</script>
+        <div id="ait-builder" data-mode="{{ $mode }}">
 
             @if ($isStarter ?? false)
                 <div class="mb-4 rounded-2xl border border-wa-green/30 bg-wa-mint/40 px-4 py-3 text-[13px] text-ink-800">

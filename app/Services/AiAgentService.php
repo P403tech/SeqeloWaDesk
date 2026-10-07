@@ -784,6 +784,35 @@ class AiAgentService
     }
 
     /**
+     * If the saved provider does not match the model id (e.g. OpenAI +
+     * gemini-2.5-flash-lite), route the call to the API that actually hosts
+     * that model. Otherwise OpenAI rejects Gemini model names and the agent
+     * looks "dead" with no customer-visible error.
+     */
+    public static function providerForModel(string $provider, string $model): string
+    {
+        $p = strtolower(trim($provider));
+        $m = strtolower(trim($model));
+        if (str_starts_with($m, 'gemini')) {
+            return 'gemini';
+        }
+        if (str_starts_with($m, 'claude')) {
+            return 'anthropic';
+        }
+        if (str_starts_with($m, 'muse-') || $m === 'muse') {
+            return 'muse';
+        }
+        if (str_starts_with($m, 'mistral') || str_starts_with($m, 'codestral') || str_starts_with($m, 'pixtral')) {
+            return 'mistral';
+        }
+        if ($p !== '' && in_array($p, self::supportedProviders(), true)) {
+            return $p;
+        }
+
+        return $p !== '' ? $p : 'openai';
+    }
+
+    /**
      * Direct LLM call — used for test-agent endpoint and by generateReply().
      * Workspace key takes priority over env fallback.
      */
@@ -802,10 +831,12 @@ class AiAgentService
         // active global key from admin_ai_keys. No env fallback — admin
         // is the single source of truth, otherwise a stale .env key could
         // silently override a deliberately deactivated admin row.
+        $provider = self::providerForModel($provider, $model);
         $workspace = $workspaceId > 0 ? \App\Models\Workspace::find($workspaceId) : null;
         $apiKey = \App\Services\AiKeyResolver::keyFor($workspace, $provider);
 
         if (!$apiKey) {
+            $this->lastProviderError = "No {$provider} API key. Add one under Admin → API keys.";
             Log::warning("[AI-AGENT] No API key for provider={$provider} workspace={$workspaceId}");
             return null;
         }

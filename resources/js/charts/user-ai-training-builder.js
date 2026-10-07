@@ -5,7 +5,15 @@ export default function init() {
   if (!root) return;
 
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-  const defaults = JSON.parse(root.dataset.defaults || '{}');
+  let defaults = {};
+  try {
+    const raw = document.getElementById('ait-builder-defaults')?.textContent
+      || root.getAttribute('data-defaults')
+      || '{}';
+    defaults = JSON.parse(raw);
+  } catch (e) {
+    defaults = {};
+  }
   const state = { ...defaults };
   const MODEL_DEFAULTS = {
     openai: 'gpt-4o-mini',
@@ -47,6 +55,7 @@ export default function init() {
       if (first) return String(first);
     }
     return fallback;
+  }
 
   // Turn a failed api() response into the REAL reason, not a generic line.
   // Laravel validation (422) → { message, errors: { field: [msg] } }; CSRF
@@ -565,5 +574,4 @@ export default function init() {
   const bootStep = parseInt(new URLSearchParams(location.search).get('step') || '0', 10);
   showStep(bootStep >= 1 && bootStep <= TOTAL_STEPS ? bootStep : 1);
   if (state.id) loadSources();
-}
 }

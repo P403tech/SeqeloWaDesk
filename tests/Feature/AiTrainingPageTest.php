@@ -11,7 +11,7 @@ class AiTrainingPageTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_ai_training_index_renders(): void
+    private function actingWorkspaceAdmin(): User
     {
         $user = User::create([
             'name'     => 'Test Admin',
@@ -31,9 +31,50 @@ class AiTrainingPageTest extends TestCase
         $ws->members()->attach($user->id, ['role' => 'owner', 'joined_at' => now()]);
         $user->forceFill(['current_workspace_id' => $ws->id])->save();
 
+        return $user;
+    }
+
+    public function test_ai_training_index_renders(): void
+    {
+        $user = $this->actingWorkspaceAdmin();
+
         $response = $this->actingAs($user)->get(route('user.ai-training.index'));
         $response->assertStatus(200);
         $response->assertSee('AI');
         $response->assertSee('New smart agent');
+    }
+
+    public function test_create_wizard_embeds_defaults_outside_html_attributes(): void
+    {
+        $user = $this->actingWorkspaceAdmin();
+
+        $response = $this->actingAs($user)->get(route('user.ai-training.create'));
+        $response->assertStatus(200);
+        $response->assertSee('id="ait-builder-defaults"', false);
+        $response->assertSee('\u0027s intent', false);
+        $response->assertDontSee("data-defaults='", false);
+    }
+
+    public function test_can_save_a_new_assistant(): void
+    {
+        $user = $this->actingWorkspaceAdmin();
+
+        $response = $this->actingAs($user)->postJson(route('user.ai-training.api.assistant.save'), [
+            'name' => 'Sadaf',
+            'greeting' => 'Hi! How can I help?',
+            'ai_provider' => 'openai',
+            'ai_model' => 'gemini-2.5-flash-lite',
+            'reply_max_tokens' => 400,
+            'temperature' => 0.4,
+            'status' => 'active',
+            'channel_whatsapp' => true,
+        ]);
+        $response->assertOk();
+        $response->assertJsonPath('ok', true);
+        $this->assertDatabaseHas('ai_chat_assistants', [
+            'name' => 'Sadaf',
+            'ai_provider' => 'gemini',
+            'ai_model' => 'gemini-2.5-flash-lite',
+        ]);
     }
 }
