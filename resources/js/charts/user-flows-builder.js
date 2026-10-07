@@ -3545,6 +3545,7 @@ export default function init() {
         mistral:   { label:'Mistral',   dot:'#FA520F' },
       };
       const [model, setModel] = useState(AI_MODELS_CACHE[0]?.value || '');
+      const [provider, setProvider] = useState(AI_MODELS_CACHE[0]?.provider || '');
       const [prompt, setPrompt] = useState(initialPrompt || '');
       const [loading, setLoading] = useState(false);
       const [error, setError]     = useState(null);
@@ -3606,14 +3607,33 @@ export default function init() {
           setLoading(false);
         }
       };
-      // Build the per-provider tiles from what admin enabled. One tile
-      // per (provider, model) so the user picks the exact runtime model.
+      // Catalog can be 15+ ids per provider (admin AI-keys list). Tiles for
+      // every id blew the modal apart — provider pills + a select stay compact.
       const models = AI_MODELS_CACHE.map(m => ({
-        id:    m.value,
-        label: m.label.split(' · ')[1] || m.label,
-        sub:   PROVIDER_META[m.provider]?.label || m.provider,
-        dot:   PROVIDER_META[m.provider]?.dot   || '#888',
+        id:       m.value,
+        label:    m.label.split(' · ')[1] || m.label,
+        provider: m.provider,
+        sub:      PROVIDER_META[m.provider]?.label || m.provider,
+        dot:      PROVIDER_META[m.provider]?.dot   || '#888',
       }));
+      const providerTabs = [];
+      for (const m of models) {
+        if (!providerTabs.some(p => p.provider === m.provider)) {
+          providerTabs.push({ provider: m.provider, sub: m.sub, dot: m.dot });
+        }
+      }
+      const activeProvider = providerTabs.some(p => p.provider === provider)
+        ? provider
+        : (providerTabs[0]?.provider || '');
+      const modelsForProvider = models.filter(m => m.provider === activeProvider);
+      const pickProvider = (prov) => {
+        setProvider(prov);
+        const stillValid = models.some(m => m.provider === prov && m.id === (selectedEntry?.value || model));
+        if (!stillValid) {
+          const first = models.find(m => m.provider === prov);
+          if (first) setModel(first.id);
+        }
+      };
       return html`
         <div onClick=${e => { if (e.target === e.currentTarget && !loading) onClose(); }} className="fixed inset-0 z-50 flex items-center justify-center p-5" style=${{ background:'rgba(11,31,28,0.46)' }}>
           <div className="bg-paper-0 rounded-2xl w-full max-w-[640px] max-h-[88vh] flex flex-col shadow-soft border border-paper-200">
@@ -3633,18 +3653,19 @@ export default function init() {
                     No AI model available yet. Add your AI key in <a href="/settings?tab=aikeys" className="text-wa-deep underline">Settings → AI keys</a>, then reopen this.
                   </div>
                 ` : html`
-                  <div className="grid gap-2 ${models.length >= 3 ? 'grid-cols-3' : models.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}">
-                    ${models.map(m => html`
-                      <button key=${m.id} onClick=${() => setModel(m.id)}
-                        className=${'flex flex-col items-start gap-1 p-3 rounded-xl border transition ' + ((selectedEntry?.value || model) === m.id ? 'border-wa-deep bg-wa-mint/30' : 'border-paper-200 bg-paper-0 hover:bg-paper-50')}>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full" style=${{ background: m.dot }}></span>
-                          <span className="text-[12.5px] font-semibold truncate">${m.label}</span>
-                        </span>
-                        <span className="text-[10.5px] text-ink-500">${m.sub}</span>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    ${providerTabs.map(p => html`
+                      <button key=${p.provider} type="button" onClick=${() => pickProvider(p.provider)}
+                        className=${'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11.5px] font-semibold transition ' + (activeProvider === p.provider ? 'border-wa-deep bg-wa-mint/30 text-ink-900' : 'border-paper-200 bg-paper-0 text-ink-700 hover:bg-paper-50')}>
+                        <span className="w-2 h-2 rounded-full" style=${{ background: p.dot }}></span>
+                        ${p.sub}
                       </button>
                     `)}
                   </div>
+                  <select value=${selectedEntry?.value || model} onChange=${e => setModel(e.target.value)}
+                    className="w-full px-3 py-2 border border-paper-200 rounded-lg bg-paper-0 text-[12.5px] focus:outline-none focus:border-wa-deep">
+                    ${modelsForProvider.map(m => html`<option key=${m.id} value=${m.id}>${m.label}</option>`)}
+                  </select>
                 `}
               </div>
               ${error ? html`<div className="rounded-lg border border-accent-coral/30 bg-accent-coral/10 text-accent-coral text-[12px] px-3 py-2">${error}</div>` : null}
