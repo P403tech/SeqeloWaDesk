@@ -39,6 +39,8 @@
             </div>
         </div>
 
+        @include('user.ai._llm-health', ['llmHealth' => $llmHealth ?? ['errors' => [], 'blocked' => []]])
+
         {{-- KPI cards --}}
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
             <div class="rounded-2xl border border-paper-200 bg-paper-0 p-4 shadow-card">

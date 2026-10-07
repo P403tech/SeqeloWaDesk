@@ -90,7 +90,9 @@ class AiTrainingController extends Controller
         $_mode   = optional($workspace)->ai_responder_mode ?? 'wadesk_only';
         $_metaOn = (bool) (optional($workspace)->meta_agent_enabled ?? false);
 
-        return view('user.ai-training.index', compact('assistants', 'stats', 'workspace', 'modes', '_mode', '_metaOn'));
+        $llmHealth = \App\Support\WorkspaceLlmHealth::snapshot($wsId);
+
+        return view('user.ai-training.index', compact('assistants', 'stats', 'workspace', 'modes', '_mode', '_metaOn', 'llmHealth'));
     }
 
     /**
@@ -176,6 +178,12 @@ class AiTrainingController extends Controller
         $copy->status = 'paused';
         $copy->save();
 
+        \App\Support\Audit::log('ai.assistant.created', [
+            'resource'     => $copy,
+            'workspace_id' => $wsId,
+            'meta'         => ['duplicated_from' => $src->id, 'status' => $copy->status],
+        ]);
+
         foreach ($src->trainingSources()->get() as $tr) {
             $clone = $tr->replicate();
             $clone->assistant_id = $copy->id;
@@ -204,6 +212,11 @@ class AiTrainingController extends Controller
         $assistant->status = $wanted;
         $assistant->save();
         $assistant = $assistant->fresh();
+        \App\Support\Audit::log($assistant->status === 'paused' ? 'ai.assistant.paused' : 'ai.assistant.resumed', [
+            'resource'     => $assistant,
+            'workspace_id' => $wsId,
+            'meta'         => ['status' => $assistant->status, 'provider' => $assistant->ai_provider],
+        ]);
         try {
             \App\Services\Ai\InboxAgentBridge::applyAssistantLiveState($assistant);
         } catch (\Throwable $e) {
@@ -277,6 +290,7 @@ class AiTrainingController extends Controller
             $assistant->workspace_id = $wsId;
             $assistant->user_id      = $user->id;
         }
+        $creating = ! $assistant->exists;
 
         // withTrashed() is load-bearing: the table's unique(workspace_id, slug)
         // index still counts soft-deleted rows, but this model's default scope
@@ -305,6 +319,16 @@ class AiTrainingController extends Controller
 
         $assistant->fill($data);
         $assistant->save();
+
+        \App\Support\Audit::log($creating ? 'ai.assistant.created' : 'ai.assistant.updated', [
+            'resource'     => $assistant,
+            'workspace_id' => $wsId,
+            'meta'         => [
+                'status'   => $assistant->status,
+                'provider' => $assistant->ai_provider,
+                'model'    => $assistant->ai_model,
+            ],
+        ]);
 
         try {
             \App\Services\Ai\InboxAgentBridge::applyAssistantLiveState($assistant->fresh());
@@ -394,6 +418,13 @@ class AiTrainingController extends Controller
         } catch (\Throwable $e) {
             \Log::warning('[AI-TRAINING] inbox agent deactivate failed: '.$e->getMessage());
         }
+
+        \App\Support\Audit::log('ai.assistant.deleted', [
+            'workspace_id' => $wsId,
+            'subject_type' => 'aichatassistant',
+            'subject_id'   => (int) $assistant->id,
+            'meta'         => ['name' => $assistant->name, 'provider' => $assistant->ai_provider],
+        ]);
 
         $assistant->delete();
         return response()->json(['ok' => true]);

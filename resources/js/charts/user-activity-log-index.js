@@ -115,6 +115,17 @@ export default function init() {
         return p;
     }
 
+    function syncExportHref() {
+        const exp = document.getElementById('al-export');
+        if (!exp) return;
+        const p = new URLSearchParams();
+        p.set('range', filters.range);
+        p.set('scope', filters.scope);
+        if (filters.cat !== 'all') p.set('category', filters.cat);
+        if (filters.q) p.set('q', filters.q);
+        exp.href = `/activity-log/export?${p.toString()}`;
+    }
+
     let abortCtrl = null;
     async function reload() {
         try {
@@ -266,8 +277,7 @@ export default function init() {
     // ── filter inputs ─────────────────────────────────────────────
     document.getElementById('al-range')?.addEventListener('change', e => {
         filters.range = e.target.value; filters.page = 1;
-        const exp = document.getElementById('al-export');
-        if (exp) exp.href = `/activity-log/export?range=${encodeURIComponent(filters.range)}&scope=${encodeURIComponent(filters.scope)}`;
+        syncExportHref();
         reload();
     });
 
@@ -280,14 +290,13 @@ export default function init() {
             b.classList.add('bg-wa-deep', 'text-paper-0');
             b.classList.remove('text-ink-600', 'hover:bg-paper-100');
             filters.scope = b.dataset.scope; filters.page = 1;
-            const exp = document.getElementById('al-export');
-            if (exp) exp.href = `/activity-log/export?range=${encodeURIComponent(filters.range)}&scope=${encodeURIComponent(filters.scope)}`;
+            syncExportHref();
             reload();
         });
     });
 
     document.getElementById('al-category')?.addEventListener('change', e => {
-        filters.cat = e.target.value; filters.page = 1; reload();
+        filters.cat = e.target.value; filters.page = 1; syncExportHref(); reload();
     });
 
     document.querySelectorAll('#al-bucket-tabs button').forEach(b => {
@@ -308,7 +317,7 @@ export default function init() {
         clearTimeout(searchT);
         searchT = setTimeout(() => {
             filters.q = e.target.value.trim();
-            filters.page = 1; reload();
+            filters.page = 1; syncExportHref(); reload();
         }, 220);
     });
 
@@ -316,6 +325,7 @@ export default function init() {
         filters.q = ''; filters.cat = 'all'; filters.page = 1;
         const s = document.getElementById('al-search'); if (s) s.value = '';
         const c = document.getElementById('al-category'); if (c) c.value = 'all';
+        syncExportHref();
         reload();
     });
 
@@ -364,5 +374,6 @@ export default function init() {
         toastEl._t = setTimeout(() => { toastEl.style.opacity = '0'; }, 2200);
     }
 
+    syncExportHref();
     wireRows();
 }

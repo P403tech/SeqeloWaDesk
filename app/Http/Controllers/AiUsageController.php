@@ -50,6 +50,7 @@ class AiUsageController extends Controller
             'sourceSplit' => $this->sourceSplit($has, $wsId, $from),
             'cap'         => $this->monthlyCap($request),
             'voice'       => $this->voiceUsage($wsId, $from),
+            'llmHealth'   => \App\Support\WorkspaceLlmHealth::snapshot($wsId),
         ]);
     }
 

@@ -38,29 +38,11 @@ class ActivityLogController extends Controller
         $q     = trim((string) $request->string('q')->toString());
         $perPage = 20;
 
-        $base = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to']);
-
-        if ($scope === 'me') {
-            $base->where('actor_user_id', $userId);
-        } else { // workspace — only allowed if we know the workspace id
-            $base->when($workspaceId, fn ($q) => $q->where('workspace_id', $workspaceId));
-        }
-
-        if ($cat !== 'all') {
-            $base->where('action', 'like', $cat . '.%');
-        }
-
-        // Free-text search on `action` (the only plaintext discriminator
-        // we can SQL-LIKE — payload is a JSON blob, IP/UA are short).
-        if ($q !== '') {
-            $base->where(function ($w) use ($q) {
-                $w->where('action', 'like', '%' . $q . '%')
-                  ->orWhere('subject_type', 'like', '%' . $q . '%')
-                  ->orWhere('ip', 'like', '%' . $q . '%');
-            });
-        }
+        $base = $this->applyListFilters(
+            $this->workspaceBase($userId, $workspaceId, $range, $scope),
+            $cat,
+            $q
+        );
 
         $total = (clone $base)->count();
         $pageCount = max(1, (int) ceil($total / $perPage));
@@ -109,13 +91,14 @@ class ActivityLogController extends Controller
     {
         $user = Auth::user();
         $row = AuditLog::query()
+            ->where('layer', 'workspace')
             ->where(function ($q) use ($user) {
                 $q->where('actor_user_id', $user?->id)
                   ->orWhere(function ($w) use ($user) {
                       if ($user?->current_workspace_id) {
                           $w->where('workspace_id', $user->current_workspace_id);
                       } else {
-                          $w->whereRaw('1=0');
+                          $w->whereRaw('0 = 1');
                       }
                   });
             })
@@ -133,26 +116,24 @@ class ActivityLogController extends Controller
         $user = Auth::user();
         $range = $this->resolveRange($request->string('range')->toString() ?: '7d');
         $scope = $request->string('scope')->toString() ?: 'me';
+        $cat   = $request->string('category')->toString() ?: 'all';
+        $qtext = trim((string) $request->string('q')->toString());
 
-        $q = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to'])
-            ->orderByDesc('created_at');
-
-        if ($scope === 'me') {
-            $q->where('actor_user_id', $user?->id);
-        } else {
-            $q->when($user?->current_workspace_id, fn ($qq) => $qq->where('workspace_id', $user->current_workspace_id));
-        }
+        $query = $this->applyListFilters(
+            $this->workspaceBase($user?->id, $user?->current_workspace_id, $range, $scope),
+            $cat,
+            $qtext
+        )->orderByDesc('created_at');
 
         $filename = 'activity-log-' . now()->format('Ymd-His') . '.csv';
 
-        return response()->stream(function () use ($q) {
+        return response()->stream(function () use ($query) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['id', 'created_at', 'layer', 'actor_user_id', 'workspace_id', 'action', 'subject_type', 'subject_id', 'ip', 'user_agent']);
-            $q->chunk(500, function ($rows) use ($out) {
+            fwrite($out, "\xEF\xBB\xBF");
+            self::putCsvSafe($out, ['id', 'created_at', 'layer', 'actor_user_id', 'workspace_id', 'action', 'subject_type', 'subject_id', 'ip', 'user_agent']);
+            $query->chunk(500, function ($rows) use ($out) {
                 foreach ($rows as $r) {
-                    fputcsv($out, [
+                    self::putCsvSafe($out, [
                         $r->id,
                         optional($r->created_at)->toIso8601String(),
                         $r->layer,
@@ -188,14 +169,62 @@ class ActivityLogController extends Controller
         };
     }
 
+    private function workspaceBase(?int $userId, ?int $workspaceId, array $range, string $scope)
+    {
+        $query = AuditLog::query()
+            ->where('layer', 'workspace')
+            ->where('created_at', '>=', $range['from'])
+            ->where('created_at', '<', $range['to']);
+
+        if ($scope === 'me') {
+            $query->where('actor_user_id', $userId ?: 0);
+        } elseif ($workspaceId) {
+            $query->where('workspace_id', $workspaceId);
+        } else {
+            $query->whereRaw('0 = 1');
+        }
+
+        return $query;
+    }
+
+    private function applyListFilters($query, string $cat, string $q)
+    {
+        $allowed = array_keys($this->categories());
+        if ($cat !== 'all' && in_array($cat, $allowed, true)) {
+            $query->where('action', 'like', $cat . '.%');
+        }
+        if ($q !== '') {
+            $needle = '%' . self::escapeLike($q) . '%';
+            $query->where(function ($w) use ($needle) {
+                $w->where('action', 'like', $needle)
+                    ->orWhere('subject_type', 'like', $needle)
+                    ->orWhere('ip', 'like', $needle);
+            });
+        }
+
+        return $query;
+    }
+
+    private static function escapeLike(string $value): string
+    {
+        return addcslashes($value, '%_\\');
+    }
+
+    private static function putCsvSafe($handle, array $row): void
+    {
+        $safe = array_map(static function ($v) {
+            $s = (string) $v;
+            if ($s !== '' && in_array($s[0], ['=', '+', '-', '@', "\t", "\r", "\n"], true)) {
+                return "'" . $s;
+            }
+            return $s;
+        }, $row);
+        fputcsv($handle, $safe);
+    }
+
     private function stats(?int $userId, ?int $workspaceId, array $range, string $scope): array
     {
-        $base = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to']);
-
-        if ($scope === 'me') $base->where('actor_user_id', $userId);
-        else                 $base->when($workspaceId, fn ($q) => $q->where('workspace_id', $workspaceId));
+        $base = $this->workspaceBase($userId, $workspaceId, $range, $scope);
 
         $total = (clone $base)->count();
         $logins = (clone $base)->where('action', 'auth.login')->count();
@@ -213,11 +242,8 @@ class ActivityLogController extends Controller
         // delta vs previous window
         $prevFrom = $range['from']->copy()->subDays($range['days']);
         $prevTo   = $range['from']->copy();
-        $prev = AuditLog::query()
-            ->where('created_at', '>=', $prevFrom)
-            ->where('created_at', '<',  $prevTo);
-        if ($scope === 'me') $prev->where('actor_user_id', $userId);
-        else                 $prev->when($workspaceId, fn ($q) => $q->where('workspace_id', $workspaceId));
+        $prevRange = ['from' => $prevFrom, 'to' => $prevTo];
+        $prev = $this->workspaceBase($userId, $workspaceId, $prevRange, $scope);
         $prevTotal = $prev->count();
         $delta = $prevTotal > 0 ? round((($total - $prevTotal) / $prevTotal) * 100) : ($total > 0 ? 100 : 0);
 
@@ -233,11 +259,7 @@ class ActivityLogController extends Controller
 
     private function categoryCounts(?int $userId, ?int $workspaceId, array $range, string $scope): array
     {
-        $base = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to']);
-        if ($scope === 'me') $base->where('actor_user_id', $userId);
-        else                 $base->when($workspaceId, fn ($q) => $q->where('workspace_id', $workspaceId));
+        $base = $this->workspaceBase($userId, $workspaceId, $range, $scope);
 
         $rows = (clone $base)->select('action', DB::raw('COUNT(*) as c'))->groupBy('action')->get();
         $buckets = ['all' => $rows->sum('c')];
@@ -252,11 +274,7 @@ class ActivityLogController extends Controller
 
     private function volumeSeries(?int $userId, ?int $workspaceId, array $range, string $scope, string $bucket): array
     {
-        $base = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to']);
-        if ($scope === 'me') $base->where('actor_user_id', $userId);
-        else                 $base->when($workspaceId, fn ($q) => $q->where('workspace_id', $workspaceId));
+        $base = $this->workspaceBase($userId, $workspaceId, $range, $scope);
 
         $rows = (clone $base)->get(['created_at', 'action']);
         $bucket = in_array($bucket, ['daily', 'hourly', 'weekly'], true) ? $bucket : 'daily';
@@ -336,16 +354,12 @@ class ActivityLogController extends Controller
      */
     private function topActors(?int $userId, ?int $workspaceId, array $range, string $scope): array
     {
-        $q = AuditLog::query()
-            ->where('created_at', '>=', $range['from'])
-            ->where('created_at', '<',  $range['to'])
+        $q = $this->workspaceBase($userId, $workspaceId, $range, $scope)
             ->whereNotNull('actor_user_id')
             ->select('actor_user_id', DB::raw('COUNT(*) as c'), DB::raw('MAX(created_at) as last_at'))
             ->groupBy('actor_user_id')
             ->orderByDesc('c')
             ->limit(4);
-        if ($scope === 'me') $q->where('actor_user_id', $userId);
-        else                 $q->when($workspaceId, fn ($qq) => $qq->where('workspace_id', $workspaceId));
 
         $rows = $q->get();
         if ($rows->isEmpty()) return [];
@@ -459,6 +473,10 @@ class ActivityLogController extends Controller
             'broadcast'    => 'Broadcasts',
             'webhook'      => 'Webhooks',
             'workspace'    => 'Workspace',
+            'devices'      => 'Channels',
+            'ai'           => 'AI agents & keys',
+            'deals'        => 'Deals',
+            'integration'  => 'Integrations',
             'impersonation'=> 'Impersonation',
             'other'        => 'Other',
         ];
@@ -479,6 +497,10 @@ class ActivityLogController extends Controller
             'broadcast'     => ['bg' => 'bg-[#E8F5E9]',         'fg' => 'text-wa-deep'],
             'webhook'       => ['bg' => 'bg-paper-100',         'fg' => 'text-ink-700'],
             'workspace'     => ['bg' => 'bg-wa-mint',           'fg' => 'text-wa-deep'],
+            'devices'       => ['bg' => 'bg-[#D9E5F2]',         'fg' => 'text-[#13478A]'],
+            'ai'            => ['bg' => 'bg-[#F3E9FF]',         'fg' => 'text-[#5B3D8A]'],
+            'deals'         => ['bg' => 'bg-accent-amber/20',   'fg' => 'text-[#7B5A14]'],
+            'integration'   => ['bg' => 'bg-paper-100',         'fg' => 'text-ink-700'],
             'impersonation' => ['bg' => 'bg-accent-coral/15',   'fg' => 'text-accent-coral'],
             default         => ['bg' => 'bg-paper-100',         'fg' => 'text-ink-700'],
         };
@@ -521,6 +543,15 @@ class ActivityLogController extends Controller
             'team.deleted'          => 'Deleted team',
             'webhook.fired'         => 'Fired webhook',
             'webhook.test'          => 'Test-fired webhook',
+            'ai.assistant.created'  => 'Created AI agent',
+            'ai.assistant.updated'  => 'Updated AI agent',
+            'ai.assistant.paused'   => 'Paused AI agent',
+            'ai.assistant.resumed'  => 'Resumed AI agent',
+            'ai.assistant.deleted'  => 'Deleted AI agent',
+            'ai.key.saved'          => 'Saved AI provider key',
+            'ai.key.activated'      => 'Activated AI provider key',
+            'ai.key.deactivated'    => 'Deactivated AI provider key',
+            'ai.key.removed'        => 'Removed AI provider key',
         ];
         if (isset($custom[$action])) return $custom[$action];
         // generic fallback: "broadcasts.created" -> "Broadcasts created"

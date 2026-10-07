@@ -54,6 +54,7 @@
     @endphp
 
     <main class="max-w-none mx-auto px-4 sm:px-6 lg:px-7 py-7 space-y-5">
+        @include('user.ai._llm-health', ['llmHealth' => $llmHealth ?? ['errors' => [], 'blocked' => []]])
 
         {{-- Hero --}}
         <section class="relative overflow-hidden rounded-[28px] border border-wa-green/25 bg-gradient-to-br from-wa-mint via-paper-0 to-[#EFF9F6] shadow-card">

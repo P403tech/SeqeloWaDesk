@@ -35,7 +35,7 @@
                         <option value="{{ $k }}" @selected($rangeKey === $k)>{{ $label }}</option>
                     @endforeach
                 </select>
-                <a id="al-export" href="{{ url('/activity-log/export?range=' . $rangeKey . '&scope=' . $scope) }}"
+                <a id="al-export" href="{{ url('/activity-log/export?' . http_build_query(array_filter(['range' => $rangeKey, 'scope' => $scope, 'category' => $cat !== 'all' ? $cat : null, 'q' => $qCur ?: null]))) }}"
                     class="px-3.5 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium inline-flex items-center gap-1.5">
                     <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.7">
                         <path d="M8 2v8M5 7l3 3 3-3M3 12v2h10v-2" />
@@ -199,6 +199,10 @@
                                 'broadcast' => 'Broadcasts',
                                 'webhook' => 'Webhooks',
                                 'workspace' => 'Workspace',
+                                'devices' => 'Channels',
+                                'ai' => 'AI',
+                                'deals' => 'Deals',
+                                'integration' => 'Integrations',
                                 'impersonation' => 'Impersonation',
                             ];
                         @endphp

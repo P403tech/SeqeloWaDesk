@@ -6129,6 +6129,11 @@ class TeamInboxController extends Controller
             ['workspace_id' => $wsId, 'provider' => $data['provider']],
             ['api_key' => $data['api_key'], 'is_active' => true],
         );
+        \App\Support\Audit::log('ai.key.saved', [
+            'workspace_id' => (int) $wsId,
+            'resource'     => $key,
+            'meta'         => ['provider' => $key->provider, 'is_active' => true],
+        ]);
         return response()->json(['ok' => true, 'id' => $key->id, 'provider' => $key->provider]);
     }
 
@@ -6137,6 +6142,11 @@ class TeamInboxController extends Controller
         if (!WorkspacePermissions::userCan($request->user(), 'integration.manage')) abort(403);
         $key = AiProviderKey::where('workspace_id', $request->user()->current_workspace_id)->findOrFail($id);
         $key->update(['is_active' => !$key->is_active]);
+        \App\Support\Audit::log($key->is_active ? 'ai.key.activated' : 'ai.key.deactivated', [
+            'workspace_id' => (int) $key->workspace_id,
+            'resource'     => $key,
+            'meta'         => ['provider' => $key->provider, 'is_active' => (bool) $key->is_active],
+        ]);
         return response()->json(['ok' => true, 'is_active' => $key->is_active]);
     }
 
@@ -6144,6 +6154,11 @@ class TeamInboxController extends Controller
     {
         if (!WorkspacePermissions::userCan($request->user(), 'integration.manage')) abort(403);
         $key = AiProviderKey::where('workspace_id', $request->user()->current_workspace_id)->findOrFail($id);
+        \App\Support\Audit::log('ai.key.removed', [
+            'workspace_id' => (int) $key->workspace_id,
+            'resource'     => $key,
+            'meta'         => ['provider' => $key->provider],
+        ]);
         $key->delete();
         return response()->json(['ok' => true]);
     }

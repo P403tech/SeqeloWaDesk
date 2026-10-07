@@ -121,17 +121,27 @@ class SettingsTabsController extends Controller
             'api_key' => ['required', 'string', 'max:1024'],
         ]);
 
-        AiProviderKey::updateOrCreate(
+        $key = AiProviderKey::updateOrCreate(
             ['workspace_id' => $ws->id, 'provider' => $provider],
             ['api_key' => $data['api_key'], 'is_active' => true],
         );
+        \App\Support\Audit::log('ai.key.saved', [
+            'workspace_id' => (int) $ws->id,
+            'resource'     => $key,
+            'meta'         => ['provider' => $provider, 'is_active' => true],
+        ]);
         return back()->with('success', ucfirst($provider) . ' key saved.');
     }
 
     public function removeAiKey(Request $request, string $provider)
     {
         $ws = $this->ownerWorkspaceOrFail($request);
-        AiProviderKey::where('workspace_id', $ws->id)->where('provider', strtolower($provider))->delete();
+        $provider = strtolower($provider);
+        \App\Support\Audit::log('ai.key.removed', [
+            'workspace_id' => (int) $ws->id,
+            'meta'         => ['provider' => $provider],
+        ]);
+        AiProviderKey::where('workspace_id', $ws->id)->where('provider', $provider)->delete();
         return back()->with('success', ucfirst($provider) . ' key removed. Falling back to admin key.');
     }
 
