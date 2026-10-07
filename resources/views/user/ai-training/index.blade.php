@@ -272,9 +272,23 @@
                                 </div>
                                 <div class="lg:w-[120px]">
                                     <div class="font-mono text-[9.5px] uppercase tracking-[0.14em] text-ink-500 mb-1 lg:hidden">{{ __('Knowledge') }}</div>
-                                    <div class="text-[13px] {{ ($a->training_sources_count ?? 0) > 0 ? 'text-ink-900' : 'text-ink-500' }}">
-                                        {{ ($a->training_sources_count ?? 0) > 0 ? number_format($a->training_sources_count) . ' ' . __('entries') : __('No knowledge yet') }}
-                                    </div>
+                                    @php
+                                        $srcAll = (int) ($a->training_sources_count ?? 0);
+                                        $srcReady = (int) ($a->ready_sources_count ?? 0);
+                                        $srcFailed = (int) ($a->failed_sources_count ?? 0);
+                                        $srcPartial = (int) ($a->partial_sources_count ?? 0);
+                                    @endphp
+                                    @if ($srcAll === 0)
+                                        <div class="text-[13px] text-ink-500">{{ __('No knowledge yet') }}</div>
+                                    @else
+                                        <div class="text-[13px] text-ink-900">{{ number_format($srcReady) }} {{ __('indexed') }}</div>
+                                        @if ($srcFailed > 0)
+                                            <div class="text-[11px] text-accent-coral">{{ __(':n failed', ['n' => $srcFailed]) }}</div>
+                                        @endif
+                                        @if ($srcPartial > 0)
+                                            <div class="text-[11px] text-ink-500">{{ __(':n truncated', ['n' => $srcPartial]) }}</div>
+                                        @endif
+                                    @endif
                                 </div>
                                 <div class="lg:w-[100px]">
                                     <div class="font-mono text-[9.5px] uppercase tracking-[0.14em] text-ink-500 mb-1 lg:hidden">{{ __('Tone') }}</div>

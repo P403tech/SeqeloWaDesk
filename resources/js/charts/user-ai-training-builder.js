@@ -427,7 +427,11 @@ export default function init() {
       rows.innerHTML = `<div class="px-3 py-10 text-center text-[12px] text-ink-500">No knowledge yet. Pick a kind above to add the first entry.</div>`;
       return;
     }
-    rows.innerHTML = json.sources.map((s) => `
+    const failedN = json.sources.filter((s) => s.status === 'failed').length;
+    const partialN = json.sources.filter((s) => s.status === 'partial').length;
+    const readyN = json.sources.filter((s) => s.status === 'ready').length;
+    const summary = `<div class="px-3 py-2 text-[12px] border-b border-paper-200 bg-paper-50/60 text-ink-600">${readyN} indexed${failedN ? ` · <span class="text-accent-coral">${failedN} failed</span>` : ''}${partialN ? ` · ${partialN} truncated` : ''}. Failed rows are not used in replies.</div>`;
+    rows.innerHTML = summary + json.sources.map((s) => `
       <div class="px-3 py-2 grid grid-cols-[80px_1fr_120px_70px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50">
         <div class="text-[11px] font-mono uppercase tracking-[0.14em] text-ink-500">${s.kind}</div>
         <div class="min-w-0">
@@ -436,9 +440,9 @@ export default function init() {
         </div>
         <div>
           <span class="inline-flex items-center gap-1 text-[10.5px] font-mono uppercase tracking-[0.14em] px-1.5 py-0.5 rounded ${statusClasses(s.status)}">
-            <span class="w-1.5 h-1.5 rounded-full ${statusDotClass(s.status)}"></span>${s.status}
+            <span class="w-1.5 h-1.5 rounded-full ${statusDotClass(s.status)}"></span>${statusLabel(s.status)}
           </span>
-          ${s.error ? `<div class="text-[10px] text-accent-coral mt-0.5 truncate">${escapeHtml(s.error)}</div>` : ''}
+          ${s.error ? `<div class="text-[10px] text-accent-coral mt-0.5 truncate" title="${escapeHtml(s.error)}">${escapeHtml(s.error)}</div>` : ''}
         </div>
         <div class="text-right">
           <button type="button" data-delete-source="${s.id}" class="w-7 h-7 rounded-full hover:bg-accent-coral/15 text-accent-coral inline-flex items-center justify-center" title="Remove">
@@ -470,11 +474,18 @@ export default function init() {
   const statusClasses = (s) =>
     s === 'ready'  ? 'bg-wa-mint text-wa-deep' :
     s === 'failed' ? 'bg-accent-coral/10 text-accent-coral' :
+    s === 'partial' ? 'bg-paper-100 text-ink-700' :
                      'bg-paper-100 text-ink-500';
   const statusDotClass = (s) =>
     s === 'ready'  ? 'bg-wa-green' :
     s === 'failed' ? 'bg-accent-coral' :
+    s === 'partial' ? 'bg-ink-500' :
                      'bg-paper-200';
+  const statusLabel = (s) =>
+    s === 'ready' ? 'Indexed' :
+    s === 'failed' ? 'Failed' :
+    s === 'partial' ? 'Truncated' :
+    (s || 'Pending');
 
   const addPanel = document.getElementById('ait-source-add');
 
@@ -587,6 +598,13 @@ export default function init() {
         showAddError(apiError(json, status === 413 ? 'File is too large (max 10 MB).' : 'Upload failed.'));
         return;
       }
+      if (json.status === 'partial') {
+        toast(json.error || 'File indexed, but it was truncated.', 'error');
+        addPanel.classList.add('hidden');
+        addPanel.innerHTML = '';
+        loadSources();
+        return;
+      }
     } else {
       const body = { assistant_id: state.id, kind, label };
       if (kind === 'url')  body.url = get('[data-src-url]');
@@ -594,6 +612,13 @@ export default function init() {
       if (kind === 'qa')   { body.question = get('[data-src-question]'); body.answer = get('[data-src-answer]'); }
       const { ok, json } = await api('/ai-training/api/source', { method: 'POST', body });
       if (!ok) { toast(apiError(json, 'Add failed.'), 'error'); return; }
+      if (json.status === 'failed') {
+        toast(json.error || 'Fetch failed — the row is saved so you can retry or delete it.', 'error');
+        addPanel.classList.add('hidden');
+        addPanel.innerHTML = '';
+        loadSources();
+        return;
+      }
     }
     addPanel.classList.add('hidden');
     addPanel.innerHTML = '';

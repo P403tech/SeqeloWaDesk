@@ -88,6 +88,9 @@ class AssignmentService
             'assignee_team_id' => $teamId ?? $conv->assignee_team_id,
             'inbox_status'     => $conv->inbox_status === 'closed' ? 'open' : $conv->inbox_status,
         ] + ($pauseAi ? ['assignee_agent_id' => null] : []))->save();
+        if ($humanAssigned) {
+            $conv->clearNeedsHumanTag();
+        }
 
         $this->recalcLoad($previousUserId, $conv->workspace_id);
         $this->recalcLoad($resolvedUser?->id, $conv->workspace_id);

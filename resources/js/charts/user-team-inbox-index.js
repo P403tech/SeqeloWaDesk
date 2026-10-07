@@ -1144,9 +1144,7 @@ Limits:
             const btn = document.querySelector(`#queue-tabs [data-queue="${k}"]`);
             if (btn) btn.style.display = multi ? '' : 'none';
         });
-        // Solo workspace = only All + Unread visible → stretch them to fill the
-        // bar (each 50%) instead of the compact content-width the multi-tab bar
-        // uses. The multi case keeps the scrollable compact tabs.
+        // Solo workspace = All + Unread + Needs human (Mine stays hidden).
         document.getElementById('queue-tabs')?.classList.toggle('is-duo', !multi);
         positionSegThumb();   // widths changed → re-seat the sliding thumb
     }

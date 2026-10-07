@@ -402,6 +402,18 @@ class Conversation extends Model
         return $this->belongsToMany(Tag::class, 'conversation_tag')->withTimestamps()->withPivot('added_by');
     }
 
+    public function clearNeedsHumanTag(): void
+    {
+        try {
+            $ids = $this->tags()->where('tags.slug', 'needs-human')->pluck('tags.id');
+            if ($ids->isNotEmpty()) {
+                $this->tags()->detach($ids->all());
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('[INBOX] clear needs-human tag failed: '.$e->getMessage());
+        }
+    }
+
     public function scopeNotArchived(Builder $q): Builder
     {
         return $q->where('archived', false);

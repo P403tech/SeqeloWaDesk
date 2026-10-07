@@ -78,6 +78,32 @@ class AiTrainingPageTest extends TestCase
         ]);
     }
 
+    public function test_agent_list_shows_failed_knowledge_count(): void
+    {
+        $user = $this->actingWorkspaceAdmin();
+        $this->actingAs($user)->postJson(route('user.ai-training.api.assistant.save'), [
+            'name' => 'Sadaf',
+            'ai_provider' => 'openai',
+            'ai_model' => 'gpt-4o-mini',
+            'status' => 'active',
+        ])->assertOk();
+
+        $assistant = \App\Models\AiChatAssistant::where('name', 'Sadaf')->firstOrFail();
+        \App\Models\AiTrainingSource::create([
+            'workspace_id' => $assistant->workspace_id,
+            'assistant_id' => $assistant->id,
+            'kind' => 'url',
+            'label' => 'Broken page',
+            'url' => 'https://example.invalid/missing',
+            'status' => 'failed',
+            'error' => 'Could not fetch URL.',
+        ]);
+
+        $response = $this->actingAs($user)->get(route('user.ai-training.index'));
+        $response->assertStatus(200);
+        $response->assertSee('1 failed', false);
+    }
+
     public function test_test_chat_reports_missing_key_instead_of_hanging(): void
     {
         $user = $this->actingWorkspaceAdmin();

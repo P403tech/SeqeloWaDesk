@@ -34,7 +34,12 @@ class AiTrainingController extends Controller
 
         $assistants = AiChatAssistant::query()
             ->where('workspace_id', $wsId)
-            ->withCount('trainingSources')
+            ->withCount([
+                'trainingSources',
+                'trainingSources as ready_sources_count' => fn ($q) => $q->where('status', 'ready'),
+                'trainingSources as failed_sources_count' => fn ($q) => $q->where('status', 'failed'),
+                'trainingSources as partial_sources_count' => fn ($q) => $q->where('status', 'partial'),
+            ])
             ->orderByDesc('id')
             ->paginate(20)
             ->withQueryString();
@@ -538,7 +543,8 @@ class AiTrainingController extends Controller
             ], 422);
         }
         // Cap at ~200k chars to keep training tables sane.
-        if (mb_strlen($content) > 200000) {
+        $truncated = mb_strlen($content) > 200000;
+        if ($truncated) {
             $content = mb_substr($content, 0, 200000);
         }
         $path = $file->storeAs(
@@ -555,10 +561,11 @@ class AiTrainingController extends Controller
             'label'           => $request->input('label'),
             'file_path'       => $path,
             'content'         => $content,
-            'status'          => 'ready',
+            'status'          => $truncated ? 'partial' : 'ready',
+            'error'           => $truncated ? 'Indexed the first 200,000 characters. The rest of the file was skipped.' : null,
             'tokens_estimate' => (int) ceil(mb_strlen($content) / 4),
         ]);
-        return response()->json(['ok' => true, 'id' => $src->id]);
+        return response()->json(['ok' => true, 'id' => $src->id, 'status' => $src->status, 'error' => $src->error]);
     }
 
     public function apiDeleteSource(int $id): JsonResponse

@@ -985,6 +985,7 @@ class TeamInboxController extends Controller
             'unassigned'  => $q->unassigned(),
             // Unread tab (after @me) — every chat with pending unread messages.
             'unread'      => $q->where('unread_count', '>', 0),
+            'needs_human' => $q->whereHas('tags', fn ($t) => $t->where('tags.slug', 'needs-human')),
             'mentions'    => $q->whereHas('participants', fn ($w) => $w
                 ->where('user_id', $user->id)
                 ->where('unread_mentions', '>', 0)),
@@ -1230,6 +1231,7 @@ class TeamInboxController extends Controller
                 ->where('unread_mentions', '>', 0)->count(),
             'sla_breach'  => $slaBreach,
             'all'         => $all,
+            'needs_human' => (clone $base)->whereHas('tags', fn ($t) => $t->where('tags.slug', 'needs-human'))->count(),
             'by_channel'  => $byChannel,
         ];
     }
@@ -3155,6 +3157,7 @@ class TeamInboxController extends Controller
 
         // Already paused — don't rewrite the timestamp on every reply.
         if (! empty($meta['ai_paused_by_human_at']) && ! $conv->assignee_agent_id) {
+            $conv->clearNeedsHumanTag();
             return;
         }
 
@@ -3169,6 +3172,7 @@ class TeamInboxController extends Controller
             'routing_meta'      => $meta,
             'assignee_agent_id' => null,
         ])->save();
+        $conv->clearNeedsHumanTag();
 
         if ($hadAgent) {
             \Log::info('[AI-TAKEOVER] human replied — AI paused', [

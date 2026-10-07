@@ -385,6 +385,8 @@
                             data-count="mine"></span></button>
                     <button data-queue="unread">{{ __('Unread') }} <span class="n"
                             data-count="unread"></span></button>
+                    <button data-queue="needs_human">{{ __('Needs human') }} <span class="n"
+                            data-count="needs_human"></span></button>
                 </div>
                 @if (($deviceFilterOptions ?? collect())->count() > 1)
                     {{-- Device filter — only render when the workspace has more
