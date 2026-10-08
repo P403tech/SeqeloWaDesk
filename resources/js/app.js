@@ -747,13 +747,14 @@ function initInstagramConnect() {
         const row = document.createElement('div');
         row.className = 'flex items-center gap-3 p-2.5 rounded-xl border border-paper-200 bg-paper-0';
         const av = document.createElement('span');
-        av.className = 'w-9 h-9 rounded-lg bg-paper-100 grid place-items-center shrink-0 overflow-hidden';
         if (a.avatar) {
+            av.className = 'w-9 h-9 rounded-lg bg-paper-100 grid place-items-center shrink-0 overflow-hidden';
             const img = document.createElement('img');
             img.src = a.avatar; img.alt = ''; img.className = 'w-full h-full object-cover';
             av.appendChild(img);
         } else {
-            av.innerHTML = '<svg viewBox="0 0 16 16" class="w-4 h-4 text-ink-600" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4"/><circle cx="8" cy="8" r="2.9"/></svg>';
+            av.className = 'w-9 h-9 rounded-lg ig-grad-soft text-white grid place-items-center shrink-0 overflow-hidden';
+            av.innerHTML = '<svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4"/><circle cx="8" cy="8" r="2.9"/><circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none"/></svg>';
         }
         const meta = document.createElement('div');
         meta.className = 'min-w-0 flex-1';

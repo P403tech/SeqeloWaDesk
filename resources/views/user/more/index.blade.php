@@ -255,8 +255,8 @@
                         <a href="{{ url('/facebook/posts') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
                             <div class="flex items-start justify-between gap-3">
-                                <span class="w-11 h-11 rounded-xl grid place-items-center" style="background:#1877F2">
-                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="#fff"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
+                                <span class="w-11 h-11 rounded-xl fb-brand grid place-items-center">
+                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
                                 </span>
                                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono" style="background:#E7F0FF;color:#1877F2">FB</span>
                             </div>
@@ -302,8 +302,8 @@
                         <a href="{{ url('/facebook/setup') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
                             <div class="flex items-start justify-between gap-3">
-                                <span class="w-11 h-11 rounded-xl grid place-items-center" style="background:#1877F2">
-                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.9">
+                                <span class="w-11 h-11 rounded-xl fb-brand grid place-items-center">
+                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.9">
                                         <path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h13A2.5 2.5 0 0 1 21 6.5v8a2.5 2.5 0 0 1-2.5 2.5H9l-5 3v-3A2.5 2.5 0 0 1 3 14.5v-8Z"/><path d="M7 8h10M7 11h6"/>
                                     </svg>
                                 </span>
@@ -355,8 +355,8 @@
                         <a href="{{ url('/tiktok/accounts') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
                             <div class="flex items-start justify-between gap-3">
-                                <span class="w-11 h-11 rounded-xl grid place-items-center bg-ink-900">
-                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="#fff"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
+                                <span class="w-11 h-11 rounded-xl tt-grad grid place-items-center">
+                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
                                 </span>
                                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-ink-900 text-paper-0">TT</span>
                             </div>
@@ -373,8 +373,8 @@
                         <a href="{{ url('/tiktok/posts') }}"
                             class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
                             <div class="flex items-start justify-between gap-3">
-                                <span class="w-11 h-11 rounded-xl grid place-items-center bg-ink-900">
-                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="#fff" stroke-width="1.8"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="M10 9l5 3-5 3z" fill="#fff" stroke="none"/></svg>
+                                <span class="w-11 h-11 rounded-xl tt-grad grid place-items-center">
+                                    <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
                                 </span>
                                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-ink-900 text-paper-0">TT</span>
                             </div>

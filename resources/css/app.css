@@ -65,6 +65,9 @@
  * ────────────────────────────────────────────────────────────────── */
 .ig-grad      { background:linear-gradient(135deg,#405DE6 0%,#833AB4 25%,#C13584 50%,#E1306C 70%,#F77737 90%,#FCAF45 100%); }
 .ig-grad-soft { background:linear-gradient(135deg,#833AB4 0%,#E1306C 55%,#F77737 100%); }
+.wa-brand     { background:#25D366; color:#fff; }
+.fb-brand     { background:#1877F2; color:#fff; }
+.tt-grad      { background:linear-gradient(135deg,#25F4EE 0%,#010101 48%,#FE2C55 100%); color:#fff; }
 .ig-text      { background:linear-gradient(120deg,#833AB4,#E1306C,#F77737); -webkit-background-clip:text; background-clip:text; color:transparent; }
 .ig-ring      { background:linear-gradient(135deg,#F77737,#E1306C,#C13584,#833AB4); padding:2px; border-radius:9999px; }
 .ig-card-hover { transition:transform .2s, box-shadow .2s, border-color .2s; }

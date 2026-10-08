@@ -20,6 +20,9 @@
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-5 h-5 rounded-md wa-brand grid place-items-center shrink-0">
+                        <svg viewBox="0 0 24 24" class="w-3 h-3" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z"/></svg>
+                    </span>
                     <span class="text-[13.5px] font-semibold">{{ __('WhatsApp') }}</span>
                     @if ($cs['whatsapp']['connected'])
                         <span class="font-mono text-[10px] text-wa-deep">{{ trans_choice(':n number|:n numbers', count($cs['whatsapp']['accounts']), ['n' => count($cs['whatsapp']['accounts'])]) }}</span>
@@ -56,6 +59,9 @@
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-5 h-5 rounded-md fb-brand grid place-items-center shrink-0">
+                        <svg viewBox="0 0 24 24" class="w-3 h-3" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
+                    </span>
                     <span class="text-[13.5px] font-semibold">{{ __('Facebook Messenger') }}</span>
                     @if ($cs['facebook']['connected'])
                         <span class="font-mono text-[10px] text-wa-deep">{{ trans_choice(':n page|:n pages', count($cs['facebook']['accounts']), ['n' => count($cs['facebook']['accounts'])]) }}</span>
@@ -104,6 +110,9 @@
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-5 h-5 rounded-md ig-grad-soft text-white grid place-items-center shrink-0">
+                        <svg viewBox="0 0 16 16" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4"/><circle cx="8" cy="8" r="2.9"/><circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none"/></svg>
+                    </span>
                     <span class="text-[13.5px] font-semibold">{{ __('Instagram') }}</span>
                     @if ($cs['instagram']['connected'])
                         <span class="font-mono text-[10px] text-wa-deep">{{ count($cs['instagram']['accounts']) }} {{ __('linked') }}</span>
@@ -140,6 +149,9 @@
         <div class="px-4 py-3.5 flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-5 h-5 rounded-md tt-grad grid place-items-center shrink-0">
+                        <svg viewBox="0 0 24 24" class="w-3 h-3" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
+                    </span>
                     <span class="text-[13.5px] font-semibold">{{ __('TikTok') }}</span>
                     @if ($cs['tiktok']['connected'])
                         <span class="font-mono text-[10px] text-wa-deep">{{ count($cs['tiktok']['accounts']) }} {{ __('linked') }}</span>

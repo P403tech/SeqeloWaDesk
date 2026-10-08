@@ -2420,12 +2420,12 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
                 border-radius: 6px; display: grid; place-items: center; color: #fff;
                 border: 2px solid var(--color-paper-0); }
   .ti-chbadge svg { width: 9px; height: 9px; }
-  .ti-chbadge.ch-wa { background: var(--ch-wa); }
-  .ti-chbadge.ch-ig { background: var(--ch-ig); }
+  .ti-chbadge.ch-wa { background: #25D366; }
+  .ti-chbadge.ch-ig { background: linear-gradient(135deg,#833AB4,#E1306C,#F77737); }
   .ti-chbadge.ch-ms { background: var(--ch-ms); }
   .ti-chbadge.ch-tg { background: var(--ch-tg); }
   .ti-chbadge.ch-em { background: var(--ch-em); }
-  .ti-chbadge.ch-tt { background: var(--ch-tt); }
+  .ti-chbadge.ch-tt { background: linear-gradient(135deg,#25F4EE,#010101 48%,#FE2C55); }
   .ti-chbadge.ch-sms { background: var(--ch-sms); }
   .ti-chbadge.ch-ln { background: var(--ch-ln); }
   .ti-chbadge.ch-wc { background: var(--ch-wc); }
@@ -2453,12 +2453,12 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .ti-chtab.on svg { color: #fff; }
   .ti-chtab.on .n { background: rgba(255,255,255,.25); color: #fff; }
   .ti-chtab.on.ch-all { background: var(--color-ink-900); }
-  .ti-chtab.on.ch-wa  { background: var(--color-wa-deep); }
-  .ti-chtab.on.ch-ig  { background: var(--ch-ig); }
+  .ti-chtab.on.ch-wa  { background: #25D366; }
+  .ti-chtab.on.ch-ig  { background: linear-gradient(135deg,#833AB4,#E1306C,#F77737); }
   .ti-chtab.on.ch-ms  { background: var(--ch-ms); }
   .ti-chtab.on.ch-tg  { background: var(--ch-tg); }
   .ti-chtab.on.ch-em  { background: var(--ch-em); }
-  .ti-chtab.on.ch-tt  { background: var(--ch-tt); }
+  .ti-chtab.on.ch-tt  { background: linear-gradient(135deg,#25F4EE,#010101 48%,#FE2C55); }
   .ti-chtab.on.ch-sms { background: var(--ch-sms); }
   .ti-chtab.on.ch-ln  { background: var(--ch-ln); }
   .ti-chtab.on.ch-wc  { background: var(--ch-wc); }
@@ -2672,6 +2672,12 @@ body[data-page="user-flows-builder"], body[data-page="user-flows-builder"] #root
   .ti-rl-ch:hover { background: rgba(255,255,255,.08); }
   .ti-rl-ch.on { background: rgba(255,255,255,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.16); }
   .ti-rl-ch.on.ch-all { color: var(--color-paper-0); }
+  .ti-rl-ch.on.ch-ig { background: linear-gradient(135deg,#833AB4,#E1306C,#F77737); box-shadow: none; }
+  .ti-rl-ch.on.ch-ig span, .ti-rl-ch.on.ch-ig svg { color: #fff !important; }
+  .ti-rl-ch.on.ch-wa { background: #25D366; box-shadow: none; }
+  .ti-rl-ch.on.ch-wa span, .ti-rl-ch.on.ch-wa svg { color: #fff !important; }
+  .ti-rl-ch.on.ch-tt { background: linear-gradient(135deg,#25F4EE,#010101 48%,#FE2C55); box-shadow: none; }
+  .ti-rl-ch.on.ch-tt span, .ti-rl-ch.on.ch-tt svg { color: #fff !important; }
   .ti-rl-ch .b { position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px;
                  border-radius: 99px; background: var(--color-paper-0); color: var(--color-ink-900);
                  font-size: 8.5px; font-weight: 700; font-family: 'JetBrains Mono', monospace;

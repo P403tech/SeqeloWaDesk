@@ -1555,7 +1555,7 @@
                                      app so they deliver without Advanced-Access review. --}}
                                 <div class="mt-2 pt-4 border-t border-paper-200">
                                     <div class="flex items-center gap-2 mb-1">
-                                        <span class="w-6 h-6 rounded-lg grid place-items-center bg-wa-mint text-wa-deep">
+                                        <span class="w-6 h-6 rounded-lg grid place-items-center ig-grad-soft text-white">
                                             <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4"/><circle cx="8" cy="8" r="2.9"/><circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none"/></svg>
                                         </span>
                                         <span class="text-[13px] font-semibold text-ink-900">{{ __('Instagram app (for Instagram DMs)') }}</span>

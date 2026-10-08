@@ -639,10 +639,9 @@
                     @if ($hasBaileys)
                         <button id="devices-add-btn" data-add-card type="button"
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition">
-                            <span class="w-9 h-9 rounded-xl bg-wa-mint grid place-items-center text-wa-deep">
-                                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor"
-                                    stroke-width="1.5">
-                                    <path d="M2.6 11.2 2 14l2.9-.6A6 6 0 1 0 2.6 11.2Z" />
+                            <span class="w-9 h-9 rounded-xl wa-brand grid place-items-center">
+                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="currentColor">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z"/>
                                 </svg>
                             </span>
                             <div class="font-serif text-[16px] mt-3 leading-tight">{{ __('Unofficial API') }}</div>
@@ -653,10 +652,9 @@
                         <button data-waba-connect="{{ $embeddedSignupReady ? 'embedded' : 'manual' }}" data-add-card
                             type="button"
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition">
-                            <span class="w-9 h-9 rounded-xl bg-wa-mint grid place-items-center text-wa-deep">
-                                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor"
-                                    stroke-width="1.5">
-                                    <path d="M3 7l5-3 5 3-5 3-5-3zm0 4l5 3 5-3" />
+                            <span class="w-9 h-9 rounded-xl wa-brand grid place-items-center">
+                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="currentColor">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z"/>
                                 </svg>
                             </span>
                             <div class="font-serif text-[16px] mt-3 leading-tight">{{ __('Meta (WABA)') }}</div>
@@ -666,11 +664,9 @@
                     @if ($hasTwilio)
                         <button data-twilio-connect data-add-card type="button"
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition">
-                            <span class="w-9 h-9 rounded-xl bg-wa-mint grid place-items-center text-wa-deep">
-                                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor"
-                                    stroke-width="1.5">
-                                    <circle cx="8" cy="8" r="6" />
-                                    <path d="M8 5v3l2 2" />
+                            <span class="w-9 h-9 rounded-xl wa-brand grid place-items-center">
+                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="currentColor">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z"/>
                                 </svg>
                             </span>
                             <div class="font-serif text-[16px] mt-3 leading-tight">{{ __('Twilio') }}</div>
@@ -696,7 +692,7 @@
                                 data-instagram-connect data-add-card
                             @endif
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition">
-                            <span class="w-9 h-9 rounded-xl bg-wa-mint grid place-items-center text-wa-deep">
+                            <span class="w-9 h-9 rounded-xl ig-grad-soft grid place-items-center text-white">
                                 <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor"
                                     stroke-width="1.4">
                                     <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4" />
@@ -714,8 +710,8 @@
                              every Page it manages. --}}
                         <button type="button" data-facebook-connect data-add-card
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition">
-                            <span class="w-9 h-9 rounded-xl grid place-items-center" style="background:#1877F2">
-                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="#fff"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
+                            <span class="w-9 h-9 rounded-xl fb-brand grid place-items-center">
+                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
                             </span>
                             <div class="font-serif text-[16px] mt-3 leading-tight">{{ __('Facebook') }}</div>
                             <div class="text-[11.5px] text-ink-600 mt-0.5">{{ __('Connect your account — all your Pages') }}</div>
@@ -726,8 +722,8 @@
                              TikTok redirects back to /tiktok/callback). --}}
                         <a href="{{ route('user.tiktok.connect') }}" data-add-card
                             class="text-left rounded-2xl border border-paper-200 bg-paper-0 p-4 hover:border-wa-deep hover:shadow-card transition block">
-                            <span class="w-9 h-9 rounded-xl grid place-items-center bg-ink-900">
-                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="#fff"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
+                            <span class="w-9 h-9 rounded-xl tt-grad grid place-items-center">
+                                <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
                             </span>
                             <div class="font-serif text-[16px] mt-3 leading-tight">{{ __('TikTok') }}</div>
                             <div class="text-[11.5px] text-ink-600 mt-0.5">{{ __('Connect an account — insights, posting & DMs') }}</div>
@@ -1359,7 +1355,7 @@
             <div class="w-full max-w-lg max-h-[92vh] overflow-y-auto bg-paper-0 border border-paper-200 rounded-2xl shadow-[0_28px_80px_-35px_rgba(11,31,28,0.55)]">
                 <div class="px-5 py-4 border-b border-paper-200 flex items-center justify-between sticky top-0 bg-paper-0">
                     <div class="flex items-center gap-2.5">
-                        <span class="w-8 h-8 rounded-lg grid place-items-center shrink-0 bg-wa-mint text-wa-deep">
+                        <span class="w-8 h-8 rounded-lg grid place-items-center shrink-0 ig-grad-soft text-white">
                             <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4" /><circle cx="8" cy="8" r="2.9" /><circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none" /></svg>
                         </span>
                         <div>

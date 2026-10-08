@@ -16,10 +16,9 @@
                                         <div class="px-1"></div>
                                         <div class="min-w-0 flex items-center gap-2.5">
                                             <span
-                                                class="w-9 h-9 rounded-lg grid place-items-center shrink-0 {{ $b['cls'] }}">
-                                                <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none"
-                                                    stroke="currentColor" stroke-width="1.5">
-                                                    <path d="M2.6 11.2 2 14l2.9-.6A6 6 0 1 0 2.6 11.2Z" />
+                                                class="w-9 h-9 rounded-lg wa-brand grid place-items-center shrink-0">
+                                                <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor">
+                                                    <path d="M12 2C6.48 2 2 6.48 2 12c0 1.96.57 3.79 1.55 5.34L2 22l4.78-1.5A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.07c-.21.6-1.22 1.14-1.7 1.21-.45.07-1.02.1-1.65-.1-.38-.12-.87-.28-1.49-.55-2.62-1.13-4.33-3.77-4.46-3.94-.13-.18-1.07-1.42-1.07-2.71 0-1.29.68-1.92.92-2.18.24-.27.52-.34.7-.34h.5c.16 0 .38-.06.59.45.21.51.71 1.76.77 1.89.06.13.1.28.02.45-.08.18-.12.28-.24.43-.12.15-.26.34-.37.46-.12.12-.25.26-.11.51.14.26.62 1.02 1.33 1.65.91.81 1.68 1.06 1.94 1.18.26.13.41.11.56-.06.15-.18.65-.76.83-1.02.18-.26.36-.21.6-.13.24.09 1.55.73 1.81.86.27.13.45.2.51.31.07.12.07.69-.14 1.29Z" />
                                                 </svg>
                                             </span>
                                             <div class="min-w-0">
@@ -184,7 +183,7 @@
                                             <span style="display:none"
                                                 class="w-9 h-9 rounded-lg place-items-center shrink-0 bg-paper-100 text-ink-700 text-[12px] font-semibold">{{ strtoupper(mb_substr(ltrim((string) ($ig->name ?: $ig->username), '@'), 0, 2)) }}</span>
                                         @else
-                                            <span class="w-9 h-9 rounded-lg grid place-items-center shrink-0 bg-paper-100 text-ink-700">
+                                            <span class="w-9 h-9 rounded-lg grid place-items-center shrink-0 ig-grad-soft text-white">
                                                 <svg viewBox="0 0 16 16" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.4">
                                                     <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="3.4" />
                                                     <circle cx="8" cy="8" r="2.9" />
@@ -196,7 +195,7 @@
                                             <div class="font-semibold text-ink-900 text-[12.5px] truncate">
                                                 {{ $ig->name ?: $igHandle }}</div>
                                             <div class="text-[10.5px] text-ink-500 font-mono truncate flex items-center gap-1">
-                                                <svg viewBox="0 0 24 24" class="w-3 h-3 shrink-0" fill="none" stroke="url(#igGrad)" stroke-width="2"><defs><linearGradient id="igGrad" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#F58529"/><stop offset=".5" stop-color="#DD2A7B"/><stop offset="1" stop-color="#8134AF"/></linearGradient></defs><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#DD2A7B" stroke="none"/></svg>
+                                                <svg viewBox="0 0 24 24" class="w-3 h-3 shrink-0" fill="none" stroke="url(#igGrad-{{ $ig->id }})" stroke-width="2"><defs><linearGradient id="igGrad-{{ $ig->id }}" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#F58529"/><stop offset=".5" stop-color="#DD2A7B"/><stop offset="1" stop-color="#8134AF"/></linearGradient></defs><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#DD2A7B" stroke="none"/></svg>
                                                 {{ __('Instagram') }}</div>
                                         </div>
                                     </div>
@@ -315,13 +314,13 @@
                                                 <img src="{{ $fp->picture_url }}" alt="" referrerpolicy="no-referrer"
                                                     onerror="this.style.display='none'; if(this.nextElementSibling){this.nextElementSibling.style.display='grid';}"
                                                     class="w-9 h-9 rounded-lg object-cover shrink-0 bg-paper-100">
-                                                <span style="display:none;background:#1877F2"
-                                                    class="w-9 h-9 rounded-lg place-items-center shrink-0">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="#fff"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
+                                                <span style="display:none"
+                                                    class="w-9 h-9 rounded-lg fb-brand place-items-center shrink-0">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
                                                 </span>
                                             @else
-                                                <span class="w-9 h-9 rounded-lg grid place-items-center shrink-0" style="background:#1877F2">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="#fff"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
+                                                <span class="w-9 h-9 rounded-lg fb-brand grid place-items-center shrink-0">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46H15.2c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12Z"/></svg>
                                                 </span>
                                             @endif
                                             <div class="min-w-0">
@@ -505,13 +504,13 @@
                                                 <img src="{{ $ta->avatar_url }}" alt="" referrerpolicy="no-referrer"
                                                     onerror="this.style.display='none'; if(this.nextElementSibling){this.nextElementSibling.style.display='grid';}"
                                                     class="w-9 h-9 rounded-lg object-cover shrink-0 bg-paper-100">
-                                                <span style="display:none;background:#010101"
-                                                    class="w-9 h-9 rounded-lg place-items-center shrink-0">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="#fff"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
+                                                <span style="display:none"
+                                                    class="w-9 h-9 rounded-lg tt-grad place-items-center shrink-0">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
                                                 </span>
                                             @else
-                                                <span class="w-9 h-9 rounded-lg grid place-items-center shrink-0" style="background:#010101">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="#fff"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
+                                                <span class="w-9 h-9 rounded-lg tt-grad grid place-items-center shrink-0">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4" fill="currentColor"><path d="M16.6 5.8a4.3 4.3 0 0 1-2.6-3.8h-3.1v12.4a2.6 2.6 0 1 1-2.6-2.6c.27 0 .53.04.78.12V8.7a5.7 5.7 0 1 0 4.9 5.65V8.4a7.3 7.3 0 0 0 4.3 1.38V6.66a4.3 4.3 0 0 1-1.68-.86Z"/></svg>
                                                 </span>
                                             @endif
                                             <div class="min-w-0">
