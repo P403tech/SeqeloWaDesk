@@ -6,7 +6,9 @@
         $defaults = [
             'id' => $a?->id ?? null,
             'name' => $a?->name ?? '',
-            'status' => $a?->status ?? $d['status'],
+            // New drafts start paused so an empty brain cannot auto-reply.
+            // Edit keeps whatever is already saved. The seeded starter is live.
+            'status' => $a?->status ?? ($mode === 'edit' ? $d['status'] : 'paused'),
             'greeting' => $a?->greeting ?? $d['greeting'],
             'system_prompt' => $a?->system_prompt ?? $d['system_prompt'],
             'tone' => $a?->tone ?? $d['tone'],
@@ -89,23 +91,7 @@
                 </div>
             @endif
 
-            <div class="mb-4 rounded-2xl border border-paper-200 bg-paper-0 p-4">
-                <div class="flex items-center justify-between gap-3 mb-2">
-                    <div>
-                        <div class="font-serif text-[16px] text-ink-900">{{ __('Test chat') }}</div>
-                        <div class="text-[12px] text-ink-500">{{ __('Sends one message through this agent’s brain and knowledge. Nothing is posted to WhatsApp.') }}</div>
-                    </div>
-                </div>
-                <textarea id="ait-test-input" rows="2"
-                    class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
-                    placeholder="{{ __('Hi, what can you help me with?') }}">Hi, what can you help me with?</textarea>
-                <div class="mt-2 flex items-center gap-2">
-                    <button id="ait-test-send" type="button"
-                        class="px-3.5 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Send test') }}</button>
-                    <span id="ait-test-status" class="text-[12px] text-ink-500"></span>
-                </div>
-                <div id="ait-test-out" class="hidden mt-3 rounded-xl bg-paper-50 border border-paper-200 px-3 py-2 text-[13px] text-ink-800 whitespace-pre-wrap"></div>
-            </div>
+            <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-4 lg:items-start">
 
             {{-- ============ MAIN CARD ============ --}}
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
@@ -179,11 +165,11 @@
                                     class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Agent replies') }}</label>
                                 <select data-field="status"
                                     class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="active">{{ __('Live — auto-replies on connected channels') }}</option>
                                     <option value="paused">{{ __('Paused — humans only, connections stay on') }}</option>
+                                    <option value="active">{{ __('Live — auto-replies on connected channels') }}</option>
                                 </select>
                                 <div class="text-[10.5px] text-ink-500 mt-1">
-                                    {{ __('Pause stops this agent in inbox. WhatsApp, Facebook, Instagram, and TikTok stay connected. Use Pause agent in the header for a one-click mute.') }}
+                                    {{ __('New agents start paused. Turn Live only after a model, knowledge, and a channel are ready. Pause keeps WhatsApp / Facebook / Instagram / TikTok connected.') }}
                                 </div>
                             </div>
                         </div>
@@ -266,62 +252,32 @@
                             <span class="font-mono text-[10px] text-ink-500">{{ __('brain') }}</span>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                            <div>
-                                <label
-                                    class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Model provider') }}</label>
-                                <select data-field="ai_provider"
-                                    class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="openai">{{ __('OpenAI · GPT') }}</option>
-                                    <option value="anthropic">{{ __('Anthropic · Claude') }}</option>
-                                    <option value="gemini">{{ __('Google · Gemini') }}</option>
-                                    <option value="muse">{{ __('Muse · Meta Spark') }}</option>
-                                    <option value="mistral">{{ __('Mistral') }}</option>
-                                    <option value="openai">{{ __('OpenAI (GPT)') }}</option>
-                                    <option value="anthropic">{{ __('Anthropic (Claude)') }}</option>
-                                    <option value="gemini">{{ __('Google (Gemini)') }}</option>
-                                    <option value="mistral">{{ __('Mistral') }}</option>
-                                    <option value="deepseek">{{ __('DeepSeek') }}</option>
-                                    <option value="xai">{{ __('xAI (Grok)') }}</option>
-                                    <option value="perplexity">{{ __('Perplexity') }}</option>
-                                    <option value="groq">{{ __('Groq') }}</option>
-                                    <option value="qwen">{{ __('Alibaba Qwen') }}</option>
-                                    <option value="moonshot">{{ __('Moonshot (Kimi)') }}</option>
-                                    <option value="zai">{{ __('Z.ai (GLM)') }}</option>
-                                    <option value="cohere">{{ __('Cohere') }}</option>
-                                    <option value="nvidia">{{ __('NVIDIA') }}</option>
-                                    <option value="llama">{{ __('Meta Llama') }}</option>
-                                    <option value="huggingface">{{ __('Hugging Face') }}</option>
-                                    <option value="baidu">{{ __('Baidu (Ernie)') }}</option>
-                                    <option value="ai21">{{ __('AI21 (Jamba)') }}</option>
-                                    <option value="reka">{{ __('Reka') }}</option>
-                                    <option value="yi">{{ __('01.AI (Yi)') }}</option>
-                                    <option value="openrouter">{{ __('OpenRouter') }}</option>
-                                </select>
-                                <div class="text-[10.5px] text-ink-500 mt-1">
-                                    {{ __('Platform key first, or your own key from') }}
-                                    <a href="{{ url('/settings?tab=aikeys') }}" class="text-wa-deep font-semibold">{{ __('Settings → AI keys') }}</a>
-                                    {{ __('(BYOK). Cursor is not a customer-chat model.') }}
-                                </div>
-                                @php $brainKeys = $brainKeys ?? []; @endphp
-                                <div class="flex flex-wrap gap-1 mt-2">
-                                    @foreach (['openai' => 'OpenAI', 'anthropic' => 'Claude', 'gemini' => 'Gemini', 'muse' => 'Muse', 'mistral' => 'Mistral'] as $pk => $pl)
-                                        @php $src = $brainKeys[$pk] ?? 'none'; @endphp
-                                        <span class="font-mono text-[9.5px] px-1.5 py-0.5 rounded-md {{ $src === 'none' ? 'bg-paper-100 text-ink-500' : 'bg-wa-mint text-wa-deep' }}">
-                                            {{ $pl }} · {{ $src === 'workspace' ? __('your key') : ($src === 'admin' ? __('platform') : __('no key')) }}
-                                        </span>
-                                    @endforeach
-                                </div>
+                        <div class="mb-4">
+                            <label class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Model') }}</label>
+                            <div id="ait-model-empty" class="hidden rounded-lg border border-paper-200 bg-paper-50 px-3 py-3 text-[12px] text-ink-700">
+                                {{ __('No AI model available yet. Add your AI key in') }}
+                                <a href="{{ url('/settings?tab=aikeys') }}" class="text-wa-deep underline">{{ __('Settings → AI keys') }}</a>,
+                                {{ __('or ask your admin to enable a platform key.') }}
                             </div>
-                            <div>
-                                <label
-                                    class="text-[11.5px] font-semibold text-ink-700 mb-1.5 block">{{ __('Model name') }}</label>
-                                <input data-field="ai_model" type="text" placeholder="{{ __('gpt-4o-mini') }}"
-                                    class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10 font-mono">
-                                <div class="text-[10.5px] text-ink-500 mt-1">{{ __('Examples ·') }} <span
-                                        class="font-mono">{{ __('gpt-4o-mini') }}</span>, <span
-                                        class="font-mono">{{ __('claude-haiku-4-5-20251001') }}</span>, <span
-                                        class="font-mono">{{ __('gemini-2.5-flash-lite') }}</span>.</div>
+                            <div id="ait-model-picker">
+                                <div id="ait-provider-pills" class="flex flex-wrap gap-1.5 mb-2"></div>
+                                <select id="ait-model-select"
+                                    class="w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"></select>
+                            </div>
+                            <input type="hidden" data-field="ai_provider">
+                            <input type="hidden" data-field="ai_model">
+                            <div class="text-[10.5px] text-ink-500 mt-1">
+                                {{ __('Same catalog as Flow AI. Platform key first, or your own key from') }}
+                                <a href="{{ url('/settings?tab=aikeys') }}" class="text-wa-deep font-semibold">{{ __('Settings → AI keys') }}</a>.
+                            </div>
+                            @php $brainKeys = $brainKeys ?? []; @endphp
+                            <div class="flex flex-wrap gap-1 mt-2">
+                                @foreach (['openai' => 'OpenAI', 'anthropic' => 'Claude', 'gemini' => 'Gemini', 'muse' => 'Muse', 'mistral' => 'Mistral'] as $pk => $pl)
+                                    @php $src = $brainKeys[$pk] ?? 'none'; @endphp
+                                    <span class="font-mono text-[9.5px] px-1.5 py-0.5 rounded-md {{ $src === 'none' ? 'bg-paper-100 text-ink-500' : 'bg-wa-mint text-wa-deep' }}">
+                                        {{ $pl }} · {{ $src === 'workspace' ? __('your key') : ($src === 'admin' ? __('platform') : __('no key')) }}
+                                    </span>
+                                @endforeach
                             </div>
                         </div>
 
@@ -477,19 +433,6 @@
                                 <div class="text-[11px] text-ink-500 leading-snug">
                                     {{ __('Let the agent answer from your live products, prices and stock.') }}</div>
                             </button>
-                            <button type="button" data-add-source="catalog"
-                                class="rounded-lg border border-paper-200 hover:border-wa-deep bg-paper-50 p-3 text-left transition">
-                                <svg viewBox="0 0 16 16" class="w-4 h-4 text-wa-deep" fill="none"
-                                    stroke="currentColor" stroke-width="1.6">
-                                    <path d="M2 3h12v3H2z" />
-                                    <path d="M2 6v7h12V6" />
-                                    <path d="M6 9h4" />
-                                </svg>
-                                <div class="mt-1.5 text-[12.5px] font-semibold text-ink-900">{{ __('Product catalog') }}
-                                </div>
-                                <div class="text-[11px] text-ink-500 leading-snug">
-                                    {{ __('Let the agent answer from your live products, prices and stock.') }}</div>
-                            </button>
                         </div>
 
                         <div id="ait-source-add"
@@ -549,6 +492,22 @@
                         </button>
                     </div>
                 </div>
+            </div>
+
+            <aside class="mt-4 lg:mt-0 lg:sticky lg:top-20 rounded-2xl border border-paper-200 bg-paper-0 p-4">
+                <div class="font-serif text-[16px] text-ink-900">{{ __('Test chat') }}</div>
+                <div class="text-[12px] text-ink-500 mt-0.5">{{ __('Uses this agent’s brief, brain, and knowledge. Nothing is posted to WhatsApp.') }}</div>
+                <textarea id="ait-test-input" rows="3"
+                    class="mt-3 w-full px-3 py-2 border border-paper-200 rounded-lg bg-white text-[12.5px] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10"
+                    placeholder="{{ __('Hi, what can you help me with?') }}">Hi, what can you help me with?</textarea>
+                <div class="mt-2 flex items-center gap-2">
+                    <button id="ait-test-send" type="button"
+                        class="px-3.5 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Send test') }}</button>
+                    <span id="ait-test-status" class="text-[12px] text-ink-500"></span>
+                </div>
+                <div id="ait-test-out" class="hidden mt-3 rounded-xl bg-paper-50 border border-paper-200 px-3 py-2 text-[13px] text-ink-800 whitespace-pre-wrap"></div>
+            </aside>
+
             </div>
 
         </div>

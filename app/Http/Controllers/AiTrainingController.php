@@ -291,6 +291,9 @@ class AiTrainingController extends Controller
             $assistant->user_id      = $user->id;
         }
         $creating = ! $assistant->exists;
+        if ($creating && empty($data['status'])) {
+            $data['status'] = 'paused';
+        }
 
         // withTrashed() is load-bearing: the table's unique(workspace_id, slug)
         // index still counts soft-deleted rows, but this model's default scope
@@ -359,6 +362,7 @@ class AiTrainingController extends Controller
             'handoff_enabled' => 'nullable|boolean',
             'handoff_keyword' => 'nullable|string|max:60',
             'handoff_message' => 'nullable|string|max:1000',
+            'business_brief'  => 'nullable|string|max:8000',
         ]);
 
         $assistant = !empty($data['id'])

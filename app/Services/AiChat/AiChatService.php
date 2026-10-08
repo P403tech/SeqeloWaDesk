@@ -152,8 +152,12 @@ class AiChatService
         $base = trim((string) $assistant->system_prompt) ?: 'You are a helpful website chatbot.';
         $tone = trim((string) $assistant->tone) ?: 'helpful';
         $lang = trim((string) $assistant->language) ?: 'en';
+        $brief = trim((string) ($assistant->business_brief ?? ''));
 
         $out  = $base . "\n";
+        if ($brief !== '') {
+            $out .= "\n## Business information\n" . $brief . "\n";
+        }
         $out .= "Speak in a $tone tone.\n";
         $out .= "Always reply in the same language the visitor is using. If they switch, switch with them. Never default to English unless they wrote in English. Fallback if their message has no readable language: $lang.\n";
         $out .= "When Knowledge includes Live URL pages, answer from that page text and share the real URL. Never invent links.\n";

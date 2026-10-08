@@ -15,13 +15,15 @@ export default function init() {
     defaults = {};
   }
   const state = { ...defaults };
-  const MODEL_DEFAULTS = {
-    openai: 'gpt-4o-mini',
-    anthropic: 'claude-haiku-4-5-20251001',
-    gemini: 'gemini-2.5-flash-lite',
-    muse: 'muse-spark-1.3',
-    mistral: 'mistral-small-latest',
+  const PROVIDER_META = {
+    openai:    { label: 'OpenAI',    dot: '#10A37F' },
+    anthropic: { label: 'Anthropic', dot: '#D97757' },
+    gemini:    { label: 'Google',    dot: '#4285F4' },
+    mistral:   { label: 'Mistral',   dot: '#FA520F' },
+    muse:      { label: 'Muse',      dot: '#0081FB' },
   };
+  let modelCatalog = [];
+  let pickerProvider = state.ai_provider || '';
 
   const toast = (m, kind = 'success') => (window.toast ? window.toast(m, kind) : null);
   const confirmDialog = (opts) => {
@@ -34,11 +36,14 @@ export default function init() {
   let furthest = state.id ? TOTAL_STEPS : 1;
 
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
+    const url = (typeof window.appUrl === 'function' && path.startsWith('/')) ? window.appUrl(path) : path;
+    const res = await fetch(url, {
       method: opts.method || 'GET',
+      credentials: 'same-origin',
       headers: {
         'Accept': 'application/json',
         'X-CSRF-TOKEN': csrf,
+        'X-Requested-With': 'XMLHttpRequest',
         ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
       },
       body: opts.body instanceof FormData ? opts.body : (opts.body ? JSON.stringify(opts.body) : undefined),
@@ -142,13 +147,96 @@ export default function init() {
 
   const providerEl = root.querySelector('[data-field="ai_provider"]');
   const modelEl = root.querySelector('[data-field="ai_model"]');
-  providerEl?.addEventListener('change', () => {
-    const def = MODEL_DEFAULTS[state.ai_provider];
-    if (def && modelEl) {
-      modelEl.value = def;
-      state.ai_model = def;
+  const modelSelect = document.getElementById('ait-model-select');
+  const providerPills = document.getElementById('ait-provider-pills');
+
+  function setHiddenModel(provider, model) {
+    pickerProvider = provider || pickerProvider;
+    if (providerEl) providerEl.value = provider || '';
+    if (modelEl) modelEl.value = model || '';
+    state.ai_provider = provider || '';
+    state.ai_model = model || '';
+  }
+
+  function modelsForProvider(prov) {
+    return modelCatalog.filter((m) => m.provider === prov);
+  }
+
+  function paintModelPicker() {
+    const empty = document.getElementById('ait-model-empty');
+    const picker = document.getElementById('ait-model-picker');
+    if (!modelCatalog.length) {
+      empty?.classList.remove('hidden');
+      picker?.classList.add('hidden');
+      return;
     }
+    empty?.classList.add('hidden');
+    picker?.classList.remove('hidden');
+    const tabs = [];
+    for (const m of modelCatalog) {
+      if (!tabs.some((t) => t.provider === m.provider)) {
+        const meta = PROVIDER_META[m.provider] || {};
+        tabs.push({
+          provider: m.provider,
+          label: meta.label || m.label.split(' · ')[0] || m.provider,
+          dot: meta.dot || '#888',
+        });
+      }
+    }
+    if (!tabs.some((t) => t.provider === pickerProvider)) {
+      pickerProvider = tabs[0]?.provider || '';
+    }
+    if (providerPills) {
+      providerPills.innerHTML = tabs.map((t) => {
+        const on = t.provider === pickerProvider;
+        const cls = on
+          ? 'border-wa-deep bg-wa-mint/30 text-ink-900'
+          : 'border-paper-200 bg-paper-0 text-ink-700 hover:bg-paper-50';
+        return `<button type="button" data-pick-provider="${t.provider}" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11.5px] font-semibold transition ${cls}"><span class="w-2 h-2 rounded-full" style="background:${t.dot}"></span>${t.label}</button>`;
+      }).join('');
+    }
+    const list = modelsForProvider(pickerProvider);
+    if (state.ai_model && !list.some((m) => m.value === state.ai_model) && state.ai_provider === pickerProvider) {
+      list.unshift({ value: state.ai_model, label: state.ai_model + ' (saved)', provider: pickerProvider });
+    }
+    if (modelSelect) {
+      modelSelect.innerHTML = list.map((m) => {
+        const short = (m.label.split(' · ')[1] || m.label);
+        return `<option value="${escapeHtml(m.value)}" ${m.value === state.ai_model ? 'selected' : ''}>${escapeHtml(short)}</option>`;
+      }).join('');
+    }
+    const chosen = list.find((m) => m.value === state.ai_model) || list[0];
+    if (chosen) setHiddenModel(chosen.provider, chosen.value);
+    if (modelSelect && chosen) modelSelect.value = chosen.value;
+  }
+
+  providerPills?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-pick-provider]');
+    if (!btn) return;
+    pickerProvider = btn.getAttribute('data-pick-provider') || '';
+    const first = modelsForProvider(pickerProvider)[0];
+    if (first) setHiddenModel(first.provider, first.value);
+    paintModelPicker();
   });
+  modelSelect?.addEventListener('change', () => {
+    const val = modelSelect.value;
+    const row = modelCatalog.find((m) => m.value === val && m.provider === pickerProvider)
+      || modelCatalog.find((m) => m.value === val);
+    setHiddenModel(row?.provider || pickerProvider, val);
+  });
+
+  async function loadModelCatalog() {
+    const { ok, json } = await api('/flows/api/ai-models');
+    if (ok && Array.isArray(json.models)) modelCatalog = json.models;
+    if (state.ai_model && !modelCatalog.some((m) => m.value === state.ai_model)) {
+      modelCatalog.unshift({
+        value: state.ai_model,
+        label: (state.ai_provider || 'saved') + ' · ' + state.ai_model,
+        provider: state.ai_provider || 'openai',
+      });
+    }
+    paintModelPicker();
+  }
 
   // --------------------------- step nav ---------------------------
 
@@ -338,6 +426,7 @@ export default function init() {
         handoff_enabled: !!state.handoff_enabled,
         handoff_keyword: state.handoff_keyword,
         handoff_message: state.handoff_message,
+        business_brief: state.business_brief,
       },
     });
     if (status) status.textContent = '';
@@ -635,4 +724,5 @@ export default function init() {
   const bootStep = parseInt(new URLSearchParams(location.search).get('step') || '0', 10);
   showStep(bootStep >= 1 && bootStep <= TOTAL_STEPS ? bootStep : 1);
   if (state.id) loadSources();
+  loadModelCatalog();
 }
