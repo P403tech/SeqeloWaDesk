@@ -48,6 +48,7 @@ class DatabaseSeeder extends Seeder
             GuidebookArticleSeeder::class,
             LegalPagesSeeder::class,
             FlowTemplateSeeder::class,
+            WaTemplateSampleSeeder::class,
         ]);
     }
 }

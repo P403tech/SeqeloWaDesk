@@ -479,6 +479,13 @@ $sys = [
         'sw' => 1.6,
     ],
     [
+        'key' => 'template-samples',
+        'href' => url('/admin/template-samples'),
+        'label' => __('Template library'),
+        'icon' => '<rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>',
+        'sw' => 1.5,
+    ],
+    [
         'key' => 'flow-templates',
         'href' => url('/admin/flow-templates'),
         'label' => __('Flow templates'),

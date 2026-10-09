@@ -421,6 +421,17 @@ Route::prefix('blog')->name('blog.')->group(function () {
     Route::delete('/{id}',             [BlogController::class, 'destroy'])->whereNumber('id')->name('destroy');
 });
 
+// Admin-curated WhatsApp sample copy → tenants "Use sample" on /templates.
+Route::prefix('template-samples')->name('template-samples.')->group(function () {
+    Route::get   ('/',                 [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'index'])->name('index');
+    Route::get   ('/create',           [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'create'])->name('create');
+    Route::post  ('/',                 [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'store'])->name('store');
+    Route::get   ('/{id}/edit',        [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'edit'])->whereNumber('id')->name('edit');
+    Route::put   ('/{id}',             [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'update'])->whereNumber('id')->name('update');
+    Route::post  ('/{id}/toggle',      [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'toggle'])->whereNumber('id')->name('toggle');
+    Route::delete('/{id}',             [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'destroy'])->whereNumber('id')->name('destroy');
+});
+
 // Admin-curated Bot-Flow starter templates → tenants clone them on /flows.
 Route::prefix('flow-templates')->name('flow-templates.')->group(function () {
     Route::get   ('/',                 [\App\Http\Controllers\Admin\FlowTemplateController::class, 'index'])->name('index');
