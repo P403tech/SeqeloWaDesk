@@ -27,8 +27,12 @@
             <a href="{{ route('admin.template-samples.index') }}"
                 class="px-3.5 py-1.5 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">{{ __('Cancel') }}</a>
             <button type="submit" form="sampleForm"
+                class="px-3.5 py-1.5 hairline border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[12px] font-medium">
+                {{ $editing ? __('Save to library') : __('Create sample') }}
+            </button>
+            <button type="submit" form="sampleForm" name="push_to_customers" value="1"
                 class="px-4 py-1.5 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">
-                {{ $editing ? __('Save changes') : __('Create sample') }}
+                {{ $editing ? __('Save & push to customers') : __('Create & push to customers') }}
             </button>
         </div>
     </header>
@@ -38,7 +42,7 @@
         <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[36px] leading-[1.0]">
             {{ $editing ? __('Edit') : __('New') }} <span class="italic text-wa-deep">{{ __('sample') }}</span></h1>
         <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-            {{ __('Tenants copy this into their own template and submit it to Meta. Use named tokens like {{name}} — never start or end the body with a token.') }}
+            {{ __('Save to library updates the Use sample gallery. Save & push installs it on every customer’s Your templates list. Use named tokens like {{name}} — never start or end the body with a token.') }}
         </p>
     </div>
 
@@ -198,9 +202,13 @@
                                 <span class="text-[12.5px] text-ink-700">{{ __('Visible to tenants on Templates.') }}</span>
                             </label>
                         </div>
-                        <div class="px-5 py-4 border-t border-paper-200">
-                            <button type="submit" class="w-full px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12.5px] font-semibold hover:bg-wa-teal">
-                                {{ $editing ? __('Save changes') : __('Create sample') }}
+                        <div class="px-5 py-4 border-t border-paper-200 space-y-2">
+                            <button type="submit" name="push_to_customers" value="1"
+                                class="w-full px-4 py-2 rounded-full bg-wa-deep text-paper-0 text-[12.5px] font-semibold hover:bg-wa-teal">
+                                {{ $editing ? __('Save & push to customers') : __('Create & push to customers') }}
+                            </button>
+                            <button type="submit" class="w-full px-4 py-2 rounded-full border border-paper-200 bg-paper-0 text-ink-800 text-[12.5px] font-semibold hover:bg-paper-50">
+                                {{ $editing ? __('Save to library only') : __('Create without pushing') }}
                             </button>
                         </div>
                     </div>

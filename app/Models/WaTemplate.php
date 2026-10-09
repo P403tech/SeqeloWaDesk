@@ -26,6 +26,7 @@ class WaTemplate extends Model
     protected $fillable = [
         'user_id',
         'workspace_id',
+        'source_sample_id',
         'provider_config_id',
         'meta_template_id',
         'twilio_content_sid',

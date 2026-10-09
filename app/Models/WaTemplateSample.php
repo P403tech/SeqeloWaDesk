@@ -16,13 +16,14 @@ class WaTemplateSample extends Model
         'slug', 'title', 'category', 'meta_category', 'language',
         'header', 'body', 'footer', 'buttons',
         'color_from', 'color_to', 'emoji',
-        'is_active', 'sort_order', 'created_by',
+        'is_active', 'sort_order', 'created_by', 'last_pushed_at',
     ];
 
     protected $casts = [
         'buttons'    => 'array',
-        'is_active'  => 'boolean',
-        'sort_order' => 'integer',
+        'is_active'      => 'boolean',
+        'sort_order'     => 'integer',
+        'last_pushed_at' => 'datetime',
     ];
 
     public const META_CATEGORIES = [

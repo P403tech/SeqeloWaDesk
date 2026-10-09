@@ -17,7 +17,7 @@
                 <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[40px] leading-[1.0]">
                     {{ __('WhatsApp') }} <span class="italic text-wa-deep">{{ __('samples') }}</span>.</h1>
                 <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-                    {{ __('Write starting copy once. Every tenant sees it on Templates → Use sample, then brands it and submits to their own Meta WABA. These are not approved templates.') }}
+                    {{ __('Edit, save, then Push to customers. That puts a real template on every customer’s Templates → Your templates list. Unofficial can send it. Cloud API customers still submit it to Meta on their own number. These are not Meta-approved for you.') }}
                 </p>
             </div>
             <a href="{{ route('admin.template-samples.create') }}"
@@ -45,7 +45,7 @@
         <div class="bg-paper-0 border border-paper-200 rounded-[14px] shadow-card overflow-hidden">
             <div class="overflow-x-auto">
                 <div class="min-w-[780px]">
-                    <div class="px-4 py-2.5 grid grid-cols-[1.6fr_120px_110px_70px_120px] items-center gap-3 border-b border-paper-200 bg-paper-50 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                    <div class="px-4 py-2.5 grid grid-cols-[1.6fr_120px_110px_70px_160px] items-center gap-3 border-b border-paper-200 bg-paper-50 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
                         <div>{{ __('Sample') }}</div>
                         <div>{{ __('Category') }}</div>
                         <div>{{ __('Meta type') }}</div>
@@ -54,7 +54,7 @@
                     </div>
 
                     @forelse ($samples as $s)
-                        <div class="px-4 py-3 grid grid-cols-[1.6fr_120px_110px_70px_120px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50 transition">
+                        <div class="px-4 py-3 grid grid-cols-[1.6fr_120px_110px_70px_160px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50 transition">
                             <div class="min-w-0 flex items-center gap-3">
                                 <span class="w-9 h-9 rounded-lg shrink-0 grid place-items-center text-[16px] text-white"
                                     style="background: linear-gradient(135deg, {{ $s->color_from }}, {{ $s->color_to }})">{{ $s->emoji }}</span>
@@ -66,6 +66,9 @@
                                         @endunless
                                     </div>
                                     <div class="font-mono text-[11px] text-ink-500 truncate">{{ $s->slug }}</div>
+                                    @if ($s->last_pushed_at)
+                                        <div class="text-[10px] text-ink-500">{{ __('Pushed') }} {{ $s->last_pushed_at->diffForHumans() }}</div>
+                                    @endif
                                 </div>
                             </div>
                             <div class="text-[12px] text-ink-700">{{ \App\Support\WaTemplateSampleLibrary::CATEGORIES[$s->category] ?? $s->category }}</div>
@@ -84,6 +87,20 @@
                                                 <path d="M2 2l12 12M6.5 6.6a2 2 0 0 0 2.8 2.8M4 4.6C2.4 5.7 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1 0 1.9-.2 2.7-.6M9.5 4.1A6.6 6.6 0 0 1 14.5 8s-.5.9-1.5 1.9" />
                                             @endif
                                         </svg>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ route('admin.template-samples.push', $s->id) }}" class="inline"
+                                    data-confirm-form
+                                    data-confirm-title="{{ __('Push to customers?') }}"
+                                    data-confirm-message="{{ __('Puts this copy in every active customer workspace. Unofficial can send it now. Cloud API customers still submit it to Meta. Copies already on Meta are not overwritten.') }}"
+                                    data-confirm-accept="{{ __('Push') }}"
+                                    data-confirm-cancel="{{ __('Cancel') }}"
+                                    data-confirm-tone="default">
+                                    @csrf
+                                    <button type="submit"
+                                        class="w-8 h-8 rounded-lg grid place-items-center hover:bg-wa-mint text-wa-deep transition"
+                                        title="{{ __('Push to customers') }}">
+                                        <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 11V3M4.5 6.5 8 3l3.5 3.5M3 13h10" /></svg>
                                     </button>
                                 </form>
                                 <a href="{{ route('admin.template-samples.edit', $s->id) }}"

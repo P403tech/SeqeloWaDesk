@@ -429,6 +429,7 @@ Route::prefix('template-samples')->name('template-samples.')->group(function () 
     Route::get   ('/{id}/edit',        [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'edit'])->whereNumber('id')->name('edit');
     Route::put   ('/{id}',             [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'update'])->whereNumber('id')->name('update');
     Route::post  ('/{id}/toggle',      [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'toggle'])->whereNumber('id')->name('toggle');
+    Route::post  ('/{id}/push',        [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'push'])->whereNumber('id')->name('push');
     Route::delete('/{id}',             [\App\Http\Controllers\Admin\WaTemplateSampleController::class, 'destroy'])->whereNumber('id')->name('destroy');
 });
 

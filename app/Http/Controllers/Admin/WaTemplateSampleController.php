@@ -4,13 +4,15 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\WaTemplateSample;
+use App\Services\WaTemplateSamplePublisher;
 use App\Support\WaTemplateSampleLibrary;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 /**
  * /admin/template-samples — WhatsApp sample copy tenants can start from.
- * Not Meta-approved. "Use sample" on /templates copies into the tenant form.
+ * Save updates the gallery. "Push to customers" installs a real template
+ * into every active workspace (Your templates). Not a Meta approval.
  */
 class WaTemplateSampleController extends Controller
 {
@@ -63,6 +65,15 @@ class WaTemplateSampleController extends Controller
 
         return redirect()->route('admin.template-samples.index')
             ->with('success', __('Sample deleted.'));
+    }
+
+    public function push(int $id)
+    {
+        $sample = WaTemplateSample::findOrFail($id);
+        $stats = app(WaTemplateSamplePublisher::class)->push($sample);
+
+        return redirect()->route('admin.template-samples.index')
+            ->with('success', $this->pushFlash($stats));
     }
 
     private function persist(Request $request, ?WaTemplateSample $sample)
@@ -124,13 +135,33 @@ class WaTemplateSampleController extends Controller
 
         if ($sample) {
             $sample->update($payload);
+            $row = $sample;
         } else {
             $payload['created_by'] = $request->user()?->id;
-            WaTemplateSample::create($payload);
+            $row = WaTemplateSample::create($payload);
+        }
+
+        if ($request->boolean('push_to_customers')) {
+            $stats = app(WaTemplateSamplePublisher::class)->push($row);
+
+            return redirect()->route('admin.template-samples.index')
+                ->with('success', __('Sample saved. ').$this->pushFlash($stats));
         }
 
         return redirect()->route('admin.template-samples.index')
-            ->with('success', __('Sample saved. Visible tenants can Use sample on Templates.'));
+            ->with('success', __('Sample saved. Visible tenants can Use sample on Templates. Push to customers to put it in their template list.'));
+    }
+
+    /**
+     * @param  array{created: int, updated: int, skipped: int}  $stats
+     */
+    private function pushFlash(array $stats): string
+    {
+        return __('Pushed to customers: :created new, :updated updated, :skipped already on Meta (left alone).', [
+            'created' => $stats['created'],
+            'updated' => $stats['updated'],
+            'skipped' => $stats['skipped'],
+        ]);
     }
 
     /**
