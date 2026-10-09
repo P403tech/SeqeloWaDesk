@@ -47,6 +47,17 @@ class SmartAgentBuilderP0Test extends TestCase
         $this->assertStringContainsString('value="paused"', $html);
         $this->assertStringNotContainsString('OpenAI (GPT)', $html);
         $this->assertSame(1, substr_count($html, 'data-add-source="catalog"'));
+        $this->assertStringContainsString('data-n="6"', $html);
+        $this->assertStringContainsString('data-step="6"', $html);
+        $this->assertStringContainsString('Same knowledge on every pipe', $html);
+        $knowledgeStart = strpos($html, 'data-step="5"');
+        $channelsStart = strpos($html, 'data-step="6"');
+        $this->assertNotFalse($knowledgeStart);
+        $this->assertNotFalse($channelsStart);
+        $this->assertGreaterThan($knowledgeStart, $channelsStart);
+        $knowledgePane = substr($html, $knowledgeStart, $channelsStart - $knowledgeStart);
+        $this->assertStringNotContainsString('data-field="channel_whatsapp"', $knowledgePane);
+        $this->assertStringContainsString('data-field="channel_whatsapp"', $html);
     }
 
     public function test_saving_an_agent_without_status_starts_paused(): void

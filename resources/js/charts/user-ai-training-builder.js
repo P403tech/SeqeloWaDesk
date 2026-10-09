@@ -1,5 +1,5 @@
-// Smart-agent builder — Identity → Persona → Brain → Safety → Knowledge
-// (channels + training live together on Knowledge).
+// Smart-agent builder — Identity → Persona → Brain → Safety → Knowledge → Channels
+// Knowledge is training only. Channels decide where the same knowledge may speak.
 export default function init() {
   const root = document.getElementById('ait-builder');
   if (!root) return;
@@ -31,7 +31,7 @@ export default function init() {
     if (window.confirm(opts.message || 'Are you sure?')) opts.onConfirm?.();
   };
 
-  const TOTAL_STEPS = 5;
+  const TOTAL_STEPS = 6;
   let current  = 1;
   let furthest = state.id ? TOTAL_STEPS : 1;
 
@@ -288,8 +288,8 @@ export default function init() {
   root.querySelectorAll('.step-node').forEach((node) => {
     node.addEventListener('click', () => {
       const target = parseInt(node.dataset.n, 10);
-      if (target === 5 && !state.id) {
-        toast('Save the agent first — Knowledge needs a saved row.', 'info');
+      if (target >= 5 && !state.id) {
+        toast('Save the agent first — Knowledge and Channels need a saved row.', 'info');
         return;
       }
       // Free to jump backward / to an already-cleared step; forward
@@ -301,7 +301,7 @@ export default function init() {
   document.getElementById('ait-prev').addEventListener('click', () => { if (current > 1) showStep(current - 1); });
   document.getElementById('ait-next').addEventListener('click', async () => {
     if (!gateForward(current)) return;
-    // Save before unlocking Knowledge (step 5).
+    // Save before unlocking Knowledge (step 5) and Channels (step 6).
     if (current === 4) {
       const ok = await saveAssistant({ silent: true });
       if (!ok) return;
@@ -349,7 +349,7 @@ export default function init() {
         return { ok: false, msg: 'Creativity must be between 0 and 2.', el: field('temperature') };
       }
     }
-    // Step 4 safety optional; Step 5 knowledge + channels optional.
+    // Step 4 safety, step 5 knowledge, and step 6 channels are optional.
     return { ok: true };
   }
 
@@ -445,8 +445,8 @@ export default function init() {
 
   function agentReturnUrl() {
     const path = state.id
-      ? `/ai-training/${state.id}/edit?step=5`
-      : '/ai-training/create?step=5';
+      ? `/ai-training/${state.id}/edit?step=6`
+      : '/ai-training/create?step=6';
     return window.location.origin + window.appUrl(path);
   }
 
@@ -458,7 +458,7 @@ export default function init() {
     }
     const ok = await saveAssistant({ silent: true });
     if (!ok) return false;
-    history.replaceState({}, '', window.appUrl(`/ai-training/${state.id}/edit?step=5`));
+    history.replaceState({}, '', window.appUrl(`/ai-training/${state.id}/edit?step=6`));
     return true;
   }
 

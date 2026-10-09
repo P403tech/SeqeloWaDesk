@@ -70,7 +70,7 @@
                         {{ __('We already built a Customer Support agent for every workspace. Open it and edit the brief — or add another.') }}
                     </p>
                     <div class="flex flex-wrap gap-2 mt-4">
-                        @foreach ([__('Identity'), __('Persona'), __('Brain'), __('Safety'), __('Knowledge')] as $i => $step)
+                        @foreach ([__('Identity'), __('Persona'), __('Brain'), __('Safety'), __('Knowledge'), __('Channels')] as $i => $step)
                             <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-paper-0/80 border border-paper-200 text-[11px] font-medium text-ink-700">
                                 <span class="font-mono text-[10px] text-wa-deep">{{ str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT) }}</span>
                                 {{ $step }}

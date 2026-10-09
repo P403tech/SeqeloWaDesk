@@ -97,8 +97,8 @@
             <div class="bg-white border border-paper-200 rounded-2xl shadow-card overflow-hidden">
 
                 {{-- ===== Stepper ===== --}}
-                <div class="px-5 py-4 border-b border-paper-200 bg-paper-50/40">
-                    <div class="flex items-center" id="ait-stepper">
+                <div class="px-5 py-4 border-b border-paper-200 bg-paper-50/40 overflow-x-auto">
+                    <div class="flex items-center min-w-[720px]" id="ait-stepper">
                         <div class="step-node flex items-center gap-2.5 flex-1 cursor-pointer" data-n="1">
                             <span
                                 class="dot w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold font-mono shrink-0 transition border-[1.5px] bg-paper-0 border-wa-deep text-wa-deep ring-4 ring-wa-deep/10">1</span>
@@ -127,11 +127,18 @@
                                 class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Safety') }}</span>
                             <span class="bar flex-1 h-[2px] mx-2 rounded bg-paper-200"></span>
                         </div>
-                        <div class="step-node flex items-center gap-2.5 cursor-pointer" data-n="5">
+                        <div class="step-node flex items-center gap-2.5 flex-1 cursor-pointer" data-n="5">
                             <span
                                 class="dot w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold font-mono shrink-0 transition border-[1.5px] bg-paper-0 border-paper-200 text-ink-500">5</span>
                             <span
                                 class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Knowledge') }}</span>
+                            <span class="bar flex-1 h-[2px] mx-2 rounded bg-paper-200"></span>
+                        </div>
+                        <div class="step-node flex items-center gap-2.5 cursor-pointer" data-n="6">
+                            <span
+                                class="dot w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold font-mono shrink-0 transition border-[1.5px] bg-paper-0 border-paper-200 text-ink-500">6</span>
+                            <span
+                                class="lab text-[11.5px] font-medium whitespace-nowrap text-ink-500">{{ __('Channels') }}</span>
                         </div>
                     </div>
                 </div>
@@ -360,7 +367,7 @@
                         </div>
                     </div>
 
-                    {{-- STEP 5: KNOWLEDGE (original train UI) + CHANNELS --}}
+                    {{-- STEP 5: KNOWLEDGE (training only — pipes are the next step) --}}
                     <div class="step-pane hidden" data-step="5">
                         <div class="flex items-center gap-2.5 mb-4">
                             <span
@@ -369,6 +376,7 @@
                                 class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Train the agent') }}</span>
                             <span class="font-mono text-[10px] text-ink-500">{{ __('knowledge') }}</span>
                         </div>
+                        <p class="text-[12px] text-ink-500 mb-4">{{ __('Add sources this agent may use. Same knowledge on every pipe — you pick channels on the next step.') }}</p>
 
                         <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-4">
                             <button type="button" data-add-source="url"
@@ -452,12 +460,19 @@
                            </div>
                           </div>
                         </div>
+                    </div>
 
-                        <div class="mt-6 pt-5 border-t border-paper-200">
-                            <h3 class="text-[13px] font-semibold text-ink-900 mb-1">{{ __('Channels') }}</h3>
-                            <p class="text-[12px] text-ink-500 mb-3">{{ __('Turn a pipe on, then choose full control or only the jobs you check. Same knowledge on every pipe.') }}</p>
-                            @include('user.ai-training._channel-setup')
+                    {{-- STEP 6: CHANNELS — where the agent may speak; knowledge stays shared --}}
+                    <div class="step-pane hidden" data-step="6">
+                        <div class="flex items-center gap-2.5 mb-4">
+                            <span
+                                class="w-[23px] h-[23px] rounded-[7px] bg-paper-50 text-wa-deep inline-flex items-center justify-center text-[10px] font-semibold font-mono shrink-0">06</span>
+                            <span
+                                class="font-serif text-[18px] leading-none text-ink-900 flex-1">{{ __('Channels') }}</span>
+                            <span class="font-mono text-[10px] text-ink-500">{{ __('optional') }}</span>
                         </div>
+                        <p class="text-[12px] text-ink-500 mb-3">{{ __('Turn a pipe on, then choose full control or only the jobs you check. Same knowledge on every pipe.') }}</p>
+                        @include('user.ai-training._channel-setup')
                     </div>
                 </div>
 
@@ -472,7 +487,7 @@
                         Previous
                     </button>
                     <div class="font-mono text-[11px] text-ink-500">{{ __('Step') }} <span id="ait-cur">1</span>
-                        of 5</div>
+                        of 6</div>
                     <div class="flex items-center gap-2">
                         <button id="ait-next" type="button"
                             class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold">

@@ -4,7 +4,7 @@ namespace App\Support;
 
 /**
  * After Facebook / TikTok / Shopify / Instagram OAuth, send the operator
- * back to the AI agent Knowledge step (channels live there) instead of /devices.
+ * back to the AI agent Channels step instead of /devices.
  */
 class ChannelSetupReturn
 {
