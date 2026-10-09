@@ -5,8 +5,8 @@
     @forelse ($samples as $s)
         <article
             class="bg-paper-0 border border-paper-200 rounded-[16px] overflow-hidden shadow-card flex flex-col hover:border-wa-deep hover:shadow-soft transition">
-            <div class="h-[118px] relative text-white px-4 py-3 flex flex-col justify-between"
-                style="background: linear-gradient(135deg, {{ $s['color_from'] ?? '#1B4B3D' }}, {{ $s['color_to'] ?? '#037D66' }})">
+            <div class="h-[118px] relative text-white px-4 py-3 flex flex-col justify-between bg-cover bg-center"
+                style="@if (!empty($s['image_url'])) background-image: linear-gradient(180deg, rgba(0,0,0,.15), rgba(0,0,0,.45)), url('{{ $s['image_url'] }}'); @else background: linear-gradient(135deg, {{ $s['color_from'] ?? '#1B4B3D' }}, {{ $s['color_to'] ?? '#037D66' }}); @endif">
                 <span class="text-[22px] leading-none">{{ $s['emoji'] }}</span>
                 <div class="font-semibold text-[13.5px] leading-tight drop-shadow-sm">{{ $s['header'] }}</div>
             </div>

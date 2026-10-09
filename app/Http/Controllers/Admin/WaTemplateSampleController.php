@@ -81,6 +81,8 @@ class WaTemplateSampleController extends Controller
         $cats = array_keys(WaTemplateSampleLibrary::CATEGORIES);
         $meta = array_keys(WaTemplateSample::META_CATEGORIES);
 
+        $headerType = $request->input('header_type') === 'image' ? 'image' : 'text';
+
         $data = $request->validate([
             'title'         => ['required', 'string', 'max:160'],
             'slug'          => [
@@ -90,7 +92,8 @@ class WaTemplateSampleController extends Controller
             'category'      => ['required', Rule::in($cats)],
             'meta_category' => ['required', Rule::in($meta)],
             'language'      => ['nullable', 'string', 'max:12'],
-            'header'        => ['required', 'string', 'max:60'],
+            'header_type'   => ['nullable', Rule::in(['text', 'image'])],
+            'header'        => [$headerType === 'text' ? 'required' : 'nullable', 'string', 'max:60'],
             'body'          => ['required', 'string', 'max:1024'],
             'footer'        => ['nullable', 'string', 'max:60'],
             'emoji'         => ['nullable', 'string', 'max:16'],
@@ -98,6 +101,8 @@ class WaTemplateSampleController extends Controller
             'color_to'      => ['required', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'sort_order'    => ['nullable', 'integer', 'min:0', 'max:9999'],
             'is_active'     => ['nullable', 'boolean'],
+            'remove_image'  => ['nullable', 'boolean'],
+            'image'         => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'buttons'       => ['nullable', 'array', 'max:3'],
             'buttons.*.type'=> ['nullable', Rule::in(['quick_reply', 'visit_website'])],
             'buttons.*.text'=> ['nullable', 'string', 'max:25'],
@@ -116,13 +121,35 @@ class WaTemplateSampleController extends Controller
             $footer = 'Reply STOP to unsubscribe';
         }
 
+        $header = trim((string) ($data['header'] ?? ''));
+        $imagePath = $sample?->image_path;
+        if ($request->boolean('remove_image')) {
+            $imagePath = null;
+            $headerType = 'text';
+        } elseif ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->store('wa-template-samples', media_disk());
+            $headerType = 'image';
+        }
+
+        if ($headerType === 'image' && ($imagePath === null || $imagePath === '')) {
+            return back()->withInput()->withErrors([
+                'image' => __('Upload a JPEG, PNG, or WebP (max 5MB) for an image header.'),
+            ]);
+        }
+
+        if ($header === '') {
+            $header = mb_substr((string) $data['title'], 0, 60);
+        }
+
         $payload = [
             'title'         => $data['title'],
             'slug'          => strtolower($data['slug']),
             'category'      => $data['category'],
             'meta_category' => $data['meta_category'],
             'language'      => ($data['language'] ?? '') ?: 'en_US',
-            'header'        => $data['header'],
+            'header_type'   => $headerType,
+            'header'        => $header,
+            'image_path'    => $imagePath,
             'body'          => $body,
             'footer'        => $footer,
             'emoji'         => ($data['emoji'] ?? '') ?: '✦',

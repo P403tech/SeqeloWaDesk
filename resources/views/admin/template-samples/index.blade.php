@@ -17,7 +17,7 @@
                 <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[40px] leading-[1.0]">
                     {{ __('WhatsApp') }} <span class="italic text-wa-deep">{{ __('samples') }}</span>.</h1>
                 <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-                    {{ __('Edit, save, then Push to customers. That puts a real template on every customer’s Templates → Your templates list. Unofficial can send it. Cloud API customers still submit it to Meta on their own number. These are not Meta-approved for you.') }}
+                    {{ __('Click a name to edit image and text, then Push to customers. Unofficial can send it. Each Cloud API customer still needs Meta to approve it on their own WhatsApp number — one approval does not cover everyone.') }}
                 </p>
             </div>
             <a href="{{ route('admin.template-samples.create') }}"
@@ -56,11 +56,15 @@
                     @forelse ($samples as $s)
                         <div class="px-4 py-3 grid grid-cols-[1.6fr_120px_110px_70px_160px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50 transition">
                             <div class="min-w-0 flex items-center gap-3">
+                                @if ($s->image_path)
+                                    <img src="{{ $s->imageUrl() }}" alt="" class="w-9 h-9 rounded-lg shrink-0 object-cover">
+                                @else
                                 <span class="w-9 h-9 rounded-lg shrink-0 grid place-items-center text-[16px] text-white"
                                     style="background: linear-gradient(135deg, {{ $s->color_from }}, {{ $s->color_to }})">{{ $s->emoji }}</span>
+                                @endif
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2">
-                                        <span class="font-semibold text-[13px] text-ink-900 truncate">{{ $s->title }}</span>
+                                        <a href="{{ route('admin.template-samples.edit', $s->id) }}" class="font-semibold text-[13px] text-ink-900 truncate hover:text-wa-deep">{{ $s->title }}</a>
                                         @unless ($s->is_active)
                                             <span class="text-[9.5px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-paper-100 text-ink-500">{{ __('hidden') }}</span>
                                         @endunless

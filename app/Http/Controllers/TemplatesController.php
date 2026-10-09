@@ -696,6 +696,20 @@ class TemplatesController extends Controller
         );
         if ($variableMap) $data['variable_map'] = $variableMap;
 
+        if (empty($data['attachment_file'])) {
+            $from = (string) $request->input('from_sample', '');
+            $lib = $from !== '' ? WaTemplateSampleLibrary::find($from) : null;
+            $attach = strtolower((string) ($data['attachment_type'] ?? 'none'));
+            if (is_array($lib)
+                && ($lib['header_type'] ?? '') === 'image'
+                && ($lib['image_path'] ?? '') !== ''
+                && ! in_array($attach, ['video', 'document', 'location'], true)) {
+                $data['attachment_type'] = 'image';
+                $data['attachment_file'] = $lib['image_path'];
+                $data['header_sample_url'] = $lib['image_url'] ?? null;
+            }
+        }
+
         $template = WaTemplate::create($data);
 
         // Instagram — the template is local to WaDesk, but ALSO push it up to

@@ -1,7 +1,7 @@
 @php
     $sample = $sample ?? null;
     $editing = (bool) $sample;
-    $action = $editing ? route('admin.template-samples.update', $sample->id) : route('admin.template-samples.store');
+    $action = $editing ? route('admin.template-samples.update', $sample?->id) : route('admin.template-samples.store');
     $buttons = old('buttons', $sample?->buttons ?? []);
     if (! is_array($buttons)) {
         $buttons = [];
@@ -9,8 +9,8 @@
     while (count($buttons) < 3) {
         $buttons[] = ['type' => 'quick_reply', 'text' => '', 'value' => ''];
     }
-    $colorFrom = strtolower((string) old('color_from', $sample->color_from ?? '#1B4B3D'));
-    $colorTo = strtolower((string) old('color_to', $sample->color_to ?? '#037D66'));
+    $colorFrom = strtolower((string) old('color_from', $sample?->color_from ?? '#1B4B3D'));
+    $colorTo = strtolower((string) old('color_to', $sample?->color_to ?? '#037D66'));
 @endphp
 
 <x-layouts.admin :title="$editing ? __('Edit sample') : __('New sample')" admin-key="template-samples" page="admin-template-samples-form">
@@ -42,7 +42,7 @@
         <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[36px] leading-[1.0]">
             {{ $editing ? __('Edit') : __('New') }} <span class="italic text-wa-deep">{{ __('sample') }}</span></h1>
         <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-            {{ __('Save to library updates the Use sample gallery. Save & push installs it on every customer’s Your templates list. Use named tokens like {{name}} — never start or end the body with a token.') }}
+            {{ __('Edit the header image and the message text, then save or push. Cloud API customers still submit this to Meta on their own number — one approval does not cover every customer.') }}
         </p>
     </div>
 
@@ -57,7 +57,7 @@
         @endif
         <x-admin.flash />
 
-        <form id="sampleForm" method="POST" action="{{ $action }}">
+        <form id="sampleForm" method="POST" action="{{ $action }}" enctype="multipart/form-data">
             @csrf
             @if ($editing) @method('PUT') @endif
 
@@ -71,13 +71,13 @@
                         <div class="p-5 space-y-4">
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Title') }} <span class="text-accent-coral">*</span></span>
-                                <input name="title" id="sample-title" value="{{ old('title', $sample->title ?? '') }}" required maxlength="160"
+                                <input name="title" id="sample-title" value="{{ old('title', $sample?->title ?? '') }}" required maxlength="160"
                                     placeholder="{{ __('e.g. Ramadan greeting') }}"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[14px] focus:outline-none focus:border-wa-deep">
                             </label>
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Slug') }} <span class="text-accent-coral">*</span></span>
-                                <input name="slug" id="sample-slug" value="{{ old('slug', $sample->slug ?? '') }}" required maxlength="80"
+                                <input name="slug" id="sample-slug" value="{{ old('slug', $sample?->slug ?? '') }}" required maxlength="80"
                                     placeholder="ramadan_greeting"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
                                 <span class="text-[11px] text-ink-500">{{ __('Shown on the tenant card. letters, numbers, underscores.') }}</span>
@@ -87,7 +87,7 @@
                                     <span class="text-[11.5px] font-semibold">{{ __('Library category') }}</span>
                                     <select name="category" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
                                         @foreach (\App\Support\WaTemplateSampleLibrary::CATEGORIES as $key => $label)
-                                            <option value="{{ $key }}" @selected(old('category', $sample->category ?? 'festival') === $key)>{{ $label }}</option>
+                                            <option value="{{ $key }}" @selected(old('category', $sample?->category ?? 'festival') === $key)>{{ $label }}</option>
                                         @endforeach
                                     </select>
                                 </label>
@@ -95,7 +95,7 @@
                                     <span class="text-[11.5px] font-semibold">{{ __('WhatsApp type') }}</span>
                                     <select name="meta_category" class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
                                         @foreach (\App\Models\WaTemplateSample::META_CATEGORIES as $key => $label)
-                                            <option value="{{ $key }}" @selected(old('meta_category', $sample->meta_category ?? 'marketing') === $key)>{{ $label }}</option>
+                                            <option value="{{ $key }}" @selected(old('meta_category', $sample?->meta_category ?? 'marketing') === $key)>{{ $label }}</option>
                                         @endforeach
                                     </select>
                                 </label>
@@ -109,20 +109,48 @@
                             <h2 class="font-serif text-[22px] leading-tight mt-1">{{ __('Message') }}</h2>
                         </div>
                         <div class="p-5 space-y-4">
-                            <label class="space-y-1.5 block">
-                                <span class="text-[11.5px] font-semibold">{{ __('Header') }} <span class="text-accent-coral">*</span></span>
-                                <input name="header" value="{{ old('header', $sample->header ?? '') }}" required maxlength="60"
+                            @php $headerType = old('header_type', $sample?->header_type ?? 'text'); @endphp
+                            <div>
+                                <span class="text-[11.5px] font-semibold">{{ __('Header') }}</span>
+                                <div class="mt-2 flex flex-wrap gap-4 text-[13px]">
+                                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                                        <input type="radio" name="header_type" value="text" @checked($headerType !== 'image') class="accent-wa-deep">
+                                        {{ __('Text') }}
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                                        <input type="radio" name="header_type" value="image" @checked($headerType === 'image') class="accent-wa-deep">
+                                        {{ __('Image') }}
+                                    </label>
+                                </div>
+                            </div>
+                            <label class="space-y-1.5 block" data-header-text>
+                                <span class="text-[11.5px] font-semibold">{{ __('Header text') }}</span>
+                                <input name="header" value="{{ old('header', $sample?->header ?? '') }}" maxlength="60"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[14px] focus:outline-none focus:border-wa-deep">
                             </label>
+                            <div class="space-y-1.5" data-header-image>
+                                <span class="text-[11.5px] font-semibold">{{ __('Header image') }}</span>
+                                @if ($sample?->image_path)
+                                    <img src="{{ $sample?->imageUrl() }}" alt="" class="w-full max-h-40 object-cover rounded-xl border border-paper-200">
+                                    <label class="flex items-center gap-2 text-[12px] text-ink-600 cursor-pointer">
+                                        <input type="checkbox" name="remove_image" value="1" class="accent-wa-deep">
+                                        {{ __('Remove current image') }}
+                                    </label>
+                                @endif
+                                <input type="file" name="image" id="sample-image" accept="image/jpeg,image/png,image/webp"
+                                    class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2 text-[12.5px]">
+                                <span class="text-[11px] text-ink-500">{{ __('JPEG, PNG, or WebP · max 5MB. This becomes the WhatsApp IMAGE header. Body text still sends below it.') }}</span>
+                                <img id="sample-image-preview" alt="" class="hidden w-full max-h-40 object-cover rounded-xl border border-paper-200">
+                            </div>
                             <label class="space-y-1.5 block">
-                                <span class="text-[11.5px] font-semibold">{{ __('Body') }} <span class="text-accent-coral">*</span></span>
+                                <span class="text-[11.5px] font-semibold">{{ __('Body text') }} <span class="text-accent-coral">*</span></span>
                                 <textarea name="body" rows="5" required maxlength="1024"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep"
-                                    placeholder="{{ __('Hello {{name}}, …') }}">{{ old('body', $sample->body ?? '') }}</textarea>
+                                    placeholder="Hello @{{name}}, …">{{ old('body', $sample?->body ?? '') }}</textarea>
                             </label>
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Footer') }}</span>
-                                <input name="footer" value="{{ old('footer', $sample->footer ?? '') }}" maxlength="60"
+                                <input name="footer" value="{{ old('footer', $sample?->footer ?? '') }}" maxlength="60"
                                     placeholder="{{ __('Leave blank on marketing — we add Reply STOP to unsubscribe.') }}"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
                             </label>
@@ -171,12 +199,12 @@
                         <div class="p-5 space-y-4">
                             <div class="h-[88px] rounded-xl text-white px-3 py-2.5 flex flex-col justify-between" id="sample-preview"
                                 style="background: linear-gradient(135deg, {{ $colorFrom }}, {{ $colorTo }})">
-                                <span class="text-[20px] leading-none" id="sample-preview-emoji">{{ old('emoji', $sample->emoji ?? '✦') }}</span>
-                                <span class="text-[12.5px] font-semibold truncate" id="sample-preview-header">{{ old('header', $sample->header ?? __('Header')) }}</span>
+                                <span class="text-[20px] leading-none" id="sample-preview-emoji">{{ old('emoji', $sample?->emoji ?? '✦') }}</span>
+                                <span class="text-[12.5px] font-semibold truncate" id="sample-preview-header">{{ old('header', $sample?->header ?? __('Header')) }}</span>
                             </div>
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Emoji') }}</span>
-                                <input name="emoji" id="sample-emoji" value="{{ old('emoji', $sample->emoji ?? '✦') }}" maxlength="16"
+                                <input name="emoji" id="sample-emoji" value="{{ old('emoji', $sample?->emoji ?? '✦') }}" maxlength="16"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[16px] focus:outline-none focus:border-wa-deep">
                             </label>
                             <div class="grid grid-cols-2 gap-3">
@@ -193,12 +221,12 @@
                             </div>
                             <label class="space-y-1.5 block">
                                 <span class="text-[11.5px] font-semibold">{{ __('Sort order') }}</span>
-                                <input name="sort_order" type="number" min="0" max="9999" value="{{ old('sort_order', $sample->sort_order ?? 0) }}"
+                                <input name="sort_order" type="number" min="0" max="9999" value="{{ old('sort_order', $sample?->sort_order ?? 0) }}"
                                     class="w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] focus:outline-none focus:border-wa-deep">
                             </label>
                             <label class="flex items-start gap-2.5 pt-1 cursor-pointer">
                                 <input type="hidden" name="is_active" value="0">
-                                <input type="checkbox" name="is_active" value="1" @checked(old('is_active', $sample->is_active ?? true)) class="w-4 h-4 mt-0.5 accent-wa-deep">
+                                <input type="checkbox" name="is_active" value="1" @checked(old('is_active', $sample?->is_active ?? true)) class="w-4 h-4 mt-0.5 accent-wa-deep">
                                 <span class="text-[12.5px] text-ink-700">{{ __('Visible to tenants on Templates.') }}</span>
                             </label>
                         </div>
@@ -243,6 +271,14 @@
             to?.addEventListener('input', paint);
             emoji?.addEventListener('input', paint);
             header?.addEventListener('input', paint);
+            const file = document.getElementById('sample-image');
+            const filePreview = document.getElementById('sample-image-preview');
+            file?.addEventListener('change', () => {
+                const f = file.files && file.files[0];
+                if (!f || !filePreview) return;
+                filePreview.src = URL.createObjectURL(f);
+                filePreview.classList.remove('hidden');
+            });
         })();
     </script>
 </x-layouts.admin>

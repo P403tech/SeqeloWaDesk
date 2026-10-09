@@ -7,6 +7,7 @@ use App\Models\WaTemplate;
 use App\Models\WaTemplateSample;
 use App\Models\Workspace;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Tests\TestCase;
 
 class AdminWaTemplateSampleTest extends TestCase
@@ -211,5 +212,54 @@ class AdminWaTemplateSampleTest extends TestCase
         $this->actingAs($customer)
             ->post(route('admin.template-samples.push', $row->id))
             ->assertForbidden();
+    }
+
+    public function test_admin_can_open_edit_and_save_a_header_image(): void
+    {
+        $admin = $this->platformAdmin();
+        $customer = $this->customer();
+        $row = WaTemplateSample::where('slug', 'christmas_greetings')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get(route('admin.template-samples.create'))
+            ->assertOk()
+            ->assertSee('Header image')
+            ->assertSee('Body text');
+
+        $this->actingAs($admin)
+            ->get(route('admin.template-samples.edit', $row->id))
+            ->assertOk()
+            ->assertSee('christmas_greetings')
+            ->assertSee('Header image')
+            ->assertSee('Body text');
+
+        $this->actingAs($admin)->put(route('admin.template-samples.update', $row->id), [
+            'title'              => 'Christmas greetings',
+            'slug'               => 'christmas_greetings',
+            'category'           => 'festival',
+            'meta_category'      => 'marketing',
+            'header_type'        => 'image',
+            'header'             => 'Merry Christmas',
+            'body'               => 'Hello {{name}}, wishing you a joyful Christmas with a photo header.',
+            'footer'             => 'Reply STOP to unsubscribe',
+            'emoji'              => '🎄',
+            'color_from'         => '#7F1D1D',
+            'color_to'           => '#B91C1C',
+            'is_active'          => '1',
+            'image'              => UploadedFile::fake()->image('banner.jpg', 640, 360),
+            'push_to_customers'  => '1',
+        ])->assertRedirect(route('admin.template-samples.index'));
+
+        $row->refresh();
+        $this->assertSame('image', $row->header_type);
+        $this->assertNotEmpty($row->image_path);
+
+        $tpl = WaTemplate::query()
+            ->where('workspace_id', $customer->current_workspace_id)
+            ->where('source_sample_id', $row->id)
+            ->first();
+        $this->assertNotNull($tpl);
+        $this->assertSame('image', $tpl->attachment_type);
+        $this->assertSame($row->image_path, $tpl->attachment_file);
     }
 }

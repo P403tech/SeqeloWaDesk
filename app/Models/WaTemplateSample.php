@@ -14,8 +14,8 @@ class WaTemplateSample extends Model
 {
     protected $fillable = [
         'slug', 'title', 'category', 'meta_category', 'language',
-        'header', 'body', 'footer', 'buttons',
-        'color_from', 'color_to', 'emoji',
+        'header_type', 'header', 'body', 'footer', 'buttons',
+        'color_from', 'color_to', 'emoji', 'image_path',
         'is_active', 'sort_order', 'created_by', 'last_pushed_at',
     ];
 
@@ -42,6 +42,13 @@ class WaTemplateSample extends Model
         return $q->orderBy('sort_order')->orderBy('id');
     }
 
+    public function imageUrl(): string
+    {
+        $path = (string) ($this->image_path ?? '');
+
+        return $path !== '' ? media_url($path) : '';
+    }
+
     /**
      * Shape the customer gallery / create-form expects.
      *
@@ -61,7 +68,10 @@ class WaTemplateSample extends Model
             'category_label' => WaTemplateSampleLibrary::CATEGORIES[$this->category] ?? $this->category,
             'meta_category'  => (string) $this->meta_category,
             'language'       => (string) ($this->language ?: 'en_US'),
+            'header_type'    => (string) ($this->header_type ?: 'text'),
             'header'         => (string) $this->header,
+            'image_path'     => (string) ($this->image_path ?: ''),
+            'image_url'      => $this->imageUrl(),
             'body'           => $body,
             'footer'         => (string) $this->footer,
             'buttons'        => is_array($this->buttons) ? $this->buttons : [],

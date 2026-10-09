@@ -108,12 +108,18 @@
                     <div class="text-[11.5px] text-ink-600 mt-0.5">
                         {{ __('Edit the brand name, links, and dates, then submit for Meta review. Samples are starting copy — they are not pre-approved.') }}
                     </div>
+                    @if (!empty($sample['image_url']))
+                        <img src="{{ $sample['image_url'] }}" alt="" class="mt-2 max-h-24 rounded-lg object-cover">
+                    @endif
                 </div>
             </div>
         @endif
         <form id="templateForm" method="POST" action="{{ route('user.templates.store') }}"
             enctype="multipart/form-data" class="grid grid-cols-1 xl:grid-cols-[1fr_342px] gap-5">
             @csrf
+            @if (!empty($sample['slug']))
+                <input type="hidden" name="from_sample" value="{{ $sample['slug'] }}">
+            @endif
             <input type="hidden" name="template_type" id="template-type-input"
                 value="{{ request('type', 'standard') }}">
             @if ($isCatalog && ! $catalogHasWaba)
@@ -490,8 +496,8 @@
                                     for="attach-type">{{ __('Attachment type') }}</label>
                                 <select id="attach-type" name="attachment_type"
                                     class="ctrl w-full px-[11px] py-[7px] border border-paper-200 rounded-lg bg-white text-[12.5px] text-ink-900 transition leading-[1.4] font-sans placeholder:text-[#8A9A95] focus:outline-none focus:border-wa-deep focus:ring-4 focus:ring-wa-deep/10">
-                                    <option value="none">{{ __('None') }}</option>
-                                    <option value="image">{{ __('Image') }}</option>
+                                    <option value="none" @selected(($sample['header_type'] ?? '') !== 'image')>{{ __('None') }}</option>
+                                    <option value="image" @selected(($sample['header_type'] ?? '') === 'image')>{{ __('Image') }}</option>
                                     <option value="video">{{ __('Video') }}</option>
                                     <option value="document">{{ __('Document') }}</option>
                                     <option value="location">{{ __('Location') }}</option>

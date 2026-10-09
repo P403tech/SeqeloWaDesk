@@ -91,20 +91,23 @@ class WaTemplateSamplePublisher
         $rawHeader = (string) $sample->header;
         $rawBody = (string) $sample->body;
         $rawFooter = (string) $sample->footer;
+        $hasImage = ($sample->header_type === 'image') && (string) ($sample->image_path ?? '') !== '';
 
         return [
-            'template_name'    => $sample->slug,
-            'category'         => $sample->category,
-            'meta_category'    => $sample->meta_category,
-            'template_type'    => 'standard',
-            'header'           => TemplatesController::normalizePlaceholders($rawHeader),
-            'template_body'    => TemplatesController::normalizePlaceholders($rawBody),
-            'footer'           => TemplatesController::normalizePlaceholders($rawFooter),
-            'buttons'          => $this->buttons($sample->buttons),
-            'language'         => $sample->language ?: 'en_US',
-            'parameter_format' => 'POSITIONAL',
-            'variable_map'     => $this->variableMap($rawHeader, $rawBody),
-            'attachment_type'  => 'none',
+            'template_name'     => $sample->slug,
+            'category'          => $sample->category,
+            'meta_category'     => $sample->meta_category,
+            'template_type'     => 'standard',
+            'header'            => $hasImage ? '' : TemplatesController::normalizePlaceholders($rawHeader),
+            'template_body'     => TemplatesController::normalizePlaceholders($rawBody),
+            'footer'            => TemplatesController::normalizePlaceholders($rawFooter),
+            'buttons'           => $this->buttons($sample->buttons),
+            'language'          => $sample->language ?: 'en_US',
+            'parameter_format'  => 'POSITIONAL',
+            'variable_map'      => $this->variableMap($hasImage ? '' : $rawHeader, $rawBody),
+            'attachment_type'   => $hasImage ? 'image' : 'none',
+            'attachment_file'   => $hasImage ? $sample->image_path : null,
+            'header_sample_url' => $hasImage ? $sample->imageUrl() : null,
         ];
     }
 
