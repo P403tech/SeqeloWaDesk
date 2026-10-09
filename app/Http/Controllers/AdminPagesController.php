@@ -1724,6 +1724,12 @@ class AdminPagesController extends Controller
         $defaultSlug = $providerToSlug[$defaultProvider] ?? 'wa-api';
 
         \App\Models\SystemSetting::set('allowed_send_methods', $enabledProviders, 'json',   'Platform-wide enabled WhatsApp engines (any subset of baileys/waba/twilio).');
+        \App\Models\SystemSetting::set(
+            'unofficial_api_enabled',
+            in_array('baileys', $enabledProviders, true),
+            'bool',
+            'Unofficial WhatsApp API (Baileys) is available platform-wide.',
+        );
         \App\Models\SystemSetting::set('default_send_method',  $defaultProvider,  'string', 'Default engine for sends that do not pin a sender.');
         \App\Models\SystemSetting::set('active_engine_slug',   $defaultSlug,      'string', 'Default engine card (back-compat: the visual slug of default_send_method).');
 

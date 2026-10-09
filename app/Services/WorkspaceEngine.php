@@ -440,6 +440,12 @@ class WorkspaceEngine
         ));
         if (empty($avail)) $avail = [self::defaultEngineFor($workspaceId)];
 
+        // Addon on → Unofficial stays on the Channels chooser even when a
+        // workspace's enabled_engines JSON only lists WABA / Twilio.
+        if (self::unofficialEnabled() && ! in_array(self::ENGINE_BAILEYS, $avail, true)) {
+            $avail[] = self::ENGINE_BAILEYS;
+        }
+
         // Default engine first, deduped.
         $default = self::defaultEngineFor($workspaceId);
         return array_values(array_unique(array_merge(

@@ -1,0 +1,12 @@
+{
+    "slug": "unofficial-api",
+    "name": "Unofficial WhatsApp API",
+    "version": "1.0.0",
+    "min_core": "1.0.0",
+    "description": "QR-pair WhatsApp Web (Baileys) on Channels. Pairing and send already live in core; this folder is the install gate.",
+    "nav": [],
+    "plan_features": {},
+    "plan_limits": {},
+    "routes": [],
+    "migrate": false
+}
