@@ -16,15 +16,41 @@ use Illuminate\Validation\Rule;
  */
 class WaTemplateSampleController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $samples = WaTemplateSample::query()->ordered()->paginate(40);
+        $category = (string) $request->query('category', 'all');
+        if ($category !== 'all' && ! isset(WaTemplateSampleLibrary::CATEGORIES[$category])) {
+            $category = 'all';
+        }
+        $search = (string) $request->query('q', '');
+
         $stats = [
             'total'  => WaTemplateSample::count(),
             'active' => WaTemplateSample::where('is_active', true)->count(),
         ];
 
-        return view('admin.template-samples.index', compact('samples', 'stats'));
+        $q = WaTemplateSample::query()->ordered();
+        if ($category !== 'all') {
+            $q->where('category', $category);
+        }
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $q->where(function ($w) use ($like) {
+                $w->where('slug', 'like', $like)
+                    ->orWhere('title', 'like', $like)
+                    ->orWhere('body', 'like', $like);
+            });
+        }
+
+        $samples = $q->paginate(40)->withQueryString();
+        $categoryCounts = ['all' => WaTemplateSample::count()];
+        foreach (array_keys(WaTemplateSampleLibrary::CATEGORIES) as $key) {
+            $categoryCounts[$key] = WaTemplateSample::where('category', $key)->count();
+        }
+
+        return view('admin.template-samples.index', compact(
+            'samples', 'stats', 'category', 'search', 'categoryCounts'
+        ));
     }
 
     public function create()
