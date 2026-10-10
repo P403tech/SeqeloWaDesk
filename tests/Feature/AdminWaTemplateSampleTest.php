@@ -206,6 +206,37 @@ class AdminWaTemplateSampleTest extends TestCase
         $this->assertSame('Locked on Meta.', (string) $locked->fresh()->template_body);
     }
 
+    public function test_selective_push_only_targets_chosen_workspaces(): void
+    {
+        $admin = $this->platformAdmin();
+        $target = $this->customer();
+        $other = $this->customer();
+        $row = WaTemplateSample::where('slug', 'christmas_greetings')->firstOrFail();
+
+        $this->actingAs($admin)->post(route('admin.template-samples.push', $row->id), [
+            'scope'         => 'selected',
+            'workspace_ids' => [$target->current_workspace_id],
+        ])->assertRedirect(route('admin.template-samples.index'));
+
+        $this->assertNotNull(WaTemplate::query()
+            ->where('workspace_id', $target->current_workspace_id)
+            ->where('source_sample_id', $row->id)
+            ->first());
+        $this->assertNull(WaTemplate::query()
+            ->where('workspace_id', $other->current_workspace_id)
+            ->where('source_sample_id', $row->id)
+            ->first());
+    }
+
+    public function test_admin_push_status_page_loads(): void
+    {
+        $admin = $this->platformAdmin();
+        $this->actingAs($admin)
+            ->get(route('admin.template-samples.push-status'))
+            ->assertOk()
+            ->assertSee('Push status');
+    }
+
     public function test_customer_cannot_push_samples(): void
     {
         $customer = $this->customer();

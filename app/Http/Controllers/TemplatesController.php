@@ -227,6 +227,9 @@ class TemplatesController extends Controller
                 ->where('workspace_id', $wsId)->where('provider', 'waba')->exists(),
             'sampleCards'      => WaTemplateSampleLibrary::all(),
             'showSampleLibrary'=> $all->isEmpty(),
+            'templateLifecycleChecklist' => $wsId
+                ? app(\App\Services\TemplatePushLifecycle::class)->workspaceChecklist($wsId)
+                : null,
         ];
 
         if ($request->wantsJson() || $request->boolean('partial')) {

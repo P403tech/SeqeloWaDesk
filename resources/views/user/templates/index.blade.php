@@ -73,6 +73,8 @@
 
             <!-- ===== MAIN ===== -->
             <main>
+                @include('user.templates._lifecycle_checklist')
+
                 <!-- header -->
                 <div class="mb-4 flex items-end justify-between gap-4 flex-wrap">
                     <div class="min-w-0">

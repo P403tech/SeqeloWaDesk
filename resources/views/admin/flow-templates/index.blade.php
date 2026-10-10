@@ -94,16 +94,8 @@
                             <div class="font-mono text-[12px] text-ink-700">{{ $t->node_count }}</div>
                             <div class="font-mono text-[12px] text-ink-700">{{ number_format($t->clone_count) }}</div>
                             <div class="flex items-center gap-1 justify-end flex-wrap">
-                                <form method="POST" action="{{ route('admin.flow-templates.push', $t->id) }}" class="inline"
-                                    data-confirm-form
-                                    data-confirm-title="{{ __('Push to customers?') }}"
-                                    data-confirm-message="{{ __('Installs this flow as an unpublished draft in every active workspace. Published copies are not overwritten.') }}"
-                                    data-confirm-accept="{{ __('Push') }}"
-                                    data-confirm-cancel="{{ __('Cancel') }}"
-                                    data-confirm-tone="default">
-                                    @csrf
-                                    <button type="submit" class="px-2.5 py-1 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[10.5px] font-semibold">{{ __('Push') }}</button>
-                                </form>
+                                <a href="{{ route('admin.flow-templates.push.form', $t->id) }}"
+                                    class="px-2.5 py-1 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[10.5px] font-semibold">{{ __('Push') }}</a>
                                 <form method="POST" action="{{ route('admin.flow-templates.toggle', $t->id) }}" class="inline">
                                     @csrf
                                     <button type="submit"

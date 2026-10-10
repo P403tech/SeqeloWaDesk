@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Flow;
 use App\Models\FlowTemplate;
 use App\Services\FlowTemplatePublisher;
+use App\Services\TemplatePushLifecycle;
 use Illuminate\Http\Request;
 
 /**
@@ -62,10 +63,32 @@ class FlowTemplateController extends Controller
         return redirect()->route('admin.flow-templates.index')->with('success', __('Template deleted.'));
     }
 
-    public function push(int $id)
+    public function pushForm(int $id, TemplatePushLifecycle $lifecycle)
+    {
+        return view('admin.flow-templates.push', [
+            'template'   => FlowTemplate::findOrFail($id),
+            'workspaces' => $lifecycle->activeWorkspacesForPicker(),
+        ]);
+    }
+
+    public function push(Request $request, int $id)
     {
         $template = FlowTemplate::findOrFail($id);
-        $stats = app(FlowTemplatePublisher::class)->push($template);
+        $data = $request->validate([
+            'scope'           => ['nullable', 'in:all,selected'],
+            'workspace_ids'   => ['nullable', 'array'],
+            'workspace_ids.*' => ['integer'],
+        ]);
+
+        $workspaceIds = null;
+        if (($data['scope'] ?? 'all') === 'selected') {
+            $workspaceIds = array_values(array_unique(array_map('intval', $data['workspace_ids'] ?? [])));
+            if ($workspaceIds === []) {
+                return back()->withInput()->withErrors(['workspace_ids' => __('Pick at least one workspace.')]);
+            }
+        }
+
+        $stats = app(FlowTemplatePublisher::class)->push($template, $workspaceIds);
 
         return redirect()->route('admin.flow-templates.index')
             ->with('success', $this->pushFlash($stats));

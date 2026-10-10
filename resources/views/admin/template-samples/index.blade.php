@@ -26,11 +26,15 @@
                     {{ __('Same cards customers see. Click a card to edit image and text, then push it into their Templates list. Each Cloud API number still needs its own Meta approval.') }}
                 </p>
             </div>
-            <a href="{{ route('admin.template-samples.create') }}"
-                class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold flex items-center gap-2 whitespace-nowrap">
-                <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10" /></svg>
-                {{ __('New Template Message') }}
-            </a>
+            <div class="flex items-center gap-2 flex-wrap">
+                <a href="{{ route('admin.template-samples.push-status') }}"
+                    class="px-4 py-2 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[12px] font-semibold">{{ __('Push status') }}</a>
+                <a href="{{ route('admin.template-samples.create') }}"
+                    class="px-4 py-2 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[12px] font-semibold flex items-center gap-2 whitespace-nowrap">
+                    <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10" /></svg>
+                    {{ __('New Template Message') }}
+                </a>
+            </div>
         </div>
 
         <x-admin.flash />
@@ -88,16 +92,8 @@
                         <div class="mt-3 grid grid-cols-2 gap-2">
                             <a href="{{ route('admin.template-samples.edit', $s->id) }}"
                                 class="text-center px-3 py-1.5 rounded-full bg-wa-deep hover:bg-wa-teal text-paper-0 text-[11.5px] font-semibold">{{ __('Edit') }}</a>
-                            <form method="POST" action="{{ route('admin.template-samples.push', $s->id) }}"
-                                data-confirm-form
-                                data-confirm-title="{{ __('Push to customers?') }}"
-                                data-confirm-message="{{ __('Puts this copy in every active customer workspace. Unofficial can send it now. Cloud API customers still submit it to Meta.') }}"
-                                data-confirm-accept="{{ __('Push') }}"
-                                data-confirm-cancel="{{ __('Cancel') }}"
-                                data-confirm-tone="default">
-                                @csrf
-                                <button type="submit" class="w-full px-3 py-1.5 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[11.5px] font-semibold">{{ __('Push') }}</button>
-                            </form>
+                            <a href="{{ route('admin.template-samples.push.form', $s->id) }}"
+                                class="text-center px-3 py-1.5 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[11.5px] font-semibold">{{ __('Push') }}</a>
                         </div>
                         <div class="mt-2 flex items-center justify-between">
                             <form method="POST" action="{{ route('admin.template-samples.toggle', $s->id) }}">

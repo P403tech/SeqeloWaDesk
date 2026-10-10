@@ -17,14 +17,21 @@ class FlowTemplatePublisher
     /**
      * @return array{created: int, updated: int, skipped: int}
      */
-    public function push(FlowTemplate $template): array
+    /**
+     * @param  list<int>|null  $workspaceIds  When non-empty, only these active workspaces.
+     */
+    public function push(FlowTemplate $template, ?array $workspaceIds = null): array
     {
         $created = 0;
         $updated = 0;
         $skipped = 0;
 
-        Workspace::query()
-            ->where('status', true)
+        $workspaceQuery = Workspace::query()->where('status', true);
+        if ($workspaceIds !== null && $workspaceIds !== []) {
+            $workspaceQuery->whereIn('id', $workspaceIds);
+        }
+
+        $workspaceQuery
             ->orderBy('id')
             ->chunkById(100, function ($workspaces) use ($template, &$created, &$updated, &$skipped) {
                 foreach ($workspaces as $ws) {

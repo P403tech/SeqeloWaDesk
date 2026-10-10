@@ -99,6 +99,11 @@ class WaTemplate extends Model
         return $this->belongsTo(WaProviderConfig::class, 'provider_config_id');
     }
 
+    public function sourceSample(): BelongsTo
+    {
+        return $this->belongsTo(WaTemplateSample::class, 'source_sample_id');
+    }
+
     /**
      * The template's shape, for the send-time mapping panel.
      *

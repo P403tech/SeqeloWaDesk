@@ -31,11 +31,10 @@ use Illuminate\Support\Str;
  * WpCampaign::scopeForCurrentWorkspace(). Every response key the app
  * reads is preserved.
  *
- * Send / dispatch handoff to the Node bridge is STUBBED — see notes in
- * store() and stop(). This controller persists the campaign + recipients
- * and returns the contract shape, but does NOT itself fire the Node call;
- * the workspace's real dispatch path (WaCampaignsController /
- * NodeScheduler) owns that. Marked inline where it matters.
+ * store() with schedule_type=now hands off to WaCampaignsController::
+ * fireScheduledCampaign (same path as web). The 201 JSON includes a
+ * diagnostics block (preflight, will_dispatch, device_connected).
+ * stop() updates status locally; Node schedule cancel is not wired here.
  */
 class CampaignController extends Controller
 {

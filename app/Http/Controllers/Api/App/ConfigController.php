@@ -54,6 +54,14 @@ class ConfigController extends Controller
                     'conversation'    => 'private-conversation.{conversationId}',
                     'event'           => 'message.received',
                 ],
+                // Campaign create with schedule_type=now uses the same web
+                // dispatcher (WaCampaignsController). Check diagnostics on the
+                // 201 response — especially device_connected and will_dispatch.
+                'campaigns' => [
+                    'dispatch_on_create_now' => true,
+                    'requires_connected_device' => true,
+                    'read_diagnostics' => true,
+                ],
             ],
         ]);
     }
