@@ -48,8 +48,10 @@ class AdminWaTemplateSampleTest extends TestCase
 
     public function test_migration_seeds_the_shipped_catalog(): void
     {
-        $this->assertGreaterThanOrEqual(12, WaTemplateSample::count());
+        $this->assertGreaterThanOrEqual(40, WaTemplateSample::count());
         $this->assertTrue(WaTemplateSample::where('slug', 'christmas_greetings')->exists());
+        $this->assertTrue(WaTemplateSample::where('slug', 'abandoned_cart')->exists());
+        $this->assertTrue(WaTemplateSample::where('slug', 'eid_mubarak')->exists());
     }
 
     public function test_admin_can_create_a_sample_and_tenants_see_it(): void

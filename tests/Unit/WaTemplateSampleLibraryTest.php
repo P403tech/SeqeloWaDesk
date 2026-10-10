@@ -10,10 +10,10 @@ class WaTemplateSampleLibraryTest extends TestCase
     public function test_catalog_covers_wati_style_categories(): void
     {
         $all = WaTemplateSampleLibrary::all();
-        $this->assertGreaterThanOrEqual(12, count($all));
+        $this->assertGreaterThanOrEqual(40, count($all));
 
         $cats = array_unique(array_column($all, 'category'));
-        foreach (['festival', 'ecommerce', 'education', 'healthcare'] as $need) {
+        foreach (['festival', 'ecommerce', 'education', 'healthcare', 'utility'] as $need) {
             $this->assertContains($need, $cats, "missing category {$need}");
         }
 
@@ -21,6 +21,9 @@ class WaTemplateSampleLibraryTest extends TestCase
         $this->assertContains('christmas_greetings', $slugs);
         $this->assertContains('end_of_season_sale', $slugs);
         $this->assertContains('management_course', $slugs);
+        $this->assertContains('abandoned_cart', $slugs);
+        $this->assertContains('eid_mubarak', $slugs);
+        $this->assertContains('booking_confirmed', $slugs);
     }
 
     public function test_bodies_are_meta_safe_and_named(): void
