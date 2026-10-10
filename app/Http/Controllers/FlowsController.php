@@ -297,17 +297,17 @@ class FlowsController extends Controller
         // builder seeded the cloned nodes at undefined positions and the canvas
         // opened blank ("4 steps but empty flow"). Stamp a real grid layout onto
         // any node missing x/y at clone time so it renders on every client.
-        $flowData = $this->ensureNodePositions($flowData);
+        $flowData = \App\Support\FlowGraphSupport::ensureNodePositions($flowData);
         $flow = Flow::create([
             'user_id'      => Auth::id(),
             'workspace_id' => $wsId,
             'flow_name'    => $tpl->name,
             'flow_data'    => json_encode($flowData),
-            'flow_type'    => in_array($tpl->flow_type, ['chat', 'call', 'instagram', 'facebook', 'tiktok', 'telegram', 'line', 'wechat', 'viber', 'email', 'webchat'], true) ? $tpl->flow_type : 'chat',
+            'flow_type'    => \App\Support\FlowGraphSupport::normalizeFlowType($tpl->flow_type),
             'category'     => $tpl->category,
             'is_published' => false,
             'is_active'    => true,
-        ] + $this->extractTriggerColumns($flowData));
+        ] + \App\Support\FlowGraphSupport::extractTriggerColumns($flowData));
         $flow->saveFlowFile($flowData);
         $tpl->increment('clone_count');
 
@@ -340,16 +340,7 @@ class FlowsController extends Controller
      */
     private function ensureNodePositions(array $flowData): array
     {
-        $nodes = $flowData['flowNodes'] ?? null;
-        if (! is_array($nodes)) return $flowData;
-        foreach ($nodes as $i => &$n) {
-            if (! is_array($n)) continue;
-            if (! isset($n['x']) || ! is_numeric($n['x'])) $n['x'] = 120 + ($i % 3) * 260;
-            if (! isset($n['y']) || ! is_numeric($n['y'])) $n['y'] = 120 + intdiv($i, 3) * 180;
-        }
-        unset($n);
-        $flowData['flowNodes'] = $nodes;
-        return $flowData;
+        return \App\Support\FlowGraphSupport::ensureNodePositions($flowData);
     }
 
     /**
@@ -2711,138 +2702,7 @@ SYS;
 
     private function extractTriggerColumns(array $flowData): array
     {
-        $trigger = null;
-        foreach (($flowData['flowNodes'] ?? []) as $n) {
-            if (($n['type'] ?? null) === 'trigger') { $trigger = $n; break; }
-        }
-        $d = is_array($trigger['data'] ?? null) ? $trigger['data'] : [];
-        $kind = (string) ($d['kind'] ?? 'keyword');
-        if (!in_array($kind, \App\Models\Flow::TRIGGER_KINDS, true)) {
-            $kind = 'keyword';
-        }
-        $value = null;
-        if ($kind === 'tag_added')   $value = (int) ($d['tagId']   ?? 0) ?: null;
-        if ($kind === 'group_join')  $value = (int) ($d['groupId'] ?? 0) ?: null;
-        // Campaign engagement — value is the WABA campaign id. The engagement
-        // status + delay live on the linked CampaignFollowup rule (synced after
-        // save), so only the campaign id is stored on the flow row (for display
-        // + to find the rule).
-        if ($kind === 'campaign_engagement') $value = (int) ($d['campaignId'] ?? 0) ?: null;
-        // Sales Pipeline bridge — fire when a deal enters this stage.
-        if ($kind === 'deal_stage_changed') $value = (int) ($d['stageId'] ?? 0) ?: null;
-        // CRM lifecycle triggers. 0 is a REAL value here ("any pipeline" / "any
-        // agent"), so these must NOT use the `?: null` idiom above — null would
-        // never match flowsForWorkspace()'s where('trigger_value', 0).
-        if (in_array($kind, ['deal_created', 'deal_won', 'deal_lost'], true)) {
-            $value = (int) ($d['pipelineId'] ?? 0);
-        }
-        if (in_array($kind, ['deal_assigned', 'conversation_assigned'], true)) {
-            $value = (int) ($d['userId'] ?? 0);
-        }
-        if ($kind === 'task_due') $value = 0;
-        // no_activity stores the idle window in HOURS (not an id). Clamped to a
-        // sane range: under an hour would fire on a lunch break, and a year is a
-        // dead deal nobody is nurturing.
-        if ($kind === 'no_activity') {
-            $value = max(1, min(8760, (int) ($d['hours'] ?? 48)));
-        }
-        // Value-less event triggers match on trigger_value = 0 (see
-        // FlowEnrollmentService::flowsForWorkspace), so store 0 not null.
-        // 'away' + 'out_of_hours' fire on any inbound (condition, not a value).
-        if (in_array($kind, ['contact_created', 'opt_in', 'order_placed', 'away', 'out_of_hours'], true)) $value = 0;
-        // The builder's Trigger node stores the sender as a composite
-        // "engine:id" key — "unofficial:5", "waba:3", "twilio:7",
-        // "instagram:82". A bare integer is AMBIGUOUS because `devices`
-        // (Unofficial) and `wa_provider_configs` (WABA / Twilio) are separate
-        // auto-increment namespaces whose ids overlap, so id 3 names a
-        // different row in each. Split the key here and keep the engine in the
-        // `provider` column, which every downstream consumer already reads.
-        //
-        // The engine half MUST use the canonical keys WorkspaceEngine::senders()
-        // emits — 'baileys', not 'unofficial'. "Unofficial API" is only the
-        // display LABEL (descriptor()['label']); the stored key everywhere in
-        // this codebase, including flows.provider and the engine scopes, is
-        // 'baileys'. Writing 'unofficial' here would make the flow invisible to
-        // forCurrentEngine()'s whereIn('provider', …) and drop the sender.
-        //
-        // A bare int is a flow saved before the picker existed. We take the id
-        // but deliberately DON'T stamp a provider — the row already carries the
-        // right one, and guessing would flip an existing twilio flow to baileys.
-        $engines   = [
-            \App\Services\WorkspaceEngine::ENGINE_BAILEYS,
-            \App\Services\WorkspaceEngine::ENGINE_WABA,
-            \App\Services\WorkspaceEngine::ENGINE_TWILIO,
-            'instagram',
-            'facebook',
-            'tiktok',
-            'telegram',
-            'line',
-            'wechat',
-            'viber',
-            'email',
-        ];
-        $rawSender = trim((string) ($d['deviceId'] ?? ''));
-        $deviceId  = null;
-        $provider  = null;
-        if ($rawSender !== '') {
-            if (str_contains($rawSender, ':')) {
-                [$eng, $rawId] = explode(':', $rawSender, 2);
-                $eng = strtolower(trim($eng));
-                if (in_array($eng, $engines, true)) {
-                    $provider = $eng;
-                    $deviceId = (int) $rawId ?: null;
-                }
-            } else {
-                $deviceId = (int) $rawSender ?: null;
-            }
-        }
-        // Keyword string (comma-separated) lives only in the trigger node's
-        // data; mirror it to a column so the model's saved-hook can sync a
-        // keyword_replies row that actually fires the flow on inbound.
-        // Trigger mode — "keywords" (default) or "any".
-        //
-        // "any" is the DEFAULT ROUTE: the flow runs only when no keyword flow
-        // matched the message. We funnel it through the same `keywords` column
-        // as the literal string 'any', which Flow::syncKeywordTriggerReply()
-        // recognises and turns into an is_catch_all rule. One field, one path,
-        // and older clients that still post `*` keep working unchanged.
-        //
-        // A blank keyword is NOT silently treated as "any" any more. That was
-        // the old bug: the builder rendered "any" next to it while the sync
-        // step dropped the flow entirely, so it never triggered on anything.
-        $mode = strtolower(trim((string) ($d['keywordMode'] ?? $d['triggerMode'] ?? '')));
-        $keywords = null;
-        if ($kind === 'keyword') {
-            $keywords = $mode === 'any'
-                ? 'any'
-                : (trim((string) ($d['keywords'] ?? '')) ?: null);
-        }
-        // Instagram comment→DM — the bound keyword-rule ids are stored as a CSV
-        // in trigger_keywords (reusing the string column; trigger_value is int).
-        // Empty = fire on any comment_to_dm rule for the account. The IG webhook
-        // matcher reads this list to decide which rules launch this flow.
-        if ($kind === 'comment_to_dm') {
-            $value = 0;
-            if (strtolower((string) ($d['channel'] ?? '')) === 'facebook') {
-                // Facebook has no keyword_replies comment rules to bind ids to, so
-                // a FB comment→DM flow stores a KEYWORD (like the keyword trigger)
-                // matched against the comment text. Blank = fire on any comment.
-                $keywords = trim((string) ($d['keywords'] ?? '')) ?: null;
-            } else {
-                $ids = array_values(array_filter(array_map(
-                    fn ($x) => (int) $x,
-                    is_array($d['keywordRuleIds'] ?? null) ? $d['keywordRuleIds'] : []
-                )));
-                $keywords = $ids ? implode(',', $ids) : null;
-            }
-        }
-
-        return [
-            'trigger_kind'      => $kind,
-            'trigger_value'     => $value,
-            'trigger_device_id' => $deviceId,
-            'trigger_keywords'  => $keywords,
-        ] + ($provider ? ['provider' => $provider] : []);
+        return \App\Support\FlowGraphSupport::extractTriggerColumns($flowData);
     }
 
     /**

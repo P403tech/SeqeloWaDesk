@@ -17,7 +17,7 @@
                 <h1 class="font-serif font-normal tracking-[-0.01em] text-[28px] sm:text-[40px] leading-[1.0]">
                     {{ __('Bot Flow') }} <span class="italic text-wa-deep">{{ __('templates') }}</span>.</h1>
                 <p class="text-[13px] text-ink-600 mt-2 max-w-2xl">
-                    {{ __('Build a standard flow once — a restaurant welcome, a lead qualifier — and every tenant can clone it into their workspace from the "Start from a template" gallery on Flows.') }}
+                    {{ __('Build a standard flow once — a restaurant welcome, a lead qualifier — and every tenant can clone it from Flows, or you can push it as an unpublished draft into every active workspace.') }}
                 </p>
             </div>
             <div class="flex items-center gap-2 shrink-0 pb-1">
@@ -63,7 +63,7 @@
         <div class="bg-paper-0 border border-paper-200 rounded-[14px] shadow-card overflow-hidden">
             <div class="overflow-x-auto">
                 <div class="min-w-[760px]">
-                    <div class="px-4 py-2.5 grid grid-cols-[1.6fr_120px_120px_90px_90px_120px] items-center gap-3 border-b border-paper-200 bg-paper-50 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
+                    <div class="px-4 py-2.5 grid grid-cols-[1.6fr_120px_120px_90px_90px_140px] items-center gap-3 border-b border-paper-200 bg-paper-50 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-500">
                         <div>{{ __('Template') }}</div>
                         <div>{{ __('Type') }}</div>
                         <div>{{ __('Category') }}</div>
@@ -74,7 +74,7 @@
 
                     @forelse ($templates as $t)
                         @php $tb = $typeBadge[$t->flow_type] ?? ['—', 'bg-paper-100 text-ink-500']; @endphp
-                        <div class="px-4 py-3 grid grid-cols-[1.6fr_120px_120px_90px_90px_120px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50 transition">
+                        <div class="px-4 py-3 grid grid-cols-[1.6fr_120px_120px_90px_90px_140px] items-center gap-3 border-b border-paper-200 hover:bg-paper-50 transition">
                             <div class="min-w-0">
                                 <div class="flex items-center gap-2">
                                     <span class="font-semibold text-[13px] text-ink-900 truncate">{{ $t->name }}</span>
@@ -85,12 +85,25 @@
                                 @if ($t->description)
                                     <div class="text-[11.5px] text-ink-500 truncate">{{ \Illuminate\Support\Str::limit($t->description, 90) }}</div>
                                 @endif
+                                @if ($t->last_pushed_at)
+                                    <div class="text-[10px] text-ink-500 mt-0.5">{{ __('Pushed') }} {{ $t->last_pushed_at->diffForHumans() }}</div>
+                                @endif
                             </div>
                             <div><span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium {{ $tb[1] }}">{{ $tb[0] }}</span></div>
                             <div class="text-[12px] text-ink-600 truncate">{{ $t->industry_label }}</div>
                             <div class="font-mono text-[12px] text-ink-700">{{ $t->node_count }}</div>
                             <div class="font-mono text-[12px] text-ink-700">{{ number_format($t->clone_count) }}</div>
-                            <div class="flex items-center gap-1 justify-end">
+                            <div class="flex items-center gap-1 justify-end flex-wrap">
+                                <form method="POST" action="{{ route('admin.flow-templates.push', $t->id) }}" class="inline"
+                                    data-confirm-form
+                                    data-confirm-title="{{ __('Push to customers?') }}"
+                                    data-confirm-message="{{ __('Installs this flow as an unpublished draft in every active workspace. Published copies are not overwritten.') }}"
+                                    data-confirm-accept="{{ __('Push') }}"
+                                    data-confirm-cancel="{{ __('Cancel') }}"
+                                    data-confirm-tone="default">
+                                    @csrf
+                                    <button type="submit" class="px-2.5 py-1 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[10.5px] font-semibold">{{ __('Push') }}</button>
+                                </form>
                                 <form method="POST" action="{{ route('admin.flow-templates.toggle', $t->id) }}" class="inline">
                                     @csrf
                                     <button type="submit"

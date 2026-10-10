@@ -14,6 +14,7 @@ class FlowTemplate extends Model
     protected $fillable = [
         'name', 'description', 'flow_type', 'category',
         'flow_data', 'is_active', 'sort_order', 'created_by', 'clone_count',
+        'last_pushed_at',
     ];
 
     protected $casts = [
@@ -23,6 +24,7 @@ class FlowTemplate extends Model
         'is_active'  => 'boolean',
         'sort_order' => 'integer',
         'clone_count'=> 'integer',
+        'last_pushed_at' => 'datetime',
     ];
 
     public const FLOW_TYPES = ['chat', 'call', 'instagram'];

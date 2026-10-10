@@ -386,6 +386,22 @@ class User extends Authenticatable
     }
 
     /**
+     * Platform operators bypass plan limits while working in a workspace.
+     * Workspace members with Spatie "Admin" do not — that role is tenant-scoped.
+     */
+    public function bypassesPlanLimits(): bool
+    {
+        if (in_array($this->role ?? null, ['admin', 'A'], true)) {
+            return true;
+        }
+        try {
+            return $this->hasRole('Super Admin');
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
      * Full URL for the user's avatar — or null if they haven't
      * uploaded one. Views fall back to initials when null.
      */

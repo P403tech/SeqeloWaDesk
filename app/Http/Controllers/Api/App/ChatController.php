@@ -840,7 +840,9 @@ class ChatController extends Controller
             return response()->json(['success' => false, 'message' => 'Conversation not found.'], 404);
         }
 
-        $template = WaTemplate::query()->find($data['template_id']);
+        $template = WaTemplate::query()
+            ->where('workspace_id', $conversation->workspace_id)
+            ->find($data['template_id']);
         if (! $template) {
             return response()->json(['success' => false, 'message' => 'Template not found.'], 404);
         }

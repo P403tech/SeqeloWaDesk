@@ -333,6 +333,7 @@ class Flow extends Model
     protected $fillable = [
         'user_id',
         'workspace_id',
+        'source_flow_template_id',
         'provider',
         // 'chat' (default) or 'call' — call flows are AI-voice IVR walked by
         // node/services/callFlowRuntime.js on WABA Business Calling.

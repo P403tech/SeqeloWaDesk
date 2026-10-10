@@ -441,6 +441,7 @@ Route::prefix('flow-templates')->name('flow-templates.')->group(function () {
     Route::get   ('/{id}/edit',        [\App\Http\Controllers\Admin\FlowTemplateController::class, 'edit'])->whereNumber('id')->name('edit');
     Route::put   ('/{id}',             [\App\Http\Controllers\Admin\FlowTemplateController::class, 'update'])->whereNumber('id')->name('update');
     Route::post  ('/{id}/toggle',      [\App\Http\Controllers\Admin\FlowTemplateController::class, 'toggle'])->whereNumber('id')->name('toggle');
+    Route::post  ('/{id}/push',        [\App\Http\Controllers\Admin\FlowTemplateController::class, 'push'])->whereNumber('id')->name('push');
     Route::delete('/{id}',             [\App\Http\Controllers\Admin\FlowTemplateController::class, 'destroy'])->whereNumber('id')->name('destroy');
 });
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Flow;
 use App\Models\FlowTemplate;
+use App\Services\FlowTemplatePublisher;
 use Illuminate\Http\Request;
 
 /**
@@ -59,6 +60,27 @@ class FlowTemplateController extends Controller
     {
         FlowTemplate::findOrFail($id)->delete();
         return redirect()->route('admin.flow-templates.index')->with('success', __('Template deleted.'));
+    }
+
+    public function push(int $id)
+    {
+        $template = FlowTemplate::findOrFail($id);
+        $stats = app(FlowTemplatePublisher::class)->push($template);
+
+        return redirect()->route('admin.flow-templates.index')
+            ->with('success', $this->pushFlash($stats));
+    }
+
+    /**
+     * @param  array{created: int, updated: int, skipped: int}  $stats
+     */
+    private function pushFlash(array $stats): string
+    {
+        return __('Pushed to workspaces: :created new, :updated updated, :skipped skipped (published copies left alone).', [
+            'created' => $stats['created'],
+            'updated' => $stats['updated'],
+            'skipped' => $stats['skipped'],
+        ]);
     }
 
     private function persist(Request $request, ?FlowTemplate $template)

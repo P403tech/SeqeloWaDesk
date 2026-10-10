@@ -126,10 +126,10 @@ class PlanLimitGuard
     private static function bypass(Workspace $workspace): bool
     {
         $user = auth()->user();
-        if (!$user) return false;
-        try {
-            if ($user->hasRole('Super Admin') || $user->hasRole('Admin')) return true;
-        } catch (\Throwable $e) {}
-        return in_array($user->role ?? null, ['admin', 'A'], true);
+        if (! $user) {
+            return false;
+        }
+
+        return $user->bypassesPlanLimits();
     }
 }
