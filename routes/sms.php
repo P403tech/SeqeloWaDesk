@@ -38,6 +38,8 @@ Route::middleware(['web', 'auth', 'plan:access_sms'])
 Route::middleware(['api', 'throttle:240,1'])->group(function () {
     Route::post('/api/sms/inbound', [SmsWebhookController::class, 'ingest'])->name('sms.inbound');
     Route::post('/api/sms/status', [SmsStatusController::class, 'handle'])->name('sms.status');
+    Route::match(['get', 'post'], '/api/sms/inbound/custom/{token}', [SmsWebhookController::class, 'ingestCustom'])->name('sms.inbound.custom');
+    Route::match(['get', 'post'], '/api/sms/status/custom/{token}', [SmsStatusController::class, 'handleCustom'])->name('sms.status.custom');
 });
 
 // ── SIM-gateway API — a linked Android phone sends SMS via its own SIM.

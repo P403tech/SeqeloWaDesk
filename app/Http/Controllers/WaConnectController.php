@@ -240,6 +240,249 @@ class WaConnectController extends Controller
     }
 
     /**
+     * Custom / bring-your-own SMS gateway. The workspace describes its provider's
+     * HTTP API (send request template + how to read replies/status) and we store
+     * it as a provider='sms', sms_provider='custom' row. Sending then flows through
+     * App\Services\Sms\Transports\CustomHttpTransport.
+     */
+    public function saveCustomSms(Request $request): RedirectResponse
+    {
+        \App\Services\PlanLimitGuard::feature(Auth::user()?->currentWorkspace, 'access_sms');
+
+        $data = $request->validate([
+            'from_number'      => 'required|string|max:64',
+            'sender_id'        => 'nullable|string|max:32',
+            'display_label'    => 'nullable|string|max:40',
+            'method'           => 'nullable|in:GET,POST',
+            'url'              => 'required|string|max:1000',
+            'content_type'     => 'nullable|in:json,form,query',
+            'headers'          => 'nullable|string|max:2000',
+            'body'             => 'nullable|string|max:4000',
+            'success_contains' => 'nullable|string|max:120',
+            'message_id_path'  => 'nullable|string|max:120',
+            'api_key'          => 'nullable|string|max:255',
+            'api_secret'       => 'nullable|string|max:255',
+            'mode'                => 'nullable|in:template,params',
+            'json_post'           => 'nullable',
+            'ignore_ssl'          => 'nullable',
+            'accept'              => 'nullable|string|max:120',
+            'content_type_header' => 'nullable|string|max:120',
+            'encoding'            => 'nullable|string|max:40',
+            'auth'                => 'nullable|in:params,basic,bearer,none',
+            'params'              => 'nullable|array',
+            'in_from_field'    => 'nullable|string|max:64',
+            'in_text_field'    => 'nullable|string|max:64',
+            'in_to_field'      => 'nullable|string|max:64',
+            'dlr_id_field'     => 'nullable|string|max:64',
+            'dlr_status_field' => 'nullable|string|max:64',
+            'dlr_delivered'    => 'nullable|string|max:255',
+            'dlr_failed'       => 'nullable|string|max:255',
+            'rate_per_segment' => 'nullable|numeric|min:0',
+            'currency'         => 'nullable|string|max:8',
+        ]);
+
+        $user = Auth::user();
+        $workspaceId = (int) ($user->current_workspace_id ?? 0);
+        if (! $workspaceId) {
+            return back()->withErrors(['from_number' => 'Pick or create a workspace first.'])->withInput();
+        }
+
+        $customSend = $this->customSendFromRequest($request);
+
+        $verify = \App\Services\Sms\SmsClient::verify('', '', 'custom', ['custom_send' => $customSend]);
+        if (empty($verify['ok'])) {
+            return back()->withErrors(['url' => $verify['error'] ?? 'Invalid gateway definition.'])->withInput();
+        }
+
+        $fromNumber = trim($data['from_number']);
+
+        $config = WaProviderConfig::firstOrNew([
+            'workspace_id' => $workspaceId,
+            'provider'     => 'sms',
+            'phone_number' => $fromNumber,
+        ]);
+
+        if (! $config->exists) {
+            \App\Services\PlanLimitGuard::check(
+                $user->currentWorkspace,
+                'device_limit',
+                \App\Models\Device::query()->forWorkspace($workspaceId, $user->id)->count()
+                    + WaProviderConfig::query()->forWorkspace($workspaceId)
+                        ->whereIn('provider', ['waba', 'twilio', 'sms'])->count(),
+            );
+        }
+
+        $existingMeta = (array) $config->meta_json;
+        $token = (string) ($existingMeta['custom_in']['token'] ?? '') ?: \Illuminate\Support\Str::random(40);
+
+        $config->fill([
+            'provider'      => 'sms',
+            'status'        => WaProviderConfig::STATUS_CONNECTED,
+            'phone_number'  => $fromNumber,
+            'display_label' => trim((string) ($data['display_label'] ?? '')) ?: 'SMS · Custom',
+            'connected_at'  => now(),
+            'is_primary'    => false,
+            'meta_json'     => array_merge($existingMeta, [
+                'sms_provider'     => 'custom',
+                'sender_id'        => trim((string) ($data['sender_id'] ?? '')),
+                'rate_per_segment' => (isset($data['rate_per_segment']) && $data['rate_per_segment'] !== null && $data['rate_per_segment'] !== '')
+                    ? (string) $data['rate_per_segment'] : null,
+                'currency'         => strtoupper(trim((string) ($data['currency'] ?? 'USD'))) ?: 'USD',
+                'custom_send'      => $customSend,
+                'custom_in'        => [
+                    'from_field' => trim((string) ($data['in_from_field'] ?? 'from')) ?: 'from',
+                    'text_field' => trim((string) ($data['in_text_field'] ?? 'text')) ?: 'text',
+                    'to_field'   => trim((string) ($data['in_to_field'] ?? 'to')) ?: 'to',
+                    'token'      => $token,
+                ],
+                'custom_dlr'       => [
+                    'message_id_field' => trim((string) ($data['dlr_id_field'] ?? '')),
+                    'status_field'     => trim((string) ($data['dlr_status_field'] ?? '')),
+                    'delivered_values' => $this->csvList((string) ($data['dlr_delivered'] ?? '')),
+                    'failed_values'    => $this->csvList((string) ($data['dlr_failed'] ?? '')),
+                ],
+            ]),
+        ]);
+
+        $creds = (array) $config->creds();
+        if (($data['api_key'] ?? '') !== '')    $creds['api_key']    = trim((string) $data['api_key']);
+        if (($data['api_secret'] ?? '') !== '') $creds['api_secret'] = trim((string) $data['api_secret']);
+        $creds['from_number'] = $fromNumber;
+        $config->setCreds($creds);
+        $config->save();
+
+        \App\Services\WorkspaceEngine::flush();
+
+        $returnTo = (string) $request->input('return_to', '');
+        $dest = (str_starts_with($returnTo, '/') && ! str_starts_with($returnTo, '//')) ? $returnTo : '/sms';
+
+        return redirect($dest)->with('status', 'Custom SMS gateway saved. Inbound URL: ' . url('/api/sms/inbound/custom/' . $token));
+    }
+
+    public function testCustomSms(Request $request): RedirectResponse
+    {
+        \App\Services\PlanLimitGuard::feature(Auth::user()?->currentWorkspace, 'access_sms');
+
+        $data = $request->validate([
+            'test_number'      => 'required|string|max:32',
+            'test_message'     => 'nullable|string|max:300',
+            'from_number'      => 'required|string|max:64',
+            'sender_id'        => 'nullable|string|max:32',
+            'method'           => 'nullable|in:GET,POST',
+            'url'              => 'required|string|max:1000',
+            'content_type'     => 'nullable|in:json,form,query',
+            'headers'          => 'nullable|string|max:2000',
+            'body'             => 'nullable|string|max:4000',
+            'success_contains' => 'nullable|string|max:120',
+            'message_id_path'  => 'nullable|string|max:120',
+            'api_key'          => 'nullable|string|max:255',
+            'api_secret'       => 'nullable|string|max:255',
+        ]);
+
+        $workspaceId = (int) (Auth::user()->current_workspace_id ?? 0);
+        $fromNumber  = trim($data['from_number']);
+
+        $customSend = $this->customSendFromRequest($request);
+
+        $apiKey    = trim((string) ($data['api_key'] ?? ''));
+        $apiSecret = trim((string) ($data['api_secret'] ?? ''));
+        if (($apiKey === '' || $apiSecret === '') && $workspaceId) {
+            $saved = WaProviderConfig::query()->forWorkspace($workspaceId)
+                ->where('provider', 'sms')->where('phone_number', $fromNumber)->first();
+            if ($saved) {
+                $sc = (array) $saved->creds();
+                if ($apiKey === '')    $apiKey    = (string) ($sc['api_key'] ?? '');
+                if ($apiSecret === '') $apiSecret = (string) ($sc['api_secret'] ?? '');
+            }
+        }
+
+        $cfg = new WaProviderConfig();
+        $cfg->workspace_id = $workspaceId;
+        $cfg->provider     = 'sms';
+        $cfg->phone_number = $fromNumber;
+        $cfg->status       = WaProviderConfig::STATUS_CONNECTED;
+        $cfg->meta_json    = [
+            'sms_provider' => 'custom',
+            'sender_id'    => trim((string) ($data['sender_id'] ?? '')),
+            'custom_send'  => $customSend,
+        ];
+        $cfg->setCreds(['api_key' => $apiKey, 'api_secret' => $apiSecret, 'from_number' => $fromNumber]);
+
+        $sender = \App\Services\Sms\SmsSender::fromConfig($cfg);
+        if (! $sender) {
+            return back()->withInput()->with('sms_test_ok', false)->with('sms_test_msg', 'Test failed: could not build a sender from this definition.');
+        }
+        $message = trim((string) ($data['test_message'] ?? '')) ?: ('Test message from ' . config('app.name', 'WaDesk'));
+        $res = (new \App\Services\Sms\SmsClient($sender))->send(trim($data['test_number']), $message);
+
+        $ok = (bool) ($res['ok'] ?? false);
+        $msg = $ok
+            ? ('Test sent — the gateway accepted it' . (!empty($res['message_id']) ? ' (id ' . $res['message_id'] . ').' : '.'))
+            : ('Test failed: ' . ($res['error'] ?? 'the gateway rejected the message.'));
+
+        return back()->withInput()->with('sms_test_ok', $ok)->with('sms_test_msg', $msg);
+    }
+
+    private function customSendFromRequest(Request $request): array
+    {
+        $mode = $request->input('mode') === 'params' ? 'params' : 'template';
+        $base = [
+            'mode'             => $mode,
+            'method'           => strtoupper((string) $request->input('method', 'POST')) === 'GET' ? 'GET' : 'POST',
+            'url'              => trim((string) $request->input('url', '')),
+            'success_contains' => trim((string) $request->input('success_contains', '')),
+            'message_id_path'  => trim((string) $request->input('message_id_path', '')),
+            'ignore_ssl'       => $request->boolean('ignore_ssl'),
+        ];
+
+        if ($mode === 'params') {
+            $params = [];
+            foreach (['apikey', 'password', 'action', 'source', 'dest', 'message', 'unicode', 'route', 'language', 'custom1', 'custom2', 'custom3'] as $k) {
+                $row  = (array) $request->input("params.$k", []);
+                $name = trim((string) ($row['name'] ?? ''));
+                if ($name === '') continue;
+                $params[$k] = [
+                    'name'   => mb_substr($name, 0, 64),
+                    'value'  => mb_substr((string) ($row['value'] ?? ''), 0, 255),
+                    'on_url' => ! empty($row['on_url']),
+                ];
+            }
+            return $base + [
+                'json_post'           => $request->boolean('json_post'),
+                'accept'              => mb_substr((string) $request->input('accept', ''), 0, 120),
+                'content_type_header' => mb_substr((string) $request->input('content_type_header', ''), 0, 120),
+                'encoding'            => mb_substr((string) $request->input('encoding', ''), 0, 40),
+                'auth'                => in_array($request->input('auth', 'params'), ['params', 'basic', 'bearer', 'none'], true) ? $request->input('auth') : 'params',
+                'params'              => $params,
+            ];
+        }
+
+        return $base + [
+            'content_type' => in_array($request->input('content_type', 'json'), ['json', 'form', 'query'], true) ? $request->input('content_type') : 'json',
+            'headers'      => $this->parseHeaderLines((string) $request->input('headers', '')),
+            'body'         => (string) $request->input('body', ''),
+        ];
+    }
+
+    private function parseHeaderLines(string $raw): array
+    {
+        $out = [];
+        foreach (preg_split('/\r?\n/', $raw) as $line) {
+            $line = trim($line);
+            if ($line === '' || ! str_contains($line, ':')) continue;
+            [$k, $v] = explode(':', $line, 2);
+            $k = trim($k);
+            if ($k !== '') $out[$k] = trim($v);
+        }
+        return $out;
+    }
+
+    private function csvList(string $raw): array
+    {
+        return array_values(array_filter(array_map('trim', explode(',', $raw)), fn ($v) => $v !== ''));
+    }
+
+    /**
      * Baileys path. The Node bridge uses the phone number itself as
      * the device id (session folder = `baileys_auth/session_<phone>`),
      * so we collect the user's phone here, then call Node's

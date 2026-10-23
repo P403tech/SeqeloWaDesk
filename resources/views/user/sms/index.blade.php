@@ -192,6 +192,16 @@
                     </div>
                 </div>
 
+                <div id="sms-custom" class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
+                    <div class="px-5 py-4 border-b border-paper-200">
+                        <h2 class="font-serif text-[18px] leading-tight">{{ __('Custom SMS API') }}</h2>
+                        <p class="text-[11.5px] text-ink-600 mt-1">{{ __('Connect any HTTP SMS gateway. Campaigns and the inbox use it like Twilio or MSG91.') }}</p>
+                    </div>
+                    <div class="p-5">
+                        @include('user.devices._sms_custom_form')
+                    </div>
+                </div>
+
                 {{-- Setup guide. --}}
                 <div class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
                     <div class="px-5 py-4 border-b border-paper-200">

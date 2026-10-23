@@ -54,13 +54,13 @@ class SmsClient implements SmsTransport
      *
      * @return array{ok:bool, error?:string}
      */
-    public static function verify(string $accountSid, string $authToken, string $provider = 'twilio'): array
+    public static function verify(string $accountSid, string $authToken, string $provider = 'twilio', array $extra = []): array
     {
-        return strtolower(trim($provider)) === 'msg91'
-            // MSG91 authenticates on a single auth key; there is no account id,
-            // so the token field carries it and the sid field is unused.
-            ? Msg91Transport::verify($authToken !== '' ? $authToken : $accountSid)
-            : TwilioTransport::verify($accountSid, $authToken);
+        return match (strtolower(trim($provider))) {
+            'msg91'  => Msg91Transport::verify($authToken !== '' ? $authToken : $accountSid),
+            'custom' => CustomHttpTransport::verify((array) ($extra['custom_send'] ?? [])),
+            default  => TwilioTransport::verify($accountSid, $authToken),
+        };
     }
 
     /** Digits to +E164. Kept here because callers outside the transports use it. */

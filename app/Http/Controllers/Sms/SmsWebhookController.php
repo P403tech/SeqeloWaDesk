@@ -84,6 +84,47 @@ class SmsWebhookController extends Controller
     }
 
     /**
+     * Inbound for a custom gateway. The provider posts to
+     * /api/sms/inbound/custom/{token}; we resolve the sender by that token.
+     */
+    public function ingestCustom(Request $request, string $token): Response
+    {
+        $cfg = $this->customConfigByToken($token);
+        if (! $cfg) {
+            return response('OK', 200);
+        }
+        $sender = SmsSender::fromConfig($cfg);
+        if (! $sender) {
+            return response('OK', 200);
+        }
+
+        $map  = (array) (($cfg->meta_json['custom_in'] ?? []));
+        $from = trim((string) $request->input((string) ($map['from_field'] ?? 'from'), ''));
+        $body = (string) $request->input((string) ($map['text_field'] ?? 'text'), '');
+
+        if ($from === '' || trim($body) === '') {
+            return response('OK', 200);
+        }
+
+        try {
+            $this->store($sender, $from, $body, (string) $request->input('message_id', ''), '1');
+        } catch (\Throwable $e) {
+            Log::warning('[SMS/Custom] inbound store failed: ' . $e->getMessage());
+        }
+
+        return response('OK', 200);
+    }
+
+    private function customConfigByToken(string $token): ?\App\Models\WaProviderConfig
+    {
+        if ($token === '') return null;
+        return \App\Models\WaProviderConfig::query()
+            ->where('provider', 'sms')
+            ->get()
+            ->first(fn ($c) => (string) data_get($c->meta_json, 'custom_in.token') === $token);
+    }
+
+    /**
      * Map an MSG91 inbound (2-way) webhook to [to, from, body, sid].
      *
      * MSG91's incoming payload varies by account/version, so we probe the

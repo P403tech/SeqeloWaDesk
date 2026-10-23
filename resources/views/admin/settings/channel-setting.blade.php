@@ -1240,8 +1240,14 @@
                                             placeholder="{{ \App\Models\SystemSetting::get('web_search_key') ? '•••••••• (saved)' : 'paste key' }}"
                                             class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
                                     </label>
+                                    <label class="block">
+                                        <span class="text-[11.5px] text-ink-700">{{ __('Daily searches per workspace') }}</span>
+                                        <input form="wadesk-providers-form" name="web_search_daily_cap" type="number" min="0"
+                                            value="{{ (int) \App\Models\SystemSetting::get('web_search_daily_cap', 300) }}"
+                                            class="mt-1 w-full rounded-xl border border-paper-200 bg-paper-0 px-3 py-2.5 text-[13px] font-mono focus:outline-none focus:border-wa-deep">
+                                    </label>
                                 </div>
-                                <p class="text-[10.5px] text-ink-500 mt-1.5">{{ __('Used by the "Search web" node in AI Call Flows. Leave the key blank to keep the saved one. Without a key the node just returns nothing and the call continues.') }}</p>
+                                <p class="text-[10.5px] text-ink-500 mt-1.5">{{ __('Used by chat AI agents and assistants that have web search on, and by the Search web node in Call Flows. Daily limit 0 = unlimited. Leave the key blank to keep the saved one.') }}</p>
                             </div>
 
                             {{-- Embedded Signup (WABA login) — optional sub-section.

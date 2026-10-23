@@ -1006,6 +1006,8 @@ Route::middleware('auth')->group(function () {
         Route::post('/connect/wa-store/reset', [\App\Http\Controllers\WaStoreWizardController::class, 'reset'])->name('connect.wa-store.reset');
         Route::post('/connect/wa-store/twilio',  [\App\Http\Controllers\WaConnectController::class, 'saveTwilio'])->name('connect.wa-store.twilio');
         Route::post('/connect/wa-store/sms',     [\App\Http\Controllers\WaConnectController::class, 'saveSms'])->name('connect.wa-store.sms');
+        Route::post('/connect/wa-store/sms-custom', [\App\Http\Controllers\WaConnectController::class, 'saveCustomSms'])->name('connect.wa-store.sms-custom');
+        Route::post('/connect/wa-store/sms-custom/test', [\App\Http\Controllers\WaConnectController::class, 'testCustomSms'])->name('connect.wa-store.sms-custom.test');
         Route::post('/connect/wa-store/baileys', [\App\Http\Controllers\WaConnectController::class, 'saveBaileys'])->name('connect.wa-store.baileys');
         Route::get('/api/baileys/qr/{configId}',     [\App\Http\Controllers\WaConnectController::class, 'pollQr'])->whereNumber('configId')->name('baileys.qr.poll');
         Route::get('/api/baileys/status/{configId}', [\App\Http\Controllers\WaConnectController::class, 'pollStatus'])->whereNumber('configId')->name('baileys.status.poll');

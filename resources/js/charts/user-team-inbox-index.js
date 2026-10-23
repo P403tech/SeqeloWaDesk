@@ -1484,6 +1484,7 @@ Limits:
                 <span class="ml-auto flex items-center gap-1 shrink-0">
                   ${c.pinned ? `<svg viewBox="0 0 16 16" class="w-3 h-3 text-wa-deep" fill="currentColor"><path d="M9.5 2l4.5 4.5-2 .5-2.5 2.5-.5 3-1.5-1.5L3 14l3.5-4-1.5-1.5 3-.5L10.5 5 9.5 2z"/></svg>` : ''}
                   ${c.muted ? `<svg viewBox="0 0 16 16" class="w-3 h-3 text-ink-400" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6v4h2l3 3V3L6 6H4zM11 6l3 4M14 6l-3 4"/></svg>` : ''}
+                  ${c.locked ? `<svg viewBox="0 0 16 16" class="w-3 h-3 text-ink-500" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.5" y="7" width="9" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg>` : ''}
                   ${Number(c.unread_count) > 0 ? `<span class="min-w-[18px] h-[18px] px-1 rounded-full bg-wa-teal text-paper-0 text-[9.5px] font-mono grid place-items-center">${Number(c.unread_count) > 99 ? '99+' : c.unread_count}</span>` : ''}
                   <span class="text-[10px] font-mono text-ink-500 whitespace-nowrap" title="${escape(formatStamp(c.last_message_at))}">${relativeTime(c.last_message_at)}</span>
                 </span>
@@ -1515,7 +1516,23 @@ Limits:
     }
 
     // ── Render — Active conversation ─────────────────────────────────────
+    async function promptUnlock(id) {
+        const pin = await themedPrompt({ title: 'Locked chat', placeholder: 'Enter inbox PIN', confirmLabel: 'Unlock' });
+        if (!pin) return false;
+        try {
+            await api('/team-inbox/api/lock/verify', { method: 'POST', body: { id, pin } });
+            toast('Unlocked.', 'success');
+            return true;
+        } catch (e) { toast(e.message || 'Incorrect PIN.', 'error'); return false; }
+    }
+
     async function openConversation(id) {
+        const lockedRow = (state.queue || []).find(k => k.id === id);
+        if (lockedRow && lockedRow.locked_hidden) {
+            const ok = await promptUnlock(id);
+            if (!ok) return;
+            await loadQueue();
+        }
         state.activeId = id;
         // On mobile (<768px) the queue and thread are stacked, only one is
         // visible at a time. Toggle a class so the thread takes the screen.
@@ -2880,11 +2897,14 @@ Limits:
     async function bulkAction(action, extra = {}) {
         if (state.selected.size === 0) return;
         try {
-            await api('/team-inbox/api/bulk', {
+            const res = await api('/team-inbox/api/bulk', {
                 method: 'POST',
                 body: { ids: [...state.selected], action, ...extra },
             });
             toast(`Bulk ${action} on ${state.selected.size} conversations.`, 'success');
+            if (res && res.meta_block_warning) {
+                toast("Blocked here, but WhatsApp (Meta) didn't apply some: " + res.meta_block_warning, 'error');
+            }
             state.selected.clear();
             updateBulkBar();
             await loadQueue();
@@ -2896,11 +2916,17 @@ Limits:
     // so there's exactly one authorized, audited code path for both.
     async function convAction(id, action, extra = {}) {
         try {
-            await api('/team-inbox/api/bulk', { method: 'POST', body: { ids: [id], action, ...extra } });
+            const res = await api('/team-inbox/api/bulk', { method: 'POST', body: { ids: [id], action, ...extra } });
             if (action === 'delete' && state.activeId === id) {
                 state.activeId = null; state.active = null;
                 $('#ti-frame')?.classList.remove('mobile-thread-open');
                 renderEmptyState();
+            }
+            if (action === 'block' || action === 'unblock') {
+                toast(action === 'block' ? 'Contact blocked.' : 'Contact unblocked.', 'success');
+                if (res && res.meta_block_warning) {
+                    toast("Blocked here, but WhatsApp (Meta) didn't apply it: " + res.meta_block_warning, 'error');
+                }
             }
             await loadQueue();
         } catch (e) { toast('Action failed: ' + e.message, 'error'); }
@@ -2925,6 +2951,10 @@ Limits:
                        : item('archive',   window.t ? window.t('Archive') : 'Archive',   ic('<rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3 6v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6M6.5 9h3"/>')),
             item('label', window.t ? window.t('Label…') : 'Label…', ic('<path d="M3 3h6l5 5-6 6-5-5z"/><circle cx="6" cy="6" r="0.8"/>')),
             `<div class="h-px bg-paper-200 my-1"></div>`,
+            c.locked ? item('unlock', window.t ? window.t('Unlock chat') : 'Unlock chat', ic('<rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 4.8-.6"/>'))
+                     : item('lock',   window.t ? window.t('Lock chat') : 'Lock chat',     ic('<rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/>')),
+            c.blocked ? item('unblock', window.t ? window.t('Unblock') : 'Unblock', ic('<circle cx="8" cy="8" r="5.5"/>'))
+                      : item('block',   window.t ? window.t('Block') : 'Block',   ic('<circle cx="8" cy="8" r="5.5"/><path d="M4.5 4.5l7 7"/>'), true),
             item('delete', window.t ? window.t('Delete') : 'Delete', ic('<path d="M3 4h10M6 4V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1M5 4v9a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V4"/>'), true),
         ].join('');
         const menu = document.createElement('div');
@@ -2945,6 +2975,35 @@ Limits:
                     options: [{ value: 'yes', label: 'Delete permanently', variant: 'danger' }],
                 });
                 if (ok === 'yes') convAction(id, 'delete');
+                return;
+            }
+            if (a === 'block') {
+                const ok = await themedChoice({
+                    title: 'Block this contact?',
+                    body: 'Their messages will stop showing in the inbox on every channel, and new chats from them stay hidden. On official WhatsApp (WABA) they are also blocked at Meta. You can unblock later.',
+                    options: [{ value: 'yes', label: 'Block', variant: 'danger' }],
+                });
+                if (ok === 'yes') convAction(id, 'block');
+                return;
+            }
+            if (a === 'lock') {
+                let st = { pin_set: false };
+                try { st = await api('/team-inbox/api/lock/state'); } catch (_) {}
+                if (!st.pin_set) {
+                    const pin = await themedPrompt({ title: 'Set an inbox PIN', placeholder: 'Choose a 4–8 digit PIN', confirmLabel: 'Set PIN' });
+                    if (!pin) return;
+                    try { await api('/team-inbox/api/lock/pin', { method: 'POST', body: { pin } }); }
+                    catch (e) { toast(e.message || 'Could not set PIN.', 'error'); return; }
+                }
+                convAction(id, 'lock');
+                toast('Chat locked.', 'success');
+                return;
+            }
+            if (a === 'unlock') {
+                const row = (state.queue || []).find(k => k.id === id);
+                if (row && row.locked_hidden && !(await promptUnlock(id))) return;
+                convAction(id, 'unlock');
+                toast('Chat unlocked.', 'success');
                 return;
             }
             if (a === 'label') {

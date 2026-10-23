@@ -1693,6 +1693,7 @@ class AdminPagesController extends Controller
             // Call-flow "Search web" node provider + key (encrypted at rest).
             'web_search_provider'        => 'nullable|in:tavily,serpapi,brave',
             'web_search_key'             => 'nullable|string|max:200',
+            'web_search_daily_cap'       => 'nullable|integer|min:0|max:1000000',
         ]);
 
         // Multi-engine: map each visual engine slug → internal provider key.
@@ -1746,9 +1747,12 @@ class AdminPagesController extends Controller
         \App\Models\SystemSetting::set('meta_allow_manual_app',     $request->boolean('meta_allow_manual_app'), 'bool', 'Allow workspaces to connect Facebook/Instagram with their own Meta app (manual App ID + Secret).');
         // Call-flow web search (Tavily/SerpAPI/Brave). Key only updated when
         // the form carried a value — re-saving won't blank a stored key.
-        \App\Models\SystemSetting::set('web_search_provider', (string) ($data['web_search_provider'] ?? 'tavily'), 'string', 'Provider for the Call Flow "Search web" node.');
+        \App\Models\SystemSetting::set('web_search_provider', (string) ($data['web_search_provider'] ?? 'tavily'), 'string', 'Provider for AI web search (chat agents, assistants, Call Flow Search web node).');
         if (!empty($data['web_search_key'])) {
-            \App\Models\SystemSetting::set('web_search_key', $data['web_search_key'], 'string', 'API key for the Call Flow web search provider.');
+            \App\Models\SystemSetting::set('web_search_key', $data['web_search_key'], 'string', 'API key for the AI web search provider.');
+        }
+        if (array_key_exists('web_search_daily_cap', $data) && $data['web_search_daily_cap'] !== null) {
+            \App\Models\SystemSetting::set('web_search_daily_cap', (int) $data['web_search_daily_cap'], 'int', 'Max chat AI web searches per workspace per day (0 = unlimited).');
         }
         \App\Models\SystemSetting::set('waba_webhook_verify_token', $data['waba_webhook_verify_token'] ?? '', 'string', 'Webhook verify token Meta will echo on subscription.');
         if (!empty($data['waba_app_secret'])) {

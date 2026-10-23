@@ -156,4 +156,77 @@ class SmsStatusController extends Controller
 
         return response('', 204);
     }
+
+    public function handleCustom(Request $request, string $token): Response
+    {
+        $cfg = \App\Models\WaProviderConfig::query()
+            ->where('provider', 'sms')
+            ->get()
+            ->first(fn ($c) => (string) data_get($c->meta_json, 'custom_in.token') === $token);
+        if (! $cfg) {
+            return response('', 204);
+        }
+
+        $dlr = (array) (($cfg->meta_json['custom_dlr'] ?? []));
+        $idField     = (string) ($dlr['message_id_field'] ?? '');
+        $statusField = (string) ($dlr['status_field'] ?? '');
+        if ($idField === '' || $statusField === '') {
+            return response('', 204);
+        }
+
+        $sid    = trim((string) $request->input($idField, ''));
+        $status = trim((string) $request->input($statusField, ''));
+        if ($sid === '' || $status === '') {
+            return response('', 204);
+        }
+
+        $delivered = array_map('strval', (array) ($dlr['delivered_values'] ?? []));
+        $failed    = array_map('strval', (array) ($dlr['failed_values'] ?? []));
+        $mapped = in_array($status, $delivered, true) ? 'delivered'
+            : (in_array($status, $failed, true) ? 'failed' : null);
+        if ($mapped === null) {
+            return response('', 204);
+        }
+
+        try {
+            $msg = InboxMessage::query()
+                ->where('provider', 'sms')
+                ->where('meta->wa_message_id', $sid)
+                ->latest('id')
+                ->first();
+            if ($msg) {
+                $fields = ['status' => $mapped];
+                if ($mapped === 'delivered' && empty($msg->delivered_at)) {
+                    $fields['delivered_at'] = now();
+                }
+                if ($mapped === 'failed') {
+                    $meta = is_array($msg->meta) ? $msg->meta : [];
+                    $meta['sms'] = array_merge($meta['sms'] ?? [], ['error' => 'Status: '.$status]);
+                    $fields['meta'] = $meta;
+                }
+                $msg->forceFill($fields)->save();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[SMS/Custom] status update failed: ' . $e->getMessage());
+        }
+
+        try {
+            $cc = \App\Models\WpCampaignContact::query()->where('whatsapp_message_id', $sid)->first();
+            if ($cc) {
+                $ccFields = ['status' => $mapped];
+                if ($mapped === 'delivered' && empty($cc->delivered_at)) {
+                    $ccFields['delivered_at'] = now();
+                }
+                if ($mapped === 'failed') {
+                    $ccFields['error_message'] = 'Status: '.$status;
+                }
+                $cc->forceFill($ccFields)->save();
+                optional($cc->campaign)->recomputeAggregates();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[SMS/Custom] campaign status roll-up failed: ' . $e->getMessage());
+        }
+
+        return response('', 204);
+    }
 }
