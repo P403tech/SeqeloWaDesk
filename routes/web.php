@@ -781,6 +781,7 @@ Route::middleware('auth')->group(function () {
             Route::post('/api/ai-generate', [WaCampaignsController::class, 'apiAiGenerate'])->name('api.ai-generate');
             // Best-time-to-send engagement heatmap (Schedule step). Statistics only.
             Route::get('/api/best-time',    [WaCampaignsController::class, 'bestTime'])->name('api.best-time');
+            Route::get('/api/mm-status',    [WaCampaignsController::class, 'marketingApiStatus'])->name('api.mm-status');
             Route::get('/{id}/edit', [WaCampaignsController::class, 'edit'])->whereNumber('id')->name('edit');
             Route::get('/{id}/export', [WaCampaignsController::class, 'exportRecipients'])->whereNumber('id')->name('export');
             Route::get('/{id}',      [WaCampaignsController::class, 'show'])->whereNumber('id')->name('detail');
@@ -1377,9 +1378,19 @@ Route::middleware('auth')->group(function () {
             // the top level, signed by X-Twilio-Signature).
             $clc = \App\Http\Controllers\CallLogsController::class;
             Route::middleware('plan:access_waba_calling')->group(function () use ($clc) {
-                Route::get('/call-logs',          [$clc, 'index'])->name('call-logs.index');
-                Route::get('/call-logs/{id}',     [$clc, 'show'])->whereNumber('id')->name('call-logs.show');
+            Route::get('/call-logs',          [$clc, 'index'])->name('call-logs.index');
+            Route::get('/call-logs/{id}',     [$clc, 'show'])->whereNumber('id')->name('call-logs.show');
             });
+
+            $wgc = \App\Http\Controllers\WabaGroupsController::class;
+            Route::get   ('/waba-groups',                       [$wgc, 'index'])->name('waba-groups.index');
+            Route::post  ('/waba-groups',                       [$wgc, 'store'])->name('waba-groups.store');
+            Route::post  ('/waba-groups/{group}/sync',          [$wgc, 'sync'])->whereNumber('group')->name('waba-groups.sync');
+            Route::post  ('/waba-groups/{group}/reset-link',    [$wgc, 'resetLink'])->whereNumber('group')->name('waba-groups.reset-link');
+            Route::post  ('/waba-groups/{group}/settings',      [$wgc, 'update'])->whereNumber('group')->name('waba-groups.update');
+            Route::post  ('/waba-groups/{group}/join-requests', [$wgc, 'joinRequests'])->whereNumber('group')->name('waba-groups.join-requests');
+            Route::delete('/waba-groups/{group}/participants',  [$wgc, 'removeParticipants'])->whereNumber('group')->name('waba-groups.participants.remove');
+            Route::delete('/waba-groups/{group}',               [$wgc, 'destroy'])->whereNumber('group')->name('waba-groups.destroy');
 
             // ── WhatsApp Cloud API groups. Separate surface from
             // /store/groups (Unofficial API): a Cloud API group is owned by a
@@ -1651,6 +1662,22 @@ Route::middleware('auth')->group(function () {
             });
 
         Route::get('/team-inbox',    [\App\Http\Controllers\TeamInboxController::class, 'index'])->name('team-inbox');
+        Route::get('/team-inbox/blocked-contacts', [\App\Http\Controllers\TeamInboxController::class, 'blockedContactsPage'])
+            ->name('team-inbox.blocked-contacts');
+        Route::get('/whatsapp-tools', [\App\Http\Controllers\WabaToolsController::class, 'page'])->name('waba-tools');
+        Route::prefix('whatsapp-tools/api')->name('waba-tools.')->group(function () {
+            $wt = \App\Http\Controllers\WabaToolsController::class;
+            Route::post('/receipts',    [$wt, 'saveReceipts'])->name('receipts');
+            Route::get ('/profile',     [$wt, 'profileGet'])->name('profile.get');
+            Route::post('/profile',     [$wt, 'profileSave'])->name('profile.save');
+            Route::get ('/automation',  [$wt, 'automationGet'])->name('automation.get');
+            Route::post('/automation',  [$wt, 'automationSave'])->name('automation.save');
+            Route::get ('/qr',          [$wt, 'qrList'])->name('qr.list');
+            Route::post('/qr',          [$wt, 'qrCreate'])->name('qr.create');
+            Route::post('/qr/delete',   [$wt, 'qrDelete'])->name('qr.delete');
+            Route::post('/pin',         [$wt, 'pinSave'])->name('pin');
+            Route::get ('/analytics',   [$wt, 'analytics'])->name('analytics');
+        });
         // Pull the Coexistence 6-month phone-app chat history into the inbox.
         // Manager+ gated (bulk import, not an everyday agent action).
         Route::post('/team-inbox/sync-history', [\App\Http\Controllers\TeamInboxController::class, 'syncHistory'])
@@ -1795,6 +1822,13 @@ Route::middleware('auth')->group(function () {
                 ->whereNumber('id')->middleware('throttle:60,1')->name('presence.leave');
 
             Route::post('/bulk', [$c, 'bulk'])->name('bulk');
+
+            Route::get ('/blocked-contacts',          [$c, 'blockedContactsList'])->name('blocked-contacts.list');
+            Route::post('/blocked-contacts/block',    [$c, 'blockContactByPhone'])->name('blocked-contacts.block');
+            Route::post('/blocked-contacts/unblock',  [$c, 'unblockContacts'])->name('blocked-contacts.unblock');
+            Route::get ('/lock/state',  [$c, 'lockState'])->name('lock.state');
+            Route::post('/lock/pin',    [$c, 'lockSetPin'])->name('lock.pin');
+            Route::post('/lock/verify', [$c, 'lockVerify'])->name('lock.verify');
 
             // Duplicate-thread cleanup. Manager+ gated like sync-history —
             // it rewrites conversation ownership across the whole workspace,

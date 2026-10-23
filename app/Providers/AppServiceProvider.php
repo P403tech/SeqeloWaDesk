@@ -77,6 +77,8 @@ class AppServiceProvider extends ServiceProvider
         // 401s "unauthorized". Doing it here (one global middleware) covers
         // every call site at once — present and future — and never touches
         // Meta / Twilio (different hosts).
+        \Illuminate\Support\Facades\Http::globalMiddleware(\App\Support\WabaAppSecretRegistry::middleware());
+
         \Illuminate\Support\Facades\Http::globalRequestMiddleware(function ($request) {
             static $node = null;
             if ($node === null) {

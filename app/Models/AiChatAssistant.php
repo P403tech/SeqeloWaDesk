@@ -29,6 +29,7 @@ class AiChatAssistant extends Model
         'channel_instagram', 'channel_tiktok', 'shopify_tools',
         'channel_control',
         'inbox_agent_id',
+        'web_search',
     ];
 
     protected $casts = [
@@ -40,6 +41,7 @@ class AiChatAssistant extends Model
         'channel_instagram' => 'boolean',
         'channel_tiktok'    => 'boolean',
         'shopify_tools'     => 'boolean',
+        'web_search'        => 'boolean',
         'channel_control'   => 'array',
     ];
 

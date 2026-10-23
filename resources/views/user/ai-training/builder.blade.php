@@ -21,6 +21,7 @@
             'handoff_enabled' => (bool) ($a?->handoff_enabled ?? $d['handoff_enabled']),
             'handoff_keyword' => $a?->handoff_keyword ?? $d['handoff_keyword'],
             'handoff_message' => $a?->handoff_message ?? $d['handoff_message'],
+            'web_search' => (bool) ($a?->web_search ?? false),
             'business_brief' => $a?->business_brief ?? $d['business_brief'],
             'channel_whatsapp' => (bool) ($a?->channel_whatsapp ?? $d['channel_whatsapp']),
             'channel_facebook' => (bool) ($a?->channel_facebook ?? $d['channel_facebook']),
@@ -365,6 +366,22 @@
                                     {{ __('Final message before the agent goes silent.') }}</div>
                             </div>
                         </div>
+
+                        <label
+                            class="border border-paper-200 rounded-lg px-3 py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-paper-50 mt-4">
+                            <span>
+                                <span class="block text-[12.5px] font-semibold">{{ __('Search the web') }}</span>
+                                <span class="block text-[10.5px] text-ink-500">{{ __('When a question needs current or outside information that is not in the training material, the agent looks it up on the internet first.') }}</span>
+                                @unless (app(\App\Services\AiChat\WebSearchService::class)->configured())
+                                    <span class="block text-[10.5px] text-accent-amber mt-0.5">{{ __('Web search is not set up on this platform yet, so this option has no effect for now.') }}</span>
+                                @endunless
+                            </span>
+                            <span class="relative inline-block w-[34px] h-5 shrink-0">
+                                <input data-field="web_search" class="peer opacity-0 w-0 h-0" type="checkbox">
+                                <span
+                                    class="absolute cursor-pointer inset-0 bg-paper-200 rounded-full transition before:content-[''] before:absolute before:h-4 before:w-4 before:left-0.5 before:bottom-0.5 before:bg-paper-0 before:rounded-full before:transition peer-checked:bg-wa-deep peer-checked:before:translate-x-[14px]"></span>
+                            </span>
+                        </label>
                     </div>
 
                     {{-- STEP 5: KNOWLEDGE (training only — pipes are the next step) --}}

@@ -82,6 +82,7 @@ class FeatureRegistry
             // customers without wiping Channel Settings engine flags.
             'Channels' => [
                 ['key' => 'devices',        'label' => 'Channels (Devices)',   'path' => '/devices'],
+                ['key' => 'waba-tools',     'label' => 'WhatsApp Tools',       'path' => '/whatsapp-tools'],
                 ['key' => 'metaads',        'label' => 'Meta Ads',             'path' => '/meta-ads'],
                 ['key' => 'lead-ads',       'label' => 'Lead Ads',             'path' => '/lead-ads'],
                 ['key' => 'social-posts',   'label' => 'Social Posts',         'path' => '/social/posts'],

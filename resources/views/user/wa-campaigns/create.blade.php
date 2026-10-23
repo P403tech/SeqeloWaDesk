@@ -686,6 +686,8 @@
                                 </div>
                             @endif
 
+                            @include('user.wa-campaigns._send_api')
+
                             {{-- A/B test — Variant B template. Shown by JS only when the
                                  A/B toggle is on. Variant A is the template selected above;
                                  the engine-filter JS hides options that don't match the

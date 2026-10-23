@@ -661,6 +661,7 @@ class WaCampaignsController extends Controller
             'template_id'             => 'nullable|integer',
             'template_id_a'           => 'nullable|integer',
             'template_id_b'           => 'nullable|integer',
+            'send_api'                => 'nullable|in:cloud,marketing',
             // Send-time template overrides (JSON from the mapping panel).
             // Shape is validated by TemplateOverrideResolver::sanitize(),
             // which drops anything it can't walk — the column is read back
@@ -1005,6 +1006,7 @@ class WaCampaignsController extends Controller
             'template_id'          => $request->input('template_id'),
             'template_id_a'        => $request->input('template_id_a'),
             'template_id_b'        => $request->input('template_id_b'),
+            'send_api'             => $request->input('send_api') === 'marketing' ? 'marketing' : null,
             'template_overrides_b' => \App\Services\TemplateOverrideResolver::sanitize(
                 $request->input('template_overrides_b')
             ),
@@ -1217,6 +1219,43 @@ class WaCampaignsController extends Controller
                 'sort_order'          => $order++,
             ]);
         }
+    }
+
+    /**
+     * Marketing Messages API readiness of one WABA number — asks Meta for the
+     * account's marketing_messages_onboarding_status (ONBOARDED / ELIGIBLE).
+     */
+    public function marketingApiStatus(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $wsId = (int) ($request->user()->current_workspace_id ?? 0);
+        $cfg  = \App\Models\WaProviderConfig::query()
+            ->where('workspace_id', $wsId)
+            ->where('provider', 'waba')
+            ->find((int) $request->query('account'));
+        if (!$cfg) return response()->json(['ok' => false, 'status' => 'UNKNOWN']);
+
+        $status = \Illuminate\Support\Facades\Cache::remember('mm-api-status:' . $cfg->id, 600, function () use ($cfg) {
+            $creds  = $cfg->creds();
+            $token  = (string) ($creds['access_token'] ?? '');
+            $wabaId = (string) (($cfg->meta_json['waba_id'] ?? null) ?: ($creds['waba_id'] ?? ''));
+            if ($token === '' || $wabaId === '') return 'UNKNOWN';
+            $version = (string) \App\Models\SystemSetting::get('waba_graph_api_version', 'v23.0');
+            try {
+                $r = \Illuminate\Support\Facades\Http::withToken($token)->acceptJson()->timeout(10)
+                    ->get('https://graph.facebook.com/' . ltrim($version, '/') . '/' . $wabaId, [
+                        'fields' => 'marketing_messages_onboarding_status',
+                    ]);
+            } catch (\Throwable $e) {
+                return 'UNKNOWN';
+            }
+            if (!$r->successful()) {
+                Log::info('[MM-API] onboarding status lookup failed', ['cfg' => $cfg->id, 'body' => mb_substr($r->body(), 0, 300)]);
+                return 'UNKNOWN';
+            }
+            return strtoupper((string) ($r->json('marketing_messages_onboarding_status') ?: 'NOT_ELIGIBLE'));
+        });
+
+        return response()->json(['ok' => true, 'status' => $status]);
     }
 
     /**
@@ -1874,7 +1913,7 @@ class WaCampaignsController extends Controller
         $operatorHalted = false; $campaignExpired = false;
 
         $concurrency = max(1, min(30, (int) \App\Models\SystemSetting::get('campaign_parallel_concurrency', 15)));
-        $sender      = new \App\Services\Waba\TemplateSender();
+        $sender      = (new \App\Services\Waba\TemplateSender())->viaMarketingApi($campaign->send_api === 'marketing');
         $headerType  = strtoupper((string) ($tplCache->attachment_type ?: 'TEXT'));
 
         // SAME per-recipient vars pipeline the sequential fast path uses.
@@ -3227,7 +3266,7 @@ class WaCampaignsController extends Controller
                         'contact_id'  => $contact->id,
                     ];
 
-                    $sender = new \App\Services\Waba\TemplateSender();
+                    $sender = (new \App\Services\Waba\TemplateSender())->viaMarketingApi($campaign->send_api === 'marketing');
                     $res    = $sender->send($tplCache, $to, $vars);
 
 
@@ -4879,6 +4918,7 @@ class WaCampaignsController extends Controller
             'template_id'             => 'nullable|integer',
             'template_id_a'           => 'nullable|integer',
             'template_id_b'           => 'nullable|integer',
+            'send_api'                => 'nullable|in:cloud,marketing',
             // Send-time template overrides (JSON from the mapping panel).
             // Shape is validated by TemplateOverrideResolver::sanitize(),
             // which drops anything it can't walk — the column is read back
@@ -4956,6 +4996,10 @@ class WaCampaignsController extends Controller
             $campaign->template_overrides = \App\Services\TemplateOverrideResolver::sanitize(
                 $request->input('template_overrides')
             );
+        }
+
+        if ($request->has('send_api')) {
+            $campaign->send_api = $request->input('send_api') === 'marketing' ? 'marketing' : null;
         }
 
         // A/B testing flags — not in the fill() list, so set explicitly.

@@ -144,6 +144,12 @@
                         <path d="M9 14c0-2 1.5-3.5 3-3.5s3 1.5 3 3.5" />
                     </svg>
                 </a>
+                <a href="{{ url('/team-inbox/blocked-contacts') }}" class="ti-rl-btn" title="{{ __('Blocked contacts') }}">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="8" cy="8" r="6" />
+                        <path d="M4 4l8 8" />
+                    </svg>
+                </a>
                 @endcanWorkspace
                 @canWorkspace('integration.manage')
                 <button id="nav-ai-agents" class="ti-rl-btn" title="{{ __('AI Agents') }}">

@@ -43,6 +43,73 @@ class TemplateSender
     public const RC_MISSING_MEDIA   = 'missing_header_media';
 
     /**
+     * Meta refusals from /marketing_messages that mean "this account / template
+     * can't use the Marketing Messages API" — the message was never queued, so
+     * it is safe to send it once through the standard /messages instead.
+     * 134100 not a marketing template, 134101-134103 MM API not available for
+     * this account/template (ToS, ad sync), 3/10/200 app capability/permission.
+     */
+    private const MM_FALLBACK_CODES = [134100, 134101, 134102, 134103, 3, 10, 200];
+
+    /** Send MARKETING templates through Meta's Marketing Messages API. */
+    private bool $marketingApi = false;
+
+    /**
+     * Opt this sender into the Marketing Messages API. Only templates Meta
+     * categorises as MARKETING take that route; utility / authentication ones
+     * keep using /messages (the MM endpoint rejects them with 134100).
+     */
+    public function viaMarketingApi(bool $on = true): static
+    {
+        $this->marketingApi = $on;
+        return $this;
+    }
+
+    public static function isMarketingTemplate(WaTemplate $tpl): bool
+    {
+        // meta_category is what Meta actually approved it as (a "utility"
+        // template Meta re-categorised lands here as marketing).
+        return strtolower((string) ($tpl->meta_category ?: $tpl->category)) === 'marketing';
+    }
+
+    private function usesMarketingApi(WaTemplate $tpl): bool
+    {
+        return $this->marketingApi && self::isMarketingTemplate($tpl);
+    }
+
+    /** Graph edge for this template: marketing_messages or messages. */
+    private function sendEdge(WaTemplate $tpl): string
+    {
+        return $this->usesMarketingApi($tpl) ? 'marketing_messages' : 'messages';
+    }
+
+    /** Add the fields the Marketing Messages API requires to a /messages payload. */
+    private function shapeForEdge(WaTemplate $tpl, array $payload): array
+    {
+        if ($this->usesMarketingApi($tpl)) {
+            $payload = ['messaging_product' => 'whatsapp', 'recipient_type' => 'individual'] + $payload;
+        }
+        return $payload;
+    }
+
+    /**
+     * The MM API refused the message for an account/template reason (never
+     * queued): send it once through the standard /messages so the campaign
+     * still goes out. Returns the new response, or null when no fallback applies.
+     */
+    private function fallbackToCloud(WaTemplate $tpl, $resp, array $payload, string $token, string $base, string $phoneId)
+    {
+        if (!$this->usesMarketingApi($tpl) || !$resp || $resp->successful()) return null;
+        $code = (int) ($resp->json('error.code') ?? 0);
+        if (!in_array($code, self::MM_FALLBACK_CODES, true)) return null;
+        Log::warning('[WABA-template-send] Marketing Messages API refused — falling back to Cloud API', [
+            'tpl' => $tpl->id, 'code' => $code, 'msg' => mb_substr((string) $resp->json('error.message'), 0, 200),
+        ]);
+        unset($payload['recipient_type']);
+        return Http::withToken($token)->acceptJson()->timeout(20)->post("{$base}/{$phoneId}/messages", $payload);
+    }
+
+    /**
      * Resolve a Meta-hosted media id for a flow template's media header.
      *
      * The Node flow runtime sends template payloads directly to Graph. It must
@@ -211,13 +278,69 @@ class TemplateSender
         // 7. Build + POST ------------------------------------------------
         $base    = 'https://graph.facebook.com/' . ltrim($version, '/');
 
+        // 6c-bis. CAROUSEL card media → Meta media id. Each card header is
+        //     resolved exactly like the top-level media header: download the
+        //     card image (operator upload OR Meta's synced sample handle),
+        //     upload it to Meta's /media once, cache the id per (url, phone),
+        //     and send the id. Using an id — not the raw sample-handle link —
+        //     means Meta serves its own media, so a handle's expiry or an
+        //     unreachable host can't fail the card mid-campaign. On any upload
+        //     failure we keep the link as a fallback (Meta can still fetch its
+        //     own CDN sample right after a sync).
+        if ($tpl->template_type === 'carousel' && !empty($vars['cards'])) {
+            foreach ($vars['cards'] as $ci => $cardVars) {
+                if (!is_array($cardVars) || !empty($cardVars['header_media_id'])) continue;
+                $cardUrl = (string) ($cardVars['header_media_url'] ?? '');
+                if ($cardUrl === '') continue;
+                $cardMediaId = $this->resolveHeaderMediaId($tpl, $phoneId, $token, $version, $cardUrl);
+                if ($cardMediaId !== null) {
+                    $vars['cards'][$ci]['header_media_id'] = $cardMediaId;
+                    unset($vars['cards'][$ci]['header_media_url']);
+                }
+            }
+        }
+
         $template = (new TemplatePayloadBuilder())->buildSend($tpl, $vars);
-        $payload  = [
+
+        // 6d. CAROUSEL integrity guard. Every carousel card MUST carry a media
+        //     header at send time (card images are not reused from the approved
+        //     template — Meta requires them per send), so a card that resolves to
+        //     empty `components` makes Meta reject the ENTIRE broadcast with the
+        //     cryptic "template.components.cards.components is required" (code 100)
+        //     and drags the WABA quality rating down for nothing. The usual cause
+        //     is a template IMPORTED from Meta: its API never returns card media,
+        //     so until the operator attaches an image to each card in the editor
+        //     the cards have nothing to send. Refuse here with an actionable
+        //     message naming the empty cards instead of letting Meta reject.
+        if ($tpl->template_type === 'carousel') {
+            $emptyCards = [];
+            $sawCarousel = false;
+            foreach (($template['components'] ?? []) as $comp) {
+                if (strtolower((string) ($comp['type'] ?? '')) !== 'carousel') continue;
+                $sawCarousel = true;
+                foreach (($comp['cards'] ?? []) as $card) {
+                    if (empty($card['components'])) {
+                        $emptyCards[] = ((int) ($card['card_index'] ?? 0)) + 1;
+                    }
+                }
+            }
+            if (!$sawCarousel || $emptyCards) {
+                $which = $emptyCards ? (' Affected card(s): ' . implode(', ', $emptyCards) . '.') : '';
+                Log::warning('[WABA-template-send] refused — carousel card(s) have no sendable content', [
+                    'tpl' => $tpl->id, 'template' => $tpl->template_name, 'empty_cards' => $emptyCards,
+                ]);
+                return $this->fail(self::RC_MISSING_MEDIA, $tpl,
+                    'This carousel template has card(s) with no image. Open the template, Edit it, attach an image to each card, and save — then send again.' . $which);
+            }
+        }
+
+        $payload  = $this->shapeForEdge($tpl, [
             'messaging_product' => 'whatsapp',
             'to'                => preg_replace('/\D+/', '', $toNumber),
             'type'              => 'template',
             'template'          => $template,
-        ];
+        ]);
+        $edge = $this->sendEdge($tpl);
 
         // Full visibility into what we send Meta (the exact Graph payload).
         Log::info('[WABA-template-send] POST', [
@@ -225,13 +348,14 @@ class TemplateSender
             'template'         => $tpl->template_name,
             'meta_template_id' => $tpl->meta_template_id,
             'phone_id'         => $phoneId,
+            'edge'             => $edge,
             'to'               => $toNumber,
             'payload'          => $payload,
         ]);
 
         try {
             $resp = Http::withToken($token)->acceptJson()->timeout(20)
-                ->post("{$base}/{$phoneId}/messages", $payload);
+                ->post("{$base}/{$phoneId}/{$edge}", $payload);
         } catch (\Throwable $e) {
             // Timeout / connection reset — Meta may already have accepted the
             // message, so this is AMBIGUOUS: flag it so the campaign records it
@@ -257,7 +381,7 @@ class TemplateSender
                 ]);
                 try {
                     $resp = Http::withToken($token)->acceptJson()->timeout(20)
-                        ->post("{$base}/{$phoneId}/messages", $payload);
+                        ->post("{$base}/{$phoneId}/{$edge}", $payload);
                 } catch (\Throwable $e) {
                     return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
                 }
@@ -281,7 +405,7 @@ class TemplateSender
                     $payload['template']['language']['code'] = $realLang;
                     try {
                         $resp = Http::withToken($token)->acceptJson()->timeout(20)
-                            ->post("{$base}/{$phoneId}/messages", $payload);
+                            ->post("{$base}/{$phoneId}/{$edge}", $payload);
                     } catch (\Throwable $e) {
                         return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
                     }
@@ -290,6 +414,12 @@ class TemplateSender
                     }
                 }
             }
+        }
+
+        try {
+            if ($fb = $this->fallbackToCloud($tpl, $resp, $payload, $token, $base, $phoneId)) { $resp = $fb; $edge = 'messages'; }
+        } catch (\Throwable $e) {
+            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
         }
 
         if (!$resp->successful()) {
@@ -323,6 +453,7 @@ class TemplateSender
             'quality_at_send'  => $score,
             'to'               => $toNumber,
             'wamid'            => $wamid,
+            'edge'             => $edge,
         ]);
 
         // Fire `message_sent` outbound webhook — gives the customer's
@@ -438,11 +569,12 @@ class TemplateSender
             if (empty($ready)) continue;
 
             // Fire the whole chunk CONCURRENTLY, then reap.
-            $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($ready, $token, $base, $phoneId) {
+            $edge = $this->sendEdge($tpl);
+            $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($ready, $token, $base, $phoneId, $edge) {
                 $calls = [];
                 foreach ($ready as $key => $r) {
                     $calls[$key] = $pool->as((string) $key)->withToken($token)->acceptJson()->timeout(20)
-                        ->post("{$base}/{$phoneId}/messages", $r['payload']);
+                        ->post("{$base}/{$phoneId}/{$edge}", $r['payload']);
                 }
                 return $calls;
             });
@@ -505,12 +637,12 @@ class TemplateSender
         $template = (new TemplatePayloadBuilder())->buildSend($tpl, $vars);
         return [
             'ok'      => true,
-            'payload' => [
+            'payload' => $this->shapeForEdge($tpl, [
                 'messaging_product' => 'whatsapp',
                 'to'                => preg_replace('/\D+/', '', $toNumber),
                 'type'              => 'template',
                 'template'          => $template,
-            ],
+            ]),
         ];
     }
 
@@ -541,7 +673,7 @@ class TemplateSender
                 $payload['template']['language']['code'] = $baseLang;
                 try {
                     $resp = Http::withToken($token)->acceptJson()->timeout(20)
-                        ->post("{$base}/{$phoneId}/messages", $payload);
+                        ->post("{$base}/{$phoneId}/{$this->sendEdge($tpl)}", $payload);
                     if ($resp->successful()) {
                         try { $tpl->forceFill(['language' => $baseLang])->save(); } catch (\Throwable $e) {}
                     }
@@ -549,6 +681,12 @@ class TemplateSender
                     return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
                 }
             }
+        }
+
+        try {
+            if ($fb = $this->fallbackToCloud($tpl, $resp, $payload, $token, $base, $phoneId)) $resp = $fb;
+        } catch (\Throwable $e) {
+            return $this->fail(self::RC_META_ERROR, $tpl, 'HTTP exception: ' . $e->getMessage()) + ['ambiguous' => true];
         }
 
         if (!$resp->successful()) {

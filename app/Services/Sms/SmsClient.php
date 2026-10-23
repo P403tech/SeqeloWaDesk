@@ -3,6 +3,7 @@
 namespace App\Services\Sms;
 
 use App\Services\Sms\Contracts\SmsTransport;
+use App\Services\Sms\Transports\CustomHttpTransport;
 use App\Services\Sms\Transports\Msg91Transport;
 use App\Services\Sms\Transports\TwilioTransport;
 
@@ -28,8 +29,9 @@ class SmsClient implements SmsTransport
     public static function transportFor(SmsSender $sender): SmsTransport
     {
         return match (strtolower(trim($sender->provider))) {
-            'msg91' => new Msg91Transport($sender),
-            default => new TwilioTransport($sender),
+            'msg91'  => new Msg91Transport($sender),
+            'custom' => new CustomHttpTransport($sender),
+            default  => new TwilioTransport($sender),
         };
     }
 

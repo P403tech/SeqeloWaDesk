@@ -39,6 +39,8 @@ class Contact extends Model
         'subject',
         'image',
         'is_unsubscribed',
+        'is_blocked',
+        'blocked_at',
         'unsubscribed_at',
         'custom_attributes',
         // Click-to-WhatsApp / lead-ad source: which ad brought this person in.
@@ -53,6 +55,8 @@ class Contact extends Model
         'custom_attributes' => 'array',
         'attribution'       => 'array',
         'is_unsubscribed'   => 'boolean',
+        'is_blocked'        => 'boolean',
+        'blocked_at'        => 'datetime',
         'unsubscribed_at'   => 'datetime',
     ];
 

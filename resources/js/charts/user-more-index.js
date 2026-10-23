@@ -52,6 +52,7 @@ function initToolTabs() {
         'wa-forms': 'automation', 'webhooks': 'automation', 'integrations': 'automation',
         'google-account': 'automation', 'call-logs': 'automation', 'templates': 'automation',
         'meta-ads': 'automation', 'wa-links': 'automation',
+        'whatsapp-tools': 'automation', 'waba-groups': 'automation',
         // data
         'analytics': 'data', 'contacts': 'data', 'attributes': 'data', 'message-history': 'data',
         'activity-log': 'data', 'devices': 'data', 'affiliate-history': 'data', 'notifications': 'data',

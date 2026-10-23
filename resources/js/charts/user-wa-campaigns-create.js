@@ -2,8 +2,10 @@ import { initVariableMap } from '../template-var-map.js';
 import { fillSamples, loadAttributeValues } from '../template-vars.js';
 import { initFollowups } from './campaign-followups.js';
 import { initBestTime } from './campaign-best-time.js';
+import { initSendApi } from './campaign-send-api.js';
 
 export default function init() {
+    initSendApi();
     // Live preview substitutes a real SAMPLE VALUE for each {{token}} in
     // the custom body/header (real attribute demo value → friendly
     // built-in → {{key}} pill). Pure paint — never sent.

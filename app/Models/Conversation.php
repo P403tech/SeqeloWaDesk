@@ -46,7 +46,7 @@ class Conversation extends Model
         'user_id', 'workspace_id',
         'device_id', 'contact_group_id',
         'title', 'preview',
-        'status', 'platform', 'provider', 'customer_language', 'archived', 'pinned_at', 'muted_at', 'origin',
+        'status', 'platform', 'provider', 'customer_language', 'archived', 'pinned_at', 'muted_at', 'blocked_at', 'locked_at', 'origin',
         'recipients_count', 'last_message_at', 'scheduled_at', 'scheduled_timezone', 'raw_jid', 'alt_jid', 'contact_digits', 'contact_id',
         // inbox lifecycle (separate from send-queue `status`)
         'inbox_status', 'priority',
@@ -67,6 +67,8 @@ class Conversation extends Model
         'archived'         => 'boolean',
         'pinned_at'        => 'datetime',
         'muted_at'         => 'datetime',
+        'blocked_at'       => 'datetime',
+        'locked_at'        => 'datetime',
         'recipients_count' => 'integer',
         'last_message_at'  => 'datetime',
         'scheduled_at'     => 'datetime',

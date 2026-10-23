@@ -110,6 +110,7 @@ class WpCampaign extends Model
         // Kept apart from clicked_count (redirect-based); UI shows the greater.
         'meta_clicked_count', 'meta_analytics_synced_at',
         'completed_at', 'created_by',
+        'send_api',
     ];
 
     protected $casts = [

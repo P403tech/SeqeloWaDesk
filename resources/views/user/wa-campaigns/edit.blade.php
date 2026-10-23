@@ -336,6 +336,8 @@ if (!$varMapJson) {
                                 @endforeach
                             </select>
 
+                            @include('user.wa-campaigns._send_api', ['value' => $campaign->send_api])
+
                             {{-- Send-time mapping — pre-filled with whatever this
  campaign already had stored, so an edit shows the current
  override rather than blank boxes. --}}

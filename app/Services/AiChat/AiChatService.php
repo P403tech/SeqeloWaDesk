@@ -80,15 +80,27 @@ class AiChatService
               . "Visitor just said:\n" . trim($visitorMessage)
               . "\n\nReply briefly and helpfully. Plain text only, no role prefix.";
 
-        $reply = $this->provider->callProvider(
+        $webSearch = $assistant->web_search ? app(WebSearchService::class) : null;
+        if ($webSearch && ! $webSearch->configured()) {
+            $webSearch = null;
+        }
+        if ($webSearch) {
+            $system .= "\n\n" . $webSearch->instruction();
+        }
+
+        $ask = fn (string $sys) => $this->provider->callProvider(
             provider:     (string) $assistant->ai_provider,
             model:        (string) $assistant->ai_model,
             workspaceId:  (int) $assistant->workspace_id,
-            systemPrompt: $system,
+            systemPrompt: $sys,
             userPrompt:   $user,
             maxTokens:    (int) ($assistant->reply_max_tokens ?: 400),
             temperature:  (float) ($assistant->temperature ?? 0.7),
         );
+        $reply = $ask($system);
+        if ($webSearch) {
+            $reply = $webSearch->resolve($reply, fn (string $results) => $ask($system . "\n\n" . $results), (int) $assistant->workspace_id);
+        }
 
         if (!$reply || trim($reply) === '') {
             Log::warning('[AI-CHAT] empty reply, using fallback', [

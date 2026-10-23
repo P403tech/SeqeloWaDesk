@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createRoot } from 'react-dom/client';
 import { html } from 'htm/react';
 import { themeColor } from '../theme-colors.js';
+import { diagnoseFlow } from '../flows/flow-doctor.js';
 
 export default function init() {
     // App base prefix (e.g. "/public" or "") derived from the current path so
@@ -653,7 +654,7 @@ export default function init() {
       return i >= 0 ? ('arrow-lane-' + i) : 'arrow';
     };
 
-    function Toolbar({ flowId, flowName, setFlowName, status, onSave, onPublish, onTest, onVars, onUndo, onRedo, canUndo, canRedo, onAIGen }) {
+    function Toolbar({ flowId, flowName, setFlowName, status, onSave, onPublish, onTest, onVars, onUndo, onRedo, canUndo, canRedo, onAIGen, onDoctor }) {
       const isPublished = status === 'Published';
       const isUnsaved = status.includes('unsaved');
       const statusLabel = isPublished ? 'Published' : isUnsaved ? 'Unsaved' : 'Draft';
@@ -677,6 +678,7 @@ export default function init() {
             <${Icon} d="M8 1v3M8 12v3M1 8h3M12 8h3M3.5 3.5l2 2M10.5 10.5l2 2M3.5 12.5l2-2M10.5 5.5l2-2" className="w-3 h-3" />
             <span className="flow-ai-text">Generate with AI</span>
           </button>
+          <button onClick=${onDoctor} title="Check this flow for problems before publishing" className="flow-doctor-btn px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[11.5px] font-medium inline-flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.5l5 2v4c0 3-2.2 4.8-5 5.5C5.2 12.3 3 10.5 3 7.5v-4z"/><path d="M6 7.5l1.5 1.5L10.5 6"/></svg><span className="flow-btn-text">Check</span></button>
           <button onClick=${onTest} className="flow-test-btn px-3 py-1.5 border border-paper-200 rounded-full bg-paper-0 hover:bg-paper-50 text-[11.5px] font-medium inline-flex items-center gap-1.5"><${Icon} d="M5 3l8 5-8 5z" className="w-3 h-3" /><span className="flow-btn-text">Test</span></button>
           <span className="flow-status inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-paper-50 border border-paper-200 text-[10.5px] font-medium text-ink-700" title=${statusLabel}>
             <span className="w-1.5 h-1.5 rounded-full" style=${{ background: dotColor }}></span>
@@ -4287,7 +4289,8 @@ export default function init() {
       // fixed node's red border clears the moment it's connected.
       const [invalidNodes, setInvalidNodes]       = useState(() => new Set());
       const [validationError, setValidationError] = useState(null);
-      useEffect(() => { setInvalidNodes(new Set()); setValidationError(null); }, [edges]);
+      const [doctorReport, setDoctorReport]       = useState(null);
+      useEffect(() => { setInvalidNodes(new Set()); setValidationError(null); setDoctorReport(null); }, [edges]);
 
       // Workspace's approved templates + saved flows. Loaded once on
       // mount; the module-level CACHES stay in sync so renderPreview
@@ -5276,6 +5279,30 @@ export default function init() {
         return true;
       };
 
+      const focusNode = (id) => {
+        setSelectedId(id);
+        const n = (nodes || []).find(x => x.id === id);
+        const el = wrapperRef.current;
+        if (!n || !el) return;
+        const r = el.getBoundingClientRect();
+        setPan({
+          x: r.width  / 2 - (n.x + NODE_W / 2) * zoom,
+          y: r.height / 2 - (n.y + 70) * zoom,
+        });
+      };
+
+      const runDoctor = () => {
+        const report = diagnoseFlow(nodes, edges, {
+          handlesOf: (n) => nodeRows(n),
+          labelOf:   (n) => (NTYPES[n.type] && NTYPES[n.type].label) || (n && n.type) || 'node',
+          declaredVars: (vars || []).map(v => v && v.name),
+        });
+        setInvalidNodes(new Set(report.errorNodeIds));
+        setDoctorReport(report);
+        const firstId = report.errorNodeIds[0] || report.warnNodeIds[0];
+        if (firstId) focusNode(firstId);
+      };
+
       // Shared save routine — used by the toolbar's direct "Save changes" and by
       // the name-confirm modal (new flows). Backend routes update-vs-insert off
       // flow_id, so an existing flow saves silently without re-confirming its name.
@@ -5346,6 +5373,7 @@ export default function init() {
             onTest=${() => { setTestOpen(true); startTest(); }}
             onVars=${() => setVarsOpen(true)}
             onAIGen=${() => setAiOpen(true)}
+            onDoctor=${runDoctor}
           />
 
           <div className="flow-canvas-row flex-1 flex min-h-0 relative">
@@ -5556,6 +5584,47 @@ export default function init() {
                   </button>
                 </div>
               </div>
+            </div>
+          ` : null}
+
+          ${doctorReport ? html`
+            <div className="fixed right-4 top-20 z-[85] w-[360px] max-w-[calc(100vw-2rem)] bg-paper-0 border border-paper-200 rounded-2xl shadow-soft overflow-hidden flex flex-col max-h-[72vh]">
+              <div className="flex items-start gap-3 px-4 py-3 border-b border-paper-200 ${doctorReport.ok ? 'bg-wa-mint/40' : 'bg-paper-50'}">
+                <span className="w-8 h-8 rounded-full grid place-items-center shrink-0 mt-0.5" style=${{ background: doctorReport.ok ? '#D9FDD3' : '#FDEEE8', color: doctorReport.ok ? themeColor('wa-deep') : '#E87A5D' }}>
+                  <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.5l5 2v4c0 3-2.2 4.8-5 5.5C5.2 12.3 3 10.5 3 7.5v-4z"/>${doctorReport.ok ? html`<path d="M6 7.5l1.5 1.5L10.5 6"/>` : html`<path d="M8 5.5v3M8 10.5h.01"/>`}</svg>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-[13.5px] text-ink-900">Flow Doctor</div>
+                  <div className="text-[11.5px] text-ink-600 mt-0.5">
+                    ${doctorReport.empty ? 'The canvas is empty — add a Trigger to begin.'
+                      : doctorReport.ok ? 'No problems found. This flow is safe to publish.'
+                      : [
+                          doctorReport.errors.length ? (doctorReport.errors.length + ' error' + (doctorReport.errors.length === 1 ? '' : 's')) : null,
+                          doctorReport.warnings.length ? (doctorReport.warnings.length + ' warning' + (doctorReport.warnings.length === 1 ? '' : 's')) : null,
+                        ].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                <button onClick=${() => setDoctorReport(null)} className="shrink-0 w-7 h-7 rounded-full hover:bg-paper-100 grid place-items-center text-ink-500" title="Close">
+                  <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+                </button>
+              </div>
+              ${(doctorReport.errors.length || doctorReport.warnings.length) ? html`
+                <div className="overflow-y-auto px-2.5 py-2.5 space-y-1.5">
+                  ${doctorReport.errors.concat(doctorReport.warnings).map((it, i) => html`
+                    <button key=${i} onClick=${() => focusNode(it.nodeId)}
+                      className="w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-xl border border-paper-200 hover:bg-paper-50 transition">
+                      <span className="w-2 h-2 rounded-full shrink-0 mt-[5px]" style=${{ background: it.severity === 'error' ? '#E87A5D' : '#E0A340' }}></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[9.5px] font-mono uppercase tracking-[0.14em] ${it.severity === 'error' ? 'text-accent-coral' : 'text-ink-500'}">${it.severity === 'error' ? 'Error' : 'Warning'}</span>
+                        <span className="block text-[12px] text-ink-800 leading-snug">${it.msg}</span>
+                      </span>
+                      <svg viewBox="0 0 16 16" className="w-3 h-3 text-ink-500 shrink-0 mt-1" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                    </button>`)}
+                </div>
+                <div className="px-4 py-2.5 border-t border-paper-200 text-[10.5px] text-ink-500 leading-snug bg-paper-50/40">
+                  Click an item to jump to its node. ${doctorReport.errors.length ? 'Errors are outlined in red and should be fixed. ' : ''}Warnings may be intentional — a path that deliberately ends the chat is fine.
+                </div>
+              ` : null}
             </div>
           ` : null}
 

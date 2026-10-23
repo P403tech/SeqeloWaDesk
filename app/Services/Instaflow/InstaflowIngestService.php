@@ -146,12 +146,22 @@ class InstaflowIngestService
             }
         }
 
+        $mediaPath = null;
+        if ($dir === 'in' && $mediaUrl !== '') {
+            try {
+                $mediaPath = (new IgMediaFetcher())->downloadToDisk($mediaUrl, $type);
+            } catch (\Throwable $e) {
+                Log::info('[INSTAFLOW] media localise failed', ['type' => $type, 'error' => $e->getMessage()]);
+            }
+        }
+
         $inbox = InboxMessage::create([
             'conversation_id' => $convo->id,
             'provider' => 'instagram',
             'direction' => $dir,
             'body' => (string) data_get($m, 'text', ''),
             'media_type' => $type !== 'text' ? $type : null,
+            'media_path' => $mediaPath,
             'status' => $dir === 'in' ? 'received' : 'sent',
             'meta' => array_filter([
                 'buttons' => $normBtns,

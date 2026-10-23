@@ -274,9 +274,24 @@ class ConversationResolver
                 return $found;
             }
 
+            $blockedHash = \App\Models\Contact::hashPhone(null, $digits);
+            $blockedAt = (
+                Conversation::where('workspace_id', $workspaceId)
+                    ->where('contact_digits', $digits)
+                    ->whereNotNull('blocked_at')->exists()
+                || \App\Models\Contact::where('workspace_id', $workspaceId)
+                    ->where('is_blocked', true)
+                    ->where(function ($q) use ($blockedHash, $digits) {
+                        if ($blockedHash) $q->orWhere('mobile_hash', $blockedHash);
+                        $q->orWhere('channel_uid', $digits);
+                    })
+                    ->exists()
+            ) ? now() : null;
+
             return Conversation::create(array_merge([
                 'workspace_id'    => $workspaceId,
                 'raw_jid'         => (string) $jidOrPhone,
+                'blocked_at'      => $blockedAt,
                 // `title` is NOT NULL with no DB default — a caller that omits
                 // it would fatal on insert. Fall back to the saved contact name
                 // for this number, then the bare number, so the queue never

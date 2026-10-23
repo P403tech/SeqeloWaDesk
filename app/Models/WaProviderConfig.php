@@ -86,7 +86,15 @@ class WaProviderConfig extends Model
     {
         if (empty($this->credentials_json)) return [];
         try {
-            return Crypt::decrypt($this->credentials_json) ?: [];
+            $creds = Crypt::decrypt($this->credentials_json) ?: [];
+            if (is_array($creds) && !empty($creds['access_token'])) {
+                \App\Support\WabaAppSecretRegistry::remember(
+                    (string) $creds['access_token'],
+                    (string) ($creds['app_secret'] ?? ''),
+                    (int) $this->workspace_id
+                );
+            }
+            return $creds;
         } catch (\Throwable $e) {
             // Was silent — a decrypt failure looked identical to "no creds", which
             // hid the real cause (credentials_json column not migrated to TEXT so

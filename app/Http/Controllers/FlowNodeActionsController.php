@@ -1444,6 +1444,7 @@ class FlowNodeActionsController extends Controller
         // (URLs / text / Q&A, assistant-scoped + workspace-wide) and stitch
         // them into the system prompt. Same injection AiChatService does for
         // the chatbot widget, so flow replies answer from trained content.
+        $assistant = null;
         $assistantId = (int) ($data['assistant_id'] ?? 0);
         if ($assistantId > 0) {
             $assistant = \App\Models\AiChatAssistant::where('workspace_id', (int) ($data['workspace_id'] ?? 0))
@@ -1457,6 +1458,16 @@ class FlowNodeActionsController extends Controller
                 } catch (\Throwable $e) {
                     \Log::warning('[FLOW-AI] knowledge-base inject failed: ' . $e->getMessage(), ['assistant_id' => $assistantId]);
                 }
+            }
+        }
+
+        $web = null;
+        if (!$jsonMode && !empty($assistant) && $assistant->web_search) {
+            $web = app(\App\Services\AiChat\WebSearchService::class);
+            if ($web->configured()) {
+                $system .= "\n\n" . $web->instruction();
+            } else {
+                $web = null;
             }
         }
 
@@ -1484,6 +1495,17 @@ class FlowNodeActionsController extends Controller
             temperature:  (float) ($data['temperature'] ?? 0.7),
             jsonMode:     $jsonMode,
         );
+        if ($web) {
+            $reply = $web->resolve($reply, fn (string $results) => app(\App\Services\AiAgentService::class)->callProvider(
+                provider:     $provider,
+                model:        $data['model'],
+                workspaceId:  $wsForLog,
+                systemPrompt: $system . "\n\n" . $results,
+                userPrompt:   (string) ($data['user_prompt'] ?? ''),
+                maxTokens:    (int) ($data['max_tokens'] ?? 350),
+                temperature:  (float) ($data['temperature'] ?? 0.7),
+            ), $wsForLog);
+        }
 
         // ── TRACE: did the provider reply (key valid?) and what came back ──
         \Log::info('[FLOWTRACE] ai-call OUT', [

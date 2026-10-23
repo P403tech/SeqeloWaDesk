@@ -5,8 +5,10 @@
 // mirrors user-wa-campaigns-create.js but stands alone so the create
 // wizard's stepper / preview code never runs on the edit page.
 import { initFollowups } from './campaign-followups.js';
+import { initSendApi } from './campaign-send-api.js';
 
 export default function init() {
+  initSendApi();
   // Campaign Follow-ups rule builder (shared with the create wizard).
   initFollowups();
   // -----------------------------------------------------------------

@@ -40,6 +40,10 @@ Route::get('/premium',   [PremiumController::class,   'index'])->name('premium')
 Route::get('/ai-dashboard', [AiDashboardController::class, 'index'])->name('ai-dashboard');
 Route::get('/health',       [HealthController::class,      'index'])->name('health');
 Route::post('/health/clear-queue', [HealthController::class, 'clearQueue'])->name('health.clear-queue');
+Route::get('/health/logs/{which}/tail',     [\App\Http\Controllers\Admin\LogViewerController::class, 'tail'])
+    ->where('which', 'laravel|node')->name('health.logs.tail');
+Route::get('/health/logs/{which}/download', [\App\Http\Controllers\Admin\LogViewerController::class, 'download'])
+    ->where('which', 'laravel|node')->name('health.logs.download');
 
 Route::prefix('users')->name('users.')->group(function () {
     Route::get   ('/',                  [UsersController::class, 'index'])->name('index');

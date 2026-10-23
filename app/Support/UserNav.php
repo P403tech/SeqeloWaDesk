@@ -214,6 +214,8 @@ class UserNav
                 'items' => [
                     ['key' => 'devices', 'tier' => 'admin', 'href' => url('/devices'), 'label' => __('Channels'),
                         'icon' => '<circle cx="8" cy="8" r="2.2"/><circle cx="3" cy="3.5" r="1.4"/><circle cx="13" cy="3.5" r="1.4"/><circle cx="3" cy="12.5" r="1.4"/><circle cx="13" cy="12.5" r="1.4"/><path d="M4.2 4.6 6.4 6.7M11.8 4.6 9.6 6.7M4.2 11.4 6.4 9.3M11.8 11.4 9.6 9.3"/>', 'sw' => 1.5],
+                    ['key' => 'waba-tools', 'tier' => 'admin', 'href' => url('/whatsapp-tools'), 'label' => __('WhatsApp Tools'),
+                        'icon' => '<circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 1.5"/>', 'sw' => 1.5, 'waba' => true],
                     ['key' => 'metaads', 'tier' => 'admin', 'href' => url('/meta-ads'), 'label' => __('Meta Ads'),
                         'icon' => '<path d="M2 4l12-2v12L2 12V4Z"/>', 'sw' => 1.5, 'feature' => 'access_ctwa'],
                     ['key' => 'openaiads', 'tier' => 'admin', 'href' => url('/openai-ads'), 'label' => __('OpenAI Ads'),

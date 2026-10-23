@@ -169,6 +169,24 @@
                     {{-- Unified Inbox moved to the main header nav — its hero card
                          used to live here, removed to avoid duplicating the entry. --}}
 
+                    <a href="{{ url('/whatsapp-tools') }}"
+                        class="group bg-paper-0 border border-paper-200 rounded-[14px] p-4 shadow-card hover:border-wa-deep hover:shadow-soft transition flex flex-col">
+                        <div class="flex items-start justify-between gap-3">
+                            <span class="w-11 h-11 rounded-xl bg-wa-mint text-wa-deep grid place-items-center">
+                                <x-brand-icon name="whatsapp" class="w-5 h-5" />
+                            </span>
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-wa-mint text-wa-deep text-[10px] font-mono">WABA</span>
+                        </div>
+                        <h2 class="mt-4 text-[16px] font-semibold leading-tight">{{ __('WhatsApp Tools') }}</h2>
+                        <p class="mt-1.5 text-[12px] text-ink-500 leading-snug flex-1">
+                            {{ __('Official WhatsApp (WABA) extras: read receipts & typing, business profile, welcome + ice breakers + commands, QR codes, two-step PIN, and messaging analytics.') }}
+                        </p>
+                        <div class="mt-3 pt-3 border-t border-paper-200 flex items-center justify-between text-[11px] text-ink-500">
+                            <span class="font-mono">{{ __('cloud API') }}</span>
+                            <span class="text-wa-deep font-semibold group-hover:underline">{{ __('Open WhatsApp Tools') }}</span>
+                        </div>
+                    </a>
+
                     {{-- Meta Ads — moved off the header, now a first-class tool
                          card here (auto-tabs into Automation via its /meta-ads
                          href in user-more-index.js). --}}

@@ -384,7 +384,8 @@ class TeamInboxController extends Controller
                 ->where('workspace_id', $wsId)
                 ->forCurrentEngine()
                 ->deviceAlive()
-                ->where('archived', false);
+                ->where('archived', false)
+                ->whereNull('blocked_at');
 
             $inboxStats = [
                 'total'      => (clone $scoped())->whereIn('inbox_status', ['open', 'pending'])->count(),
@@ -1005,6 +1006,7 @@ class TeamInboxController extends Controller
         // Active vs Archived split — the default list hides archived chats
         // (like WhatsApp); the Archived section shows only archived ones.
         $q->where('archived', $archived);
+        $q->whereNull('blocked_at');
         // Label filter — narrow the list to one tag/label.
         if ($tagId) {
             $q->whereHas('tags', fn ($t) => $t->where('tags.id', $tagId));
@@ -1153,7 +1155,7 @@ class TeamInboxController extends Controller
         // base are computed in ONE aggregate query (was five separate COUNTs);
         // 'mentions' lives on a different table, so it stays its own query.
         $base = Conversation::query()->forWorkspace($wsId)->forCurrentEngine()->deviceAlive()
-            ->where('archived', false)->open();
+            ->where('archived', false)->whereNull('blocked_at')->open();
         if ($teamId)   $base->forTeam($teamId);
         $this->applyDeviceFilter($base, $deviceId, $deviceEngine);
         $teamIds   = $user->teamsInWorkspace($wsId)->pluck('teams.id')->all();
@@ -1733,6 +1735,10 @@ class TeamInboxController extends Controller
     {
         $conv = $this->findConvInCurrentWorkspace($id);
         $this->authorize('view', $conv);
+
+        if ($conv->locked_at && ! $this->inboxConvUnlocked($request, $conv->id)) {
+            return response()->json(['ok' => false, 'locked' => true, 'id' => $conv->id], 423);
+        }
 
         $user = $request->user();
         // Pagination: when `before` is set we're loading OLDER messages
@@ -4224,7 +4230,7 @@ class TeamInboxController extends Controller
         $data = $request->validate([
             'ids'    => 'required|array|min:1',
             'ids.*'  => 'integer',
-            'action' => 'required|in:assign,resolve,reopen,snooze,priority,tag,spam,archive,unarchive,pin,unpin,mute,unmute,delete',
+            'action' => 'required|in:assign,resolve,reopen,snooze,priority,tag,spam,archive,unarchive,pin,unpin,mute,unmute,block,unblock,lock,unlock,delete',
             'user_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('workspace_user', 'user_id')->where('workspace_id', $bulkWsId)],
             'team_id'  => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('teams', 'id')->where('workspace_id', $bulkWsId)],
             'tag_id'   => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('tags', 'id')->where('workspace_id', $bulkWsId)],
@@ -4241,6 +4247,7 @@ class TeamInboxController extends Controller
 
         $touched = 0;
         $resolvedCount = 0;
+        $metaBlockWarning = null;
         foreach ($convs as $conv) {
             try {
                 $this->authorize('bulk', $conv);
@@ -4306,6 +4313,41 @@ class TeamInboxController extends Controller
                 case 'unmute':
                     $conv->forceFill(['muted_at' => null])->save();
                     break;
+                case 'block':
+                case 'unblock':
+                    $blocking = $data['action'] === 'block';
+                    $conv->forceFill(['blocked_at' => $blocking ? now() : null])->save();
+                    $ct = $conv->contact_id ? $conv->contact : null;
+                    if (!$ct && $conv->contact_digits) {
+                        $hash = \App\Models\Contact::hashPhone(null, $conv->contact_digits);
+                        $ct = \App\Models\Contact::where('workspace_id', $conv->workspace_id)
+                            ->where(function ($q) use ($hash, $conv) {
+                                if ($hash) $q->orWhere('mobile_hash', $hash);
+                                $q->orWhere('channel_uid', $conv->contact_digits);
+                            })
+                            ->first();
+                    }
+                    if ($ct) {
+                        $ct->forceFill(['is_blocked' => $blocking, 'blocked_at' => $blocking ? now() : null])->save();
+                    }
+                    if ($conv->channel === 'whatsapp' && $conv->contact_digits) {
+                        $bc = \App\Services\Waba\WabaBlockClient::forWorkspace((int) $conv->workspace_id);
+                        if ($bc && $bc->isUsable()) {
+                            $mr = $blocking ? $bc->block($conv->contact_digits) : $bc->unblock($conv->contact_digits);
+                            if (!($mr['ok'] ?? false) && $metaBlockWarning === null) {
+                                $metaBlockWarning = (string) ($mr['error'] ?? 'Meta did not apply the WhatsApp block.');
+                            }
+                        }
+                    }
+                    break;
+                case 'lock':
+                    $conv->forceFill(['locked_at' => now()])->save();
+                    $unl = (array) $request->session()->get('inbox_unlocked', []);
+                    $request->session()->put('inbox_unlocked', array_values(array_diff($unl, [$conv->id])));
+                    break;
+                case 'unlock':
+                    $conv->forceFill(['locked_at' => null])->save();
+                    break;
                 case 'delete':
                     // Permanent delete (no SoftDeletes on Conversation). Clear the
                     // conversation's own child rows first so nothing is orphaned;
@@ -4330,7 +4372,152 @@ class TeamInboxController extends Controller
         AuditLogger::workspace('bulk.' . $data['action'], $request->user()->id, $request->user()->current_workspace_id, null, null, [
             'count' => $touched, 'ids' => $data['ids'],
         ]);
-        return response()->json(['ok' => true, 'touched' => $touched]);
+        return response()->json(['ok' => true, 'touched' => $touched, 'meta_block_warning' => $metaBlockWarning]);
+    }
+
+    public function blockedContactsPage(Request $request): \Illuminate\Contracts\View\View
+    {
+        return view('user.team-inbox.blocked-contacts');
+    }
+
+    public function blockedContactsList(Request $request): JsonResponse
+    {
+        $wsId = (int) $request->user()->current_workspace_id;
+        $rows = \App\Models\Contact::where('workspace_id', $wsId)
+            ->where('is_blocked', true)
+            ->orderByDesc('blocked_at')
+            ->limit(1000)
+            ->get(['id', 'name', 'mobile', 'channel', 'channel_uid', 'blocked_at']);
+
+        return response()->json(['ok' => true, 'contacts' => $rows->map(function ($c) {
+            $phone = (string) ($c->mobile ?: $c->channel_uid ?: '');
+            return [
+                'id'         => $c->id,
+                'name'       => $c->name ?: ($phone ?: '—'),
+                'phone'      => $phone !== '' ? mask_phone($phone) : '—',
+                'channel'    => $c->channel ?: 'whatsapp',
+                'blocked_at' => optional($c->blocked_at)->toDayDateTimeString(),
+            ];
+        })->values()]);
+    }
+
+    public function blockContactByPhone(Request $request): JsonResponse
+    {
+        $data   = $request->validate(['phone' => ['required', 'string', 'max:32']]);
+        $wsId   = (int) $request->user()->current_workspace_id;
+        $digits = preg_replace('/\D+/', '', (string) $data['phone']);
+        if ($digits === '') {
+            return response()->json(['ok' => false, 'error' => 'Enter a valid phone number.'], 422);
+        }
+
+        $hash = \App\Models\Contact::hashPhone(null, $digits);
+        $ct = $hash ? \App\Models\Contact::where('workspace_id', $wsId)->where('mobile_hash', $hash)->first() : null;
+        if (! $ct) {
+            $ct = \App\Models\Contact::create([
+                'workspace_id' => $wsId, 'user_id' => $request->user()->id,
+                'name' => $digits, 'mobile' => $digits, 'channel' => 'whatsapp',
+            ]);
+        }
+        $ct->forceFill(['is_blocked' => true, 'blocked_at' => now()])->save();
+
+        Conversation::where('workspace_id', $wsId)->where('contact_digits', $digits)
+            ->whereNull('blocked_at')->update(['blocked_at' => now()]);
+
+        $warning = null;
+        $bc = \App\Services\Waba\WabaBlockClient::forWorkspace($wsId);
+        if ($bc && $bc->isUsable()) {
+            $r = $bc->block($digits);
+            if (! ($r['ok'] ?? false)) $warning = (string) ($r['error'] ?? 'Meta did not apply the block.');
+        }
+
+        AuditLogger::workspace('contact.block', $request->user()->id, $wsId, null, null, ['contact_id' => $ct->id]);
+        return response()->json(['ok' => true, 'meta_block_warning' => $warning]);
+    }
+
+    public function unblockContacts(Request $request): JsonResponse
+    {
+        $data = $request->validate(['ids' => ['required', 'array', 'max:500'], 'ids.*' => ['integer']]);
+        $wsId = (int) $request->user()->current_workspace_id;
+        $warning = null;
+        $bc = \App\Services\Waba\WabaBlockClient::forWorkspace($wsId);
+
+        $contacts = \App\Models\Contact::where('workspace_id', $wsId)->whereIn('id', $data['ids'])->get();
+        foreach ($contacts as $ct) {
+            $ct->forceFill(['is_blocked' => false, 'blocked_at' => null])->save();
+            $digits = preg_replace('/\D+/', '', (string) $ct->mobile);
+            Conversation::where('workspace_id', $wsId)
+                ->where(function ($q) use ($ct, $digits) {
+                    $q->where('contact_id', $ct->id);
+                    if ($digits !== '') $q->orWhere('contact_digits', $digits);
+                })
+                ->whereNotNull('blocked_at')->update(['blocked_at' => null]);
+            if ($digits !== '' && $bc && $bc->isUsable()) {
+                $r = $bc->unblock($digits);
+                if (! ($r['ok'] ?? false) && $warning === null) $warning = (string) ($r['error'] ?? null);
+            }
+        }
+
+        AuditLogger::workspace('contact.unblock', $request->user()->id, $wsId, null, null, ['count' => $contacts->count()]);
+        return response()->json(['ok' => true, 'unblocked' => $contacts->count(), 'meta_block_warning' => $warning]);
+    }
+
+    private function lockedHidden(Conversation $c): bool
+    {
+        return $c->locked_at !== null
+            && ! in_array($c->id, (array) session('inbox_unlocked', []), true);
+    }
+
+    private function inboxConvUnlocked(Request $request, int $id): bool
+    {
+        return in_array($id, (array) $request->session()->get('inbox_unlocked', []), true);
+    }
+
+    private function lockPinKey(int $wsId): string { return "inbox_lock_pin_ws_{$wsId}"; }
+
+    public function lockState(Request $request): JsonResponse
+    {
+        $wsId = (int) $request->user()->current_workspace_id;
+        return response()->json([
+            'ok'      => true,
+            'pin_set' => (string) \App\Models\SystemSetting::get($this->lockPinKey($wsId), '') !== '',
+        ]);
+    }
+
+    public function lockSetPin(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'pin'     => ['required', 'digits_between:4,8'],
+            'current' => ['nullable', 'string'],
+        ]);
+        $wsId = (int) $request->user()->current_workspace_id;
+        $key  = $this->lockPinKey($wsId);
+        $existing = (string) \App\Models\SystemSetting::get($key, '');
+        if ($existing !== '') {
+            if (empty($data['current']) || ! \Illuminate\Support\Facades\Hash::check($data['current'], $existing)) {
+                return response()->json(['ok' => false, 'error' => 'Current PIN is incorrect.'], 422);
+            }
+        }
+        \App\Models\SystemSetting::set($key, \Illuminate\Support\Facades\Hash::make($data['pin']), 'string', 'Team inbox chat-lock PIN (hashed).');
+        AuditLogger::workspace('inbox.lock_pin_set', $request->user()->id, $wsId, null, null, []);
+        return response()->json(['ok' => true]);
+    }
+
+    public function lockVerify(Request $request): JsonResponse
+    {
+        $data = $request->validate(['id' => ['required', 'integer'], 'pin' => ['required', 'string']]);
+        $wsId = (int) $request->user()->current_workspace_id;
+        $existing = (string) \App\Models\SystemSetting::get($this->lockPinKey($wsId), '');
+        if ($existing === '') {
+            return response()->json(['ok' => false, 'error' => 'No inbox PIN set yet.'], 422);
+        }
+        if (! \Illuminate\Support\Facades\Hash::check($data['pin'], $existing)) {
+            return response()->json(['ok' => false, 'error' => 'Incorrect PIN.'], 422);
+        }
+        $conv = $this->findConvInCurrentWorkspace((int) $data['id']);
+        $unl  = (array) $request->session()->get('inbox_unlocked', []);
+        $unl[] = (int) $conv->id;
+        $request->session()->put('inbox_unlocked', array_values(array_unique($unl)));
+        return response()->json(['ok' => true]);
     }
 
     // ----------------------------------------------------------------
@@ -5450,6 +5637,9 @@ class TeamInboxController extends Controller
             'archived'          => (bool) $c->archived,
             'pinned'            => $c->pinned_at !== null,
             'muted'             => $c->muted_at !== null,
+            'blocked'           => $c->blocked_at !== null,
+            'locked'            => $c->locked_at !== null,
+            'locked_hidden'     => $this->lockedHidden($c),
             'tags'              => $c->relationLoaded('tags')
                                     ? $c->tags->map(fn ($t) => ['id' => $t->id, 'name' => $t->name, 'color' => $t->color])->values()
                                     : [],

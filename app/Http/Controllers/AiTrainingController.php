@@ -259,6 +259,7 @@ class AiTrainingController extends Controller
             'handoff_enabled'  => 'nullable|boolean',
             'handoff_keyword'  => 'nullable|string|max:60',
             'handoff_message'  => 'nullable|string|max:1000',
+            'web_search'       => 'nullable|boolean',
             'status'           => 'nullable|in:active,paused',
             'business_brief'   => 'nullable|string|max:8000',
             'channel_whatsapp'  => 'nullable|boolean',
@@ -274,6 +275,7 @@ class AiTrainingController extends Controller
         $data['channel_instagram'] = $request->boolean('channel_instagram');
         $data['channel_tiktok']    = $request->boolean('channel_tiktok');
         $data['shopify_tools']     = $request->boolean('shopify_tools');
+        $data['web_search']        = $request->boolean('web_search');
         $data['channel_control']   = \App\Services\Ai\AgentChannelControl::normalize($request->input('channel_control'));
 
         foreach (['channel_whatsapp', 'channel_facebook', 'channel_instagram', 'channel_tiktok', 'shopify_tools', 'business_brief', 'channel_control'] as $col) {
@@ -362,6 +364,7 @@ class AiTrainingController extends Controller
             'handoff_enabled' => 'nullable|boolean',
             'handoff_keyword' => 'nullable|string|max:60',
             'handoff_message' => 'nullable|string|max:1000',
+            'web_search'      => 'nullable|boolean',
             'business_brief'  => 'nullable|string|max:8000',
         ]);
 

@@ -3,7 +3,7 @@
  database, cache, queue, the Node WhatsApp bridge, media storage, the error
  log, every connected engine, and host vitals. Polls ?format=json to stay live.
 --}}
-<x-layouts.admin :title="__('System Health')" admin-key="health">
+<x-layouts.admin :title="__('System Health')" admin-key="health" page="admin-health">
 
     @php
         $tone = [
@@ -215,6 +215,68 @@
                     </div>
                 </div>
             @endif
+        </div>
+
+        {{-- Live logs — Laravel + Node, straight from this server --}}
+        <div class="bg-paper-0 border border-paper-200 rounded-2xl shadow-card overflow-hidden">
+            <div class="px-5 pt-5 pb-3">
+                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-500">{{ __('Logs') }}</div>
+                <p class="text-[12px] text-ink-500 mt-1">{{ __('Watch the server logs live or download the complete file — no hosting panel needed.') }}</p>
+            </div>
+            @foreach ([
+                ['laravel', __('Laravel log'), 'storage/logs/laravel.log', __('Web app, webhooks, campaigns, payments, errors.')],
+                ['node', __('Node log'), 'node/node.log', __('WhatsApp engines, flows, broadcasts sent through Node.')],
+            ] as [$lk, $ll, $lp, $ld])
+                @php $lpath = \App\Http\Controllers\Admin\LogViewerController::path($lk); @endphp
+                <div class="border-t border-paper-200" data-log-row="{{ $lk }}"
+                    data-tail-url="{{ route('admin.health.logs.tail', $lk) }}">
+                    <div class="px-5 py-3.5 flex flex-wrap items-center gap-3">
+                        <span class="w-9 h-9 rounded-xl bg-paper-100 text-ink-700 grid place-items-center shrink-0">
+                            <svg viewBox="0 0 24 24" class="w-4.5 h-4.5" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+                        </span>
+                        <div class="min-w-0 flex-1">
+                            <div class="text-[13.5px] font-semibold text-ink-900">{{ $ll }} <span class="font-mono text-[11px] font-normal text-ink-400">{{ $lp }}</span></div>
+                            <div class="text-[11.5px] text-ink-500 mt-0.5">
+                                {{ $ld }}
+                                @if ($lpath)
+                                    <span class="font-mono">· {{ number_format(filesize($lpath) / 1048576, 2) }} MB · {{ __('updated') }} {{ \Carbon\Carbon::createFromTimestamp(filemtime($lpath))->diffForHumans() }}</span>
+                                @else
+                                    <span class="text-amber-700">· {{ __('not found on this server') }}</span>
+                                @endif
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button type="button" data-log-open
+                                class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">
+                                <span class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ __('Live log') }}
+                            </button>
+                            @if ($lpath)
+                                <a href="{{ route('admin.health.logs.download', $lk) }}"
+                                    class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[12px] font-medium text-ink-800">
+                                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 13h10"/></svg>{{ __('Download full file') }}
+                                </a>
+                            @endif
+                        </div>
+                    </div>
+                    <div data-log-panel hidden class="px-5 pb-5">
+                        <div class="rounded-xl overflow-hidden border border-ink-900/80 bg-[#0B1210]">
+                            <div class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-white/10">
+                                <span data-log-state class="inline-flex items-center gap-1.5 text-[11px] font-mono text-emerald-300"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>{{ __('LIVE') }}</span>
+                                <span data-log-meta class="text-[11px] font-mono text-white/45"></span>
+                                <input type="search" data-log-filter placeholder="{{ __('Filter lines…') }}"
+                                    class="ml-auto w-40 sm:w-56 px-2.5 py-1 rounded-md bg-white/10 border border-white/10 text-[11.5px] text-white placeholder-white/40 focus:outline-none focus:border-emerald-400/60">
+                                <label class="inline-flex items-center gap-1.5 text-[11px] text-white/60 cursor-pointer select-none">
+                                    <input type="checkbox" data-log-follow checked class="rounded border-white/20 bg-white/10"> {{ __('Follow') }}
+                                </label>
+                                <button type="button" data-log-pause class="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-[11.5px] text-white">{{ __('Pause') }}</button>
+                                <button type="button" data-log-clear class="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-[11.5px] text-white">{{ __('Clear') }}</button>
+                                <button type="button" data-log-stop class="px-2.5 py-1 rounded-md bg-red-500/80 hover:bg-red-500 text-[11.5px] font-semibold text-white">{{ __('Stop') }}</button>
+                            </div>
+                            <pre data-log-out class="m-0 h-[460px] overflow-auto px-3 py-2 text-[11.5px] leading-[1.55] font-mono text-[#CFE3D8] whitespace-pre-wrap break-all"></pre>
+                        </div>
+                    </div>
+                </div>
+            @endforeach
         </div>
 
     </main>

@@ -384,6 +384,7 @@ export default function init() {
       handoff_enabled: !!state.handoff_enabled,
       handoff_keyword: state.handoff_keyword,
       handoff_message: state.handoff_message,
+      web_search: !!state.web_search,
       business_brief: state.business_brief,
       channel_whatsapp: !!state.channel_whatsapp,
       channel_facebook: !!state.channel_facebook,
@@ -426,6 +427,7 @@ export default function init() {
         handoff_enabled: !!state.handoff_enabled,
         handoff_keyword: state.handoff_keyword,
         handoff_message: state.handoff_message,
+        web_search: !!state.web_search,
         business_brief: state.business_brief,
       },
     });

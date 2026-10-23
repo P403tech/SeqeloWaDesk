@@ -159,6 +159,10 @@
                         <span
                             class="px-1.5 py-0.5 rounded-full bg-paper-100 text-ink-600 text-[10px] font-mono">A/B</span>
                     @endif
+                    @if (($c->send_api ?? null) === 'marketing')
+                        <span title="{{ __('Marketing templates sent through Meta\'s Marketing Messages API') }}"
+                            class="px-1.5 py-0.5 rounded-full bg-paper-100 text-ink-600 text-[10px] font-mono">MM API</span>
+                    @endif
                 </div>
                 <div class="text-[12px] text-ink-500 mt-0.5">
                     {{ $typeLabel }}@if ($deviceLabel)
