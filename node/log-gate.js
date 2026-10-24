@@ -29,6 +29,11 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOG_FILE = process.env.WADESK_NODE_LOG || path.join(__dirname, "node.log");
+
+/** Absolute path of the file this process is writing. Used by /api/admin/logs/*. */
+export function nodeLogFile() {
+  return LOG_FILE;
+}
 const MAX_BYTES = 20 * 1024 * 1024; // rotate to node.log.1 past ~20 MB
 
 // Keep the REAL console methods before we wrap them.

@@ -27,6 +27,8 @@ import {
   cancelCampaign
 } from '../controllers/campaignController.js';
 import { flushSettingsCache, timingSafeEqualStr } from "../utils/helpers.js";
+import { nodeLogFile } from "../log-gate.js";
+import fs from "fs";
 
 export function initializeRoutes(app) {
   // ── SECURITY (finding #16): gate the ENTIRE /api surface ──────────────
@@ -68,6 +70,63 @@ export function initializeRoutes(app) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   };
   app.use("/api", apiTokenGuard);
+
+  // Admin live log — Laravel System Health on a split host (Railway) cannot
+  // read this process's node.log from disk. Same token gate as the rest of /api.
+  const LOG_FIRST = 65536;
+  const LOG_CHUNK = 262144;
+  app.get("/api/admin/logs/tail", (req, res) => {
+    const file = nodeLogFile();
+    if (!file || !fs.existsSync(file)) {
+      return res.json({ ok: false, error: "node.log is not on this Node process yet" });
+    }
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch {
+      return res.json({ ok: false, error: "node.log is not readable" });
+    }
+    const rawOff = req.query.offset;
+    let rotated = false;
+    let start;
+    if (rawOff === undefined || rawOff === "") {
+      start = Math.max(0, size - LOG_FIRST);
+    } else {
+      start = Math.max(0, parseInt(String(rawOff), 10) || 0);
+      if (start > size) { start = 0; rotated = true; }
+    }
+    const len = Math.min(LOG_CHUNK, Math.max(0, size - start));
+    let text = "";
+    if (len > 0) {
+      try {
+        const buf = Buffer.alloc(len);
+        const fd = fs.openSync(file, "r");
+        fs.readSync(fd, buf, 0, len, start);
+        fs.closeSync(fd);
+        text = buf.toString("utf8");
+        if ((rawOff === undefined || rawOff === "") && start > 0) {
+          const nl = text.indexOf("\n");
+          text = nl === -1 ? "" : text.slice(nl + 1);
+        }
+      } catch {
+        return res.json({ ok: false, error: "node.log read failed" });
+      }
+    }
+    return res.json({
+      ok: true,
+      file: "node.log",
+      size,
+      offset: start + len,
+      behind: Math.max(0, size - (start + len)),
+      rotated,
+      text,
+    });
+  });
+  app.get("/api/admin/logs/download", (req, res) => {
+    const file = nodeLogFile();
+    if (!file || !fs.existsSync(file)) return res.status(404).end();
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="node.log"');
+    fs.createReadStream(file).pipe(res);
+  });
 
   // Cache invalidation — Laravel POSTs here when WABA config, branding
   // footer, or platform footer changes so Node picks up the new value

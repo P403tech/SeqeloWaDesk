@@ -227,7 +227,12 @@
                 ['laravel', __('Laravel log'), 'storage/logs/laravel.log', __('Web app, webhooks, campaigns, payments, errors.')],
                 ['node', __('Node log'), 'node/node.log', __('WhatsApp engines, flows, broadcasts sent through Node.')],
             ] as [$lk, $ll, $lp, $ld])
-                @php $lpath = \App\Http\Controllers\Admin\LogViewerController::path($lk); @endphp
+                @php
+                    $lpath = \App\Http\Controllers\Admin\LogViewerController::path($lk);
+                    $nodeRemote = $lk === 'node' && !$lpath && \App\Http\Controllers\Admin\LogViewerController::nodeBridgeConfigured();
+                    $laravelStderr = $lk === 'laravel' && !$lpath && \App\Http\Controllers\Admin\LogViewerController::laravelLogsToStderr();
+                    $canDownload = (bool) $lpath || $nodeRemote;
+                @endphp
                 <div class="border-t border-paper-200" data-log-row="{{ $lk }}"
                     data-tail-url="{{ route('admin.health.logs.tail', $lk) }}">
                     <div class="px-5 py-3.5 flex flex-wrap items-center gap-3">
@@ -240,6 +245,10 @@
                                 {{ $ld }}
                                 @if ($lpath)
                                     <span class="font-mono">· {{ number_format(filesize($lpath) / 1048576, 2) }} MB · {{ __('updated') }} {{ \Carbon\Carbon::createFromTimestamp(filemtime($lpath))->diffForHumans() }}</span>
+                                @elseif ($nodeRemote)
+                                    <span class="text-wa-deep">· {{ __('read from node-bridge (separate Railway service)') }}</span>
+                                @elseif ($laravelStderr)
+                                    <span class="text-ink-500">· {{ __('this web service logs to stderr — use Railway SeqeloWaDesk logs') }}</span>
                                 @else
                                     <span class="text-amber-700">· {{ __('not found on this server') }}</span>
                                 @endif
@@ -250,7 +259,7 @@
                                 class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">
                                 <span class="w-1.5 h-1.5 rounded-full bg-wa-green"></span>{{ __('Live log') }}
                             </button>
-                            @if ($lpath)
+                            @if ($canDownload)
                                 <a href="{{ route('admin.health.logs.download', $lk) }}"
                                     class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-paper-200 bg-paper-0 hover:bg-paper-50 text-[12px] font-medium text-ink-800">
                                     <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 13h10"/></svg>{{ __('Download full file') }}
