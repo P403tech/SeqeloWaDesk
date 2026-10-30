@@ -61,7 +61,7 @@ function setupRow(row) {
             const r = await fetch(url + q, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
             const j = await r.json();
             if (!j.ok) {
-                setState('UNAVAILABLE', false);
+                setState(j.info ? 'RAILWAY / STDERR' : 'UNAVAILABLE', false);
                 out.textContent = j.error || 'Log not available.';
                 stopTimer();
                 return;

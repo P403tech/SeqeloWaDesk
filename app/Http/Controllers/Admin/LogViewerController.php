@@ -22,6 +22,9 @@ class LogViewerController extends Controller
     private const FIRST_BYTES = 65536;
     private const MAX_CHUNK   = 262144;
 
+    /** Set by tailFromBridge() when the HTTP call fails — surfaced in tail(). */
+    private ?string $lastBridgeLogError = null;
+
     /** Absolute path of a log on THIS host, or null when the file is not here. */
     public static function path(string $which): ?string
     {
@@ -65,15 +68,16 @@ class LogViewerController extends Controller
             return response()->json([
                 'ok' => false,
                 'error' => self::nodeBridgeConfigured()
-                    ? __('Could not reach the Node bridge for logs. Check SERVER_URL / baileys_server_url and that node-bridge is running.')
-                    : __('Node runs as a separate service on this host. Set the bridge URL and node token in Admin → Channel settings, then use Live log — it reads node.log from node-bridge, not from this web disk.'),
+                    ? ($this->lastBridgeLogError ?? __('Could not fetch node.log from the bridge. See Admin → Channel settings → Test connection, then redeploy the node-bridge Railway service from this repo (root folder node).'))
+                    : __('Node runs on a separate Railway service. Set Server URL + X-Node-Token under Admin → Channel settings — Live log reads node.log from node-bridge, not this PHP container.'),
             ]);
         }
 
         return response()->json([
             'ok' => false,
+            'info' => self::laravelLogsToStderr(),
             'error' => self::laravelLogsToStderr()
-                ? __('This web service logs to stderr (Railway). There is no storage/logs/laravel.log file — open the SeqeloWaDesk service logs in Railway.')
+                ? __('This is normal on Railway: LOG_CHANNEL=stderr, so PHP logs go to the SeqeloWaDesk deploy log stream — not storage/logs/laravel.log. In Railway open project discerning-spirit → service SeqeloWaDesk → Deployments → View logs.')
                 : __('storage/logs/laravel.log does not exist yet.'),
         ]);
     }
@@ -153,6 +157,7 @@ class LogViewerController extends Controller
     /** @return array<string,mixed>|null */
     private function tailFromBridge(mixed $offset): ?array
     {
+        $this->lastBridgeLogError = null;
         $base = wd_node_url();
         $token = node_token();
         if ($base === '' || $token === '') {
@@ -164,15 +169,38 @@ class LogViewerController extends Controller
             $query['offset'] = (int) $offset;
         }
 
+        $url = $base.'/api/admin/logs/tail';
         try {
             $res = Http::timeout(12)
                 ->withHeaders(['X-Node-Token' => $token, 'Accept' => 'application/json'])
-                ->get($base.'/api/admin/logs/tail', $query);
+                ->get($url, $query);
         } catch (\Throwable $e) {
+            $host = parse_url($base, PHP_URL_HOST) ?: $base;
+            $this->lastBridgeLogError = __('Could not connect to :host (:msg). The bridge process may be down or the Server URL is wrong.', [
+                'host' => $host,
+                'msg' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if (in_array($res->status(), [401, 403], true)) {
+            $this->lastBridgeLogError = __('Bridge reachable but rejected X-Node-Token (HTTP :status). Set the same NODE_WEBHOOK_TOKEN on the node-bridge Railway service and in Admin → Channel settings, then Test connection.', [
+                'status' => $res->status(),
+            ]);
+
+            return null;
+        }
+
+        if ($res->status() === 404) {
+            $this->lastBridgeLogError = __('Bridge is up but /api/admin/logs/tail is missing (HTTP 404). Redeploy node-bridge from GitHub branch main, root directory node, with the latest commit that added log tail routes.');
+
             return null;
         }
 
         if (! $res->successful()) {
+            $this->lastBridgeLogError = __('Bridge returned HTTP :status for the log tail endpoint.', ['status' => $res->status()]);
+
             return null;
         }
 
