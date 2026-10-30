@@ -69,3 +69,19 @@ Schedule::call(function () {
     if (! Scaling::enabled()) return;
     \App\Jobs\ScalingHeartbeatJob::dispatch()->onConnection('redis');
 })->everyMinute()->name('scaling-worker-heartbeat')->withoutOverlapping();
+
+// Quiet workspaces have nobody polling /team-inbox, and the Node heartbeat
+// can stall. railway-start.sh already runs schedule:work. These commands are
+// idempotent and the campaign sweeper takes a cache lock, so a heartbeat
+// that is also running just skips. They are not behind the scaling toggle:
+// a scheduled campaign and an unanswered SLA must move even when scaling is off.
+Schedule::command('inbox:escalate')->everyMinute()->withoutOverlapping()->name('inbox-escalate');
+Schedule::command('inbox:wake-snoozed')->everyMinute()->withoutOverlapping()->name('inbox-wake-snoozed');
+Schedule::command('support:sla-scan')->everyFiveMinutes()->withoutOverlapping()->name('support-sla-scan');
+Schedule::call(function () {
+    try {
+        app(\App\Services\CampaignScheduleSweeper::class)->sweep();
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::warning('[SCHEDULE] campaign sweep failed: '.$e->getMessage());
+    }
+})->everyMinute()->name('campaign-schedule-sweep')->withoutOverlapping();

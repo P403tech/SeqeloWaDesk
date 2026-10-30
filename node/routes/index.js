@@ -27,6 +27,7 @@ import {
   cancelCampaign
 } from '../controllers/campaignController.js';
 import { flushSettingsCache, timingSafeEqualStr } from "../utils/helpers.js";
+import { resolveApiAuthMode } from "../http-policy.js";
 import { nodeLogFile } from "../log-gate.js";
 import fs from "fs";
 
@@ -44,14 +45,12 @@ export function initializeRoutes(app) {
   // the normal same-host Laravel->Node topology, where the internal send
   // dispatchers call http://localhost:<port> WITHOUT attaching the token.
   //
-  // Mode via NODE_API_AUTH (default 'loopback'):
-  //   'loopback' — token OR loopback peer. Secure vs the documented off-host
-  //                threat while never breaking a co-located deployment.
-  //   'token'    — require the token on every /api call (set this once the
-  //                Laravel dispatchers are wired to send X-Node-Token, or
-  //                when Node runs on a separate host from Laravel).
-  //   'off'      — legacy: no gate (explicit escape hatch only).
-  const apiAuthMode = String(process.env.NODE_API_AUTH || "loopback").toLowerCase().trim();
+  // Mode via NODE_API_AUTH. Default is loopback on a co-located install and
+  // token when RAILWAY_ENVIRONMENT is set (the bridge is a public host).
+  //   'loopback' — token OR loopback peer.
+  //   'token'    — require X-Node-Token on every /api call.
+  //   'off'      — no gate. Logged on boot. Do not use on a public host.
+  const apiAuthMode = resolveApiAuthMode();
   const remoteIsLoopback = (req) => {
     let ip = String((req.socket && req.socket.remoteAddress) || req.ip || "");
     if (ip.startsWith("::ffff:")) ip = ip.slice(7);       // IPv4-mapped IPv6

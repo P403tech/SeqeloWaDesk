@@ -5,6 +5,7 @@
 
 import fs from "fs-extra";
 import path from "path";
+import { baileysAuthRoot } from "../baileys-auth-path.js";
 import { fileURLToPath } from "url";
 import moment from "moment";
 import { updateScheduleStatusInLaravel } from "./helpers.js";
@@ -14,12 +15,7 @@ const __dirname = path.dirname(__filename);
 
 // Delete session files only
 export async function deleteSessionFilesOnly(phoneNumber) {
-  const directory = path.join(
-    __dirname,
-    "..",
-    "baileys_auth",
-    `session_${phoneNumber}`
-  );
+  const directory = path.join(baileysAuthRoot(), `session_${phoneNumber}`);
   try {
     await fs.remove(directory);
 
@@ -82,12 +78,7 @@ export async function deleteSessionFilesOnly(phoneNumber) {
 
 // Delete session files (for terminate route)
 export async function deleteSessionFiles(phoneNumber, res) {
-  const directory = path.join(
-    __dirname,
-    "..",
-    "baileys_auth",
-    `session_${phoneNumber}`
-  );
+  const directory = path.join(baileysAuthRoot(), `session_${phoneNumber}`);
   try {
     await fs.remove(directory);
 

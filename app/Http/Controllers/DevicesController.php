@@ -1291,7 +1291,7 @@ class DevicesController extends Controller
 
         $hasSecret       = (string) ($cfg->creds()['app_secret'] ?? '') !== '';
         $adminSecret     = (string) (\App\Models\SystemSetting::get('waba_app_secret', '') ?: config('bridge.meta_app_secret'));
-        $ownershipVerify = (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true);
+        $ownershipVerify = (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', false);
 
         $out = [
             'ok'                 => true,

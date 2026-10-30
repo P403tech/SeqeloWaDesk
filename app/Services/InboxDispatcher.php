@@ -281,7 +281,7 @@ class InboxDispatcher
         $url = rtrim($serverUrl, '/') . '/api/send-reaction/' . $fromEnc;
 
         try {
-            $res = Http::timeout(10)->acceptJson()->asJson()->post($url, [
+            $res = node_http()->timeout(10)->acceptJson()->asJson()->post($url, [
                 'targetPhoneNumber' => $reactTo,
                 'targetJid'         => $targetJid !== '' ? $targetJid : null,
                 'targetMessageId'   => $waMessageId !== '' ? $waMessageId : null,
@@ -1460,7 +1460,7 @@ class InboxDispatcher
 
         try {
             $hasMedia = isset($payload['file_base64']) && $payload['file_base64'];
-            $res = Http::timeout($hasMedia ? 60 : 20)->acceptJson()->asJson()->post($url, $payload);
+            $res = node_http()->timeout($hasMedia ? 60 : 20)->acceptJson()->asJson()->post($url, $payload);
             Log::info('[INBOX-BAILEYS] ←', ['msg_id' => $msg->id, 'status' => $res->status(), 'body' => mb_substr($res->body(), 0, 500)]);
             if ($res->successful()) {
                 return [
@@ -2267,7 +2267,7 @@ class InboxDispatcher
         Log::info("[{$tag}] → POST {$url}", $payload + ['msg_id' => $msg->id]);
 
         try {
-            $res = Http::timeout(10)->acceptJson()->asJson()->post($url, $payload);
+            $res = node_http()->timeout(10)->acceptJson()->asJson()->post($url, $payload);
             $ok  = $res->successful();
             Log::info("[{$tag}] ← " . $res->status() . ($ok ? ' OK' : ' FAIL'), [
                 'msg_id' => $msg->id, 'status' => $res->status(),

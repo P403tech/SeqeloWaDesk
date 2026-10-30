@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use App\Models\Concerns\LogsNotifications;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -25,7 +26,7 @@ use Illuminate\Support\Facades\Storage;
  */
 class Flow extends Model
 {
-    use HasEngineScope, HasFactory, SoftDeletes, LogsNotifications;
+    use BelongsToWorkspace, HasEngineScope, HasFactory, SoftDeletes, LogsNotifications;
 
     /**
      * Auto-stamp `provider` on create from the workspace's active engine.

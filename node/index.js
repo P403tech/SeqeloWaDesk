@@ -5,6 +5,8 @@ import fs from "fs-extra";
 import { BaileysClientManager } from "./classes/BaileysClientManager.js";
 import axios from "axios";
 import config from "./config/config.js";
+import { makeCorsOriginCheck } from "./http-policy.js";
+import { baileysAuthRoot } from "./baileys-auth-path.js";
 import { initializeRoutes } from "./routes/index.js";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -32,37 +34,11 @@ const app = express();
 const port = config.application.port || 3000;
 const appDomainName = config.application.appDomainName || "localhost";
 
-// ── DYNAMIC CORS ──────────────────────────────────────────────────────
-// The bridge is deployed to many hosts/IPs, so the allow-list is NEVER
-// hardcoded — it derives from the env the installer writes:
-//   • APP_DOMAIN_NAME  (node/.env — the Laravel app URL)        → always allowed
-//   • ALLOWED_ORIGINS  (node/.env — comma-separated extra hosts) → allowed
-//   • any chrome-extension:// or moz-extension:// origin (the WaDesk
-//     browser extension)                                         → always allowed
-//   • localhost / 127.0.0.1 on any port (local dev)              → always allowed
-//   • requests with no Origin (server-to-server / curl)          → allowed
-// DEFAULT (no ALLOWED_ORIGINS set, or set to "*"): allow EVERY origin, so a
-// fresh deploy on a new URL works immediately without editing this file. The
-// X-Node-Token shared secret is the real security boundary — CORS is a
-// convenience guard. Set ALLOWED_ORIGINS=https://a.com,https://b.com in
-// node/.env to lock it down to an explicit list.
-const envOrigins = String(process.env.ALLOWED_ORIGINS || '')
-  .split(',').map((s) => s.trim()).filter(Boolean);
-const restrictOrigins = envOrigins.length > 0 && !envOrigins.includes('*');
-const staticAllow = new Set(
-  [appDomainName, ...envOrigins].filter(Boolean).map((o) => String(o).replace(/\/+$/, ''))
-);
-
-function corsOriginCheck(origin, cb) {
-  if (!origin) return cb(null, true);                                  // server-to-server / curl
-  const o = String(origin).replace(/\/+$/, '');
-  if (o.startsWith('chrome-extension://') || o.startsWith('moz-extension://')) return cb(null, true);
-  if (!restrictOrigins) return cb(null, true);                         // permissive default — token-protected
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)) return cb(null, true);
-  if (staticAllow.has(o)) return cb(null, true);
-  console.warn(`[cors] blocked origin: ${origin} (set ALLOWED_ORIGINS / APP_DOMAIN_NAME in node/.env to allow it)`);
-  return cb(null, false);
-}
+// Browser origins: the Laravel app host, ALLOWED_ORIGINS, extensions, and
+// localhost. A public APP_DOMAIN_NAME refuses every other website.
+// ALLOWED_ORIGINS=* keeps the old allow-all behaviour. Calls with no
+// Origin (Laravel, curl) are always allowed; the token is what authorizes them.
+const corsOriginCheck = makeCorsOriginCheck(appDomainName);
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
@@ -486,13 +462,8 @@ app.listen(port, async () => {
 async function restoreSessions() {
   console.log("\nRestoring active sessions...");
   try {
-    const authPath = path.join(__dirname, "baileys_auth");
-
-    // Ensure auth directory exists
-    if (!fs.existsSync(authPath)) {
-      console.log("No auth directory found. Skipping restoration.");
-      return;
-    }
+    const authPath = baileysAuthRoot();
+    await fs.ensureDir(authPath);
 
     const files = await fs.readdir(authPath);
     const sessionFolders = files.filter(f => f.startsWith("session_"));

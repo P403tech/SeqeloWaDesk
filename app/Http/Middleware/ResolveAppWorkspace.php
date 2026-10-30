@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\WorkspaceContext;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -212,6 +213,15 @@ class ResolveAppWorkspace
             }
         }
 
-        return $next($request);
+        $wsIdBound = (int) ($user->current_workspace_id ?? 0);
+        if ($wsIdBound > 0) {
+            WorkspaceContext::set($wsIdBound, (int) $user->id, false);
+        }
+
+        try {
+            return $next($request);
+        } finally {
+            WorkspaceContext::clear();
+        }
     }
 }

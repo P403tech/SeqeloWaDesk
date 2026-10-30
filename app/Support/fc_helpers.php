@@ -666,6 +666,19 @@ if (! function_exists('node_token')) {
     }
 }
 
+if (! function_exists('node_http')) {
+    /**
+     * HTTP client for Laravel → Node. Attaches the shared secret so a bridge
+     * that requires X-Node-Token (the Railway default) accepts the call.
+     */
+    function node_http(): \Illuminate\Http\Client\PendingRequest
+    {
+        return \Illuminate\Support\Facades\Http::withHeaders([
+            'X-Node-Token' => node_token(),
+        ]);
+    }
+}
+
 if (! function_exists('wd_node_url')) {
     /**
      * Base URL of the Node bridge. DB `baileys_server_url` (set by admin at

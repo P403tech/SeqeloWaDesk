@@ -1,3 +1,8 @@
+# Session files: the image writes to /data/baileys (BAILEYS_AUTH_DIR).
+# Attach a volume mounted at /data so redeploys keep paired phones.
+# Set NODE_API_AUTH=token (the default when RAILWAY_ENVIRONMENT is present)
+# and point APP_DOMAIN_NAME at the Laravel public origin.
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

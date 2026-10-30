@@ -42,7 +42,7 @@ class GroupNotifier
         )));
 
         try {
-            $res = Http::timeout(20)->acceptJson()->asJson()->post(
+            $res = node_http()->timeout(20)->acceptJson()->asJson()->post(
                 rtrim($base, '/') . '/api/send-group-message/' . urlencode($from),
                 [
                     'group_jid' => $group->group_jid,

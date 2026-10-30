@@ -1,0 +1,27 @@
+name: phpunit
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tenancy-and-webhooks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: mbstring, pdo_sqlite, sqlite3, gd, intl, zip, bcmath
+          coverage: none
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: App key
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+      - name: Tenancy and webhook tests
+        run: php artisan test --filter="WorkspaceContextIsolationTest|SmsInboundSignatureTest|InstagramWebhook"

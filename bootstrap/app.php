@@ -155,6 +155,11 @@ return Application::configure(basePath: dirname(__DIR__))
         ['middleware' => ['web', 'auth']],
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->appendToPriorityList(
+            \Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests::class,
+            \App\Http\Middleware\BindWorkspaceContext::class,
+        );
+
         $middleware->alias([
             'admin'              => \App\Http\Middleware\EnsureUserIsAdmin::class,
             // Customer REST API key auth — resolves a workspace key and acts
@@ -196,35 +201,29 @@ return Application::configure(basePath: dirname(__DIR__))
             'widget.cors'        => \App\Http\Middleware\ChatbotWidgetCors::class,
         ]);
 
-        // Trust the reverse proxy/edge in front of us so $request->ip() and HTTPS
-        // detection reflect the REAL client (needed for ngrok / Cloudflare Tunnel /
-        // AWS ALB so Laravel doesn't emit http:// asset URLs behind TLS).
+        // Trust the reverse proxy in front of us so $request->ip() and HTTPS
+        // detection reflect the real client (Railway, ngrok, Cloudflare, ALB).
         //
-        // Trusting '*' is DANGEROUS: it makes Symfony derive the client IP from the
-        // client-supplied X-Forwarded-For header, so any request can spoof its IP
-        // and defeat the admin IP allowlist, per-IP rate limits, login lockout and
-        // audit logging. The trusted set is env-driven via TRUSTED_PROXIES.
+        // Default is the literal REMOTE_ADDR: trust only the socket peer that
+        // opened this connection, and read X-Forwarded-* from that peer alone.
+        // A client who is not the proxy cannot supply the client IP. Railway's
+        // public edge overwrites X-Forwarded-For, and its proxy address is not
+        // a stable CIDR, so pinning a range would break HTTPS detection.
         //
-        // IMPORTANT (no-breakage default): these instances sit behind a reverse
-        // proxy / tunnel that TERMINATES TLS, so Laravel MUST trust the proxy's
-        // X-Forwarded-Proto or it will think requests are plain HTTP (broken
-        // secure cookies, wrong scheme in generated URLs, redirect loops). We
-        // therefore preserve the prior working behaviour and DEFAULT to trusting
-        // the edge. To HARDEN against X-Forwarded-For spoofing, set TRUSTED_PROXIES
-        // to the exact edge IP/CIDR (e.g. "10.0.0.0/8,192.168.1.5") — that both
-        // fixes HTTPS detection AND ignores spoofed XFF from anywhere else.
-        //
-        // TRUSTED_PROXIES: comma-separated IPs/CIDRs of your actual edge, or the
-        // literal "*". Unset => "*" (trust the edge; lock down when you know its IP).
+        // TRUSTED_PROXIES: comma-separated IPs/CIDRs, or REMOTE_ADDR. The value
+        // "*" is rewritten to REMOTE_ADDR so an old env entry cannot mean
+        // "trust every address" on a future framework upgrade.
         $trustedProxies = array_values(array_filter(array_map(
             'trim',
             explode(',', (string) env('TRUSTED_PROXIES', ''))
         ), fn ($p) => $p !== ''));
+        $trustedProxies = array_map(
+            fn ($p) => $p === '*' ? 'REMOTE_ADDR' : $p,
+            $trustedProxies
+        );
 
         $middleware->trustProxies(
-            at: $trustedProxies === []
-                ? '*'
-                : (in_array('*', $trustedProxies, true) ? '*' : $trustedProxies),
+            at: $trustedProxies === [] ? 'REMOTE_ADDR' : $trustedProxies,
             headers:
                 \Illuminate\Http\Request::HEADER_X_FORWARDED_FOR |
                 \Illuminate\Http\Request::HEADER_X_FORWARDED_HOST |
@@ -315,6 +314,9 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\SessionTimeout::class,
             \App\Http\Middleware\Force2FA::class,
             \App\Http\Middleware\LimitConcurrentSessions::class,
+            // After auth (priority list below): tenant queries on Contact,
+            // Conversation, Device, Flow, and WpCampaign hide other workspaces.
+            \App\Http\Middleware\BindWorkspaceContext::class,
             // Live read-only demo. No-op unless DEMO_MODE=true; when on, every
             // page is browsable but logged-in users can't create/update/delete.
             \App\Http\Middleware\DemoMode::class,

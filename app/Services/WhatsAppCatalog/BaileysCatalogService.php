@@ -81,7 +81,7 @@ class BaileysCatalogService
             throw new WhatsAppCatalogException('Sending device has no phone number.');
         }
 
-        $res = Http::timeout(60)
+        $res = node_http()->timeout(60)
             ->acceptJson()
             ->post($this->nodeBaseUrl . '/api/send-product-catalog/' . $senderPhone, [
                 'json' => $payload,
@@ -107,7 +107,7 @@ class BaileysCatalogService
     {
         $senderPhone = preg_replace('/\D+/', '', trim(($device->country_code ?? '') . ($device->phone_number ?? '')));
         $text = trim(($body ?: 'Browse our shop:') . "\n" . $publicUrl);
-        $res = Http::timeout(30)->acceptJson()
+        $res = node_http()->timeout(30)->acceptJson()
             ->post($this->nodeBaseUrl . '/api/send-message/' . $senderPhone, [
                 'targetPhoneNumber' => $toWaId,
                 'message'           => $text,

@@ -267,7 +267,7 @@ class WhatsAppDispatcher
         $reactTo = $isInbound ? ($msg->from_number ?: null) : $msg->to_number;
 
         try {
-            $res = Http::timeout(10)->acceptJson()->asJson()->post($url, [
+            $res = node_http()->timeout(10)->acceptJson()->asJson()->post($url, [
                 'targetPhoneNumber' => $reactTo,
                 'targetJid'         => $targetJid !== '' ? $targetJid : null,
                 'targetMessageId'   => $waMessageId !== '' ? $waMessageId : null,
@@ -407,7 +407,7 @@ class WhatsAppDispatcher
         Log::info("[{$tag}] → POST {$url}", $payload + ['msg_id' => $msg->id]);
 
         try {
-            $res = Http::timeout(10)->acceptJson()->asJson()->post($url, $payload);
+            $res = node_http()->timeout(10)->acceptJson()->asJson()->post($url, $payload);
             $okFlag  = $res->successful();
             $errBody = $okFlag ? null : $res->body();
             Log::info("[{$tag}] ← " . $res->status() . ($okFlag ? ' OK' : ' FAIL'), [
@@ -781,7 +781,7 @@ class WhatsAppDispatcher
             // and the operator retried, sending duplicates. 40s sits above Node's
             // 30s ceiling so a slow-but-successful send is reported honestly.
             $hasMedia = isset($payload['file_base64']) && $payload['file_base64'];
-            $res = Http::timeout($hasMedia ? 90 : 40)->acceptJson()->asJson()->post($url, $payload);
+            $res = node_http()->timeout($hasMedia ? 90 : 40)->acceptJson()->asJson()->post($url, $payload);
             $tookMs = (int) ((microtime(true) - $started) * 1000);
 
             Log::info('[BAILEYS] ←', [

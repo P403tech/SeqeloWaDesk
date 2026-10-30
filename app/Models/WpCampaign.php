@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use App\Models\Concerns\LogsNotifications;
 use App\Models\Concerns\TracksPlanQuota;
@@ -21,7 +22,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class WpCampaign extends Model
 {
-    use HasEngineScope, HasFactory, LogsNotifications, TracksPlanQuota;
+    use BelongsToWorkspace, HasEngineScope, HasFactory, LogsNotifications, TracksPlanQuota;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return 'created_by';
+    }
 
     protected $table = 'wpcampaigns';
 

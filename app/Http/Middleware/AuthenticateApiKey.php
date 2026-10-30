@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\ApiKey;
 use App\Models\User;
+use App\Support\WorkspaceContext;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -47,7 +48,16 @@ class AuthenticateApiKey
 
         $key->forceFill(['last_used_at' => now()])->saveQuietly();
 
-        return $next($request);
+        $wsId = (int) $key->workspace_id;
+        if ($wsId > 0) {
+            WorkspaceContext::set($wsId, (int) $user->id, false);
+        }
+
+        try {
+            return $next($request);
+        } finally {
+            WorkspaceContext::clear();
+        }
     }
 
     private function deny(string $code, string $message, int $status): Response

@@ -57,13 +57,14 @@ class SmsWebhookController extends Controller
             return $this->twiml();
         }
 
-        // Twilio request-signature check — only when the header is present (Msg91
-        // and our own smoke tests carry none). A present-but-wrong signature is
-        // rejected; an absent one is allowed through (the number match already
-        // scoped it to this workspace).
-        if ($request->hasHeader('X-Twilio-Signature')
+        // Twilio always signs the POST. A missing header is a forged request
+        // that merely knows our number — do not file it as a customer message.
+        // MSG91 has no Twilio signature; a present-but-wrong Twilio header is
+        // still rejected so a Twilio payload cannot be replayed at an MSG91 number.
+        $twilio = $sender->provider === 'twilio';
+        if (($twilio || $request->hasHeader('X-Twilio-Signature'))
             && ! $this->twilioSignatureValid($request, $sender->auth_token)) {
-            Log::warning('[SMS] inbound signature mismatch', ['to' => $to]);
+            Log::warning('[SMS] inbound signature mismatch', ['to' => $to, 'provider' => $sender->provider]);
 
             return response('forbidden', 403);
         }

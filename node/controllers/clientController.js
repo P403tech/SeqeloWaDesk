@@ -7,6 +7,7 @@ import { BaileysClientManager } from "../classes/BaileysClientManager.js";
 import { updateStatusInLaravel } from "../utils/helpers.js";
 import fs from "fs-extra";
 import path from "path";
+import { baileysAuthRoot } from "../baileys-auth-path.js";
 import { fileURLToPath } from "url";
 
 /**
@@ -521,12 +522,7 @@ export async function checkConnection(req, res, app) {
           // 1. Determine auth folder path (mimicking BaileysClientManager constructor)
           const __filename = fileURLToPath(import.meta.url);
           const __dirname = path.dirname(__filename);
-          const authFolder = path.join(
-            __dirname,
-            "..",
-            "baileys_auth",
-            `session_${phoneNumber}`
-          );
+          const authFolder = path.join(baileysAuthRoot(), `session_${phoneNumber}`);
           
           // 2. Check if it exists and remove it
           if (await fs.pathExists(authFolder)) {

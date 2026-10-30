@@ -17,6 +17,7 @@ import P from "pino";
 import { Boom } from "@hapi/boom";
 import fs from "fs-extra";
 import path from "path";
+import { baileysAuthRoot } from "../baileys-auth-path.js";
 import { fileURLToPath } from "url";
 import { randomBytes } from "crypto";
 import axios from "axios";
@@ -104,12 +105,7 @@ export class BaileysClientManager {
     this.logger = P({ level: process.env.BAILEYS_LOG_LEVEL || "warn" });
     this.appLocals = appLocals;
     this.appDomainName = appDomainName;
-    this.authFolder = path.join(
-      __dirname,
-      "..",
-      "baileys_auth",
-      `session_${phoneNumber}`
-    );
+    this.authFolder = path.join(baileysAuthRoot(), `session_${phoneNumber}`);
     // Per-number proxy / IP isolation. `this.proxy` = {enabled,type,host,port,
     // username,password} (set by setProxy() from Laravel's connect payload, OR
     // loaded from <authFolder>/proxy.json on auto-reconnect). `this.proxyAgent`

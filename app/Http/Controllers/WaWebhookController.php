@@ -263,7 +263,7 @@ class WaWebhookController extends Controller
                         'creds_keys'       => array_keys($cr),
                         'has_access_token' => (string) ($cr['access_token'] ?? '') !== '',
                         'has_app_secret'   => (string) ($cr['app_secret'] ?? '') !== '',
-                        'waba_verify_by_ownership' => (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true),
+                        'waba_verify_by_ownership' => (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', false),
                     ]);
                 }
             } catch (\Throwable $e) {
@@ -286,12 +286,12 @@ class WaWebhookController extends Controller
             // This is WEAKER than the signature and deliberately so — it proves
             // "this number belongs to us", not "Meta sent this exact POST". An
             // attacker who knows the webhook URL AND a live phone_number_id could
-            // still inject a message. It is enabled by default because inbound is
-            // otherwise dead for these numbers; set waba_verify_by_ownership=false
-            // to enforce signature-only.
+            // still inject a message. It is OFF unless an admin sets
+            // waba_verify_by_ownership=true. The safe fix is to store that
+            // number's Meta App Secret so the HMAC above can pass.
             if (!$passed
                 && $knownCfg
-                && (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', true)) {
+                && (bool) \App\Models\SystemSetting::get('waba_verify_by_ownership', false)) {
 
                 if ($this->confirmsOwnership($knownCfg, $pidTop)) {
                     $passed = true;

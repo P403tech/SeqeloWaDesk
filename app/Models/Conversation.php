@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -22,7 +23,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Conversation extends Model
 {
-    use HasFactory;
+    use BelongsToWorkspace, HasFactory;
     // Multi-engine: forCurrentEngine() now scopes to the workspace's ENABLED
     // ENGINE SET (whereIn enginesFor), shared with the other engine-scoped
     // models, so the Team Inbox queue/badges/unread show every enabled
