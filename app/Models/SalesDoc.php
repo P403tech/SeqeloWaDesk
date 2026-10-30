@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +15,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SalesDoc extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     public const TYPE_PROPOSAL = 'proposal';
     public const TYPE_ESTIMATE = 'estimate';
     public const TYPES = [self::TYPE_PROPOSAL, self::TYPE_ESTIMATE];

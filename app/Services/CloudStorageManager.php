@@ -260,22 +260,24 @@ class CloudStorageManager
      */
     public static function railwayEnv(): array
     {
-        $linked = (string) env('RAILWAY_BUCKET_ID', '') !== ''
-            || str_contains((string) env('AWS_ENDPOINT', ''), 'storageapi.dev')
-            || str_contains((string) env('ENDPOINT', ''), 'storageapi.dev');
+        $c = (array) config('filesystems.railway_bucket', []);
+        $endpoint = (string) ($c['endpoint'] ?? '');
+        $endpointAlt = (string) ($c['endpoint_alt'] ?? '');
+        $linked = (string) ($c['id'] ?? '') !== ''
+            || str_contains($endpoint, 'storageapi.dev')
+            || str_contains($endpointAlt, 'storageapi.dev');
 
-        $key = (string) (env('AWS_ACCESS_KEY_ID') ?: '');
-        $secret = (string) (env('AWS_SECRET_ACCESS_KEY') ?: '');
-        $bucket = (string) (env('AWS_BUCKET') ?: '');
-        $region = (string) (env('AWS_DEFAULT_REGION') ?: 'auto');
-        $endpoint = (string) (env('AWS_ENDPOINT') ?: '');
+        $key = (string) ($c['key'] ?? '');
+        $secret = (string) ($c['secret'] ?? '');
+        $bucket = (string) ($c['bucket'] ?? '');
+        $region = (string) (($c['region'] ?? '') !== '' ? $c['region'] : 'auto');
 
         if ($linked) {
-            $key = $key !== '' ? $key : (string) (env('ACCESS_KEY_ID') ?: env('BUCKET_ACCESS_KEY_ID') ?: '');
-            $secret = $secret !== '' ? $secret : (string) (env('SECRET_ACCESS_KEY') ?: env('BUCKET_SECRET_ACCESS_KEY') ?: '');
-            $bucket = $bucket !== '' ? $bucket : (string) (env('BUCKET') ?: env('BUCKET_NAME') ?: '');
-            $region = (string) (env('AWS_DEFAULT_REGION') ?: env('REGION') ?: 'auto');
-            $endpoint = $endpoint !== '' ? $endpoint : (string) (env('ENDPOINT') ?: env('BUCKET_ENDPOINT') ?: '');
+            $key = $key !== '' ? $key : (string) (($c['access_key_id'] ?? '') ?: ($c['bucket_access_key_id'] ?? ''));
+            $secret = $secret !== '' ? $secret : (string) (($c['secret_access_key'] ?? '') ?: ($c['bucket_secret_access_key'] ?? ''));
+            $bucket = $bucket !== '' ? $bucket : (string) (($c['name'] ?? '') ?: ($c['name_alt'] ?? ''));
+            $region = (string) (($c['region'] ?? '') !== '' ? $c['region'] : (($c['region_alt'] ?? '') !== '' ? $c['region_alt'] : 'auto'));
+            $endpoint = $endpoint !== '' ? $endpoint : (string) (($endpointAlt !== '' ? $endpointAlt : ($c['bucket_endpoint'] ?? '')));
         }
 
         if ($endpoint === '' && ($key !== '' || $bucket !== '')) {

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\LogsNotifications;
 use App\Services\WorkspaceEngine;
 use Illuminate\Database\Eloquent\Builder;
@@ -19,7 +20,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WaTemplate extends Model
 {
-    use HasFactory, LogsNotifications;
+    use HasFactory, LogsNotifications, BelongsToWorkspace;
+
+    public function workspaceSharesUnownedRows(): bool
+    {
+        return true;
+    }
 
     protected $table = 'wa_templates';
 

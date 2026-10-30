@@ -16,6 +16,8 @@
  * submit handler (auth-recaptcha.js) and any AJAX form handlers untouched.
  */
 
+const origFetch = window.fetch.bind(window);
+
 function applyToken(tok) {
     if (!tok) return;
     document.querySelectorAll('input[name="_token"]').forEach((i) => { i.value = tok; });
@@ -23,21 +25,26 @@ function applyToken(tok) {
     if (meta) meta.setAttribute('content', tok);
 }
 
+function csrfPresent() {
+    return document.querySelector('meta[name="csrf-token"], input[name="_token"]');
+}
+
 async function refreshToken() {
-    // Only the pages that can actually 419 — i.e. that carry a CSRF form.
-    if (!document.querySelector('input[name="_token"]')) return;
+    if (!csrfPresent()) return '';
     try {
         const url = (typeof window.appUrl === 'function') ? window.appUrl('/csrf-token') : '/csrf-token';
-        const res = await fetch(url, {
+        const res = await origFetch(url, {
             headers: { Accept: 'application/json' },
             credentials: 'same-origin',
             cache: 'no-store',
         });
-        if (!res.ok) return;
+        if (!res.ok) return '';
         const data = await res.json();
-        applyToken(data && data.token);
+        const tok = (data && data.token) || '';
+        applyToken(tok);
+        return tok;
     } catch (e) {
-        /* offline / blocked — the server-side graceful 419 handler is the net */
+        return '';
     }
 }
 
@@ -47,6 +54,17 @@ if (document.readyState === 'loading') {
     refreshToken();
 }
 
-// bfcache restores the DOM (and its stale _token) verbatim without re-running
-// module top-level code, so refresh again when the page comes back from cache.
 window.addEventListener('pageshow', (e) => { if (e.persisted) refreshToken(); });
+setInterval(refreshToken, 10 * 60 * 1000);
+
+window.fetch = async function (input, init) {
+    const res = await origFetch(input, init);
+    if (res.status !== 419 || (init && init.__csrfRetried)) return res;
+    const before = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const tok = await refreshToken();
+    if (!tok || tok === before) return res;
+    const headers = new Headers((init && init.headers) || (input instanceof Request ? input.headers : undefined));
+    headers.set('X-CSRF-TOKEN', tok);
+    const next = Object.assign({}, init, { headers: headers, __csrfRetried: true });
+    return origFetch(input, next);
+};

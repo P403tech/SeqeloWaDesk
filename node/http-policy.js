@@ -12,10 +12,11 @@ export function resolveApiAuthMode() {
   const raw = String(process.env.NODE_API_AUTH || fallback).toLowerCase().trim();
 
   if (raw === "off") {
-    console.warn("[auth] NODE_API_AUTH=off — the /api gate is disabled. Remove it once Laravel sends X-Node-Token.");
+    console.warn("[auth] NODE_API_AUTH=off is ignored. The bridge stays on the " + fallback + " gate.");
+    return fallback;
   }
 
-  if (raw !== "token" && raw !== "loopback" && raw !== "off") {
+  if (raw !== "token" && raw !== "loopback") {
     return fallback;
   }
 
@@ -49,7 +50,16 @@ export function makeCorsOriginCheck(appDomainName) {
   const restrict = !allowAll && (listed.length > 0 || !appIsLocal);
 
   const allowed = new Set(
-    [appOrigin, process.env.APP_URL, process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL, ...listed]
+    [
+      appOrigin,
+      process.env.APP_URL,
+      process.env.PUBLIC_APP_URL,
+      process.env.LARAVEL_APP_URL,
+      process.env.RAILWAY_PUBLIC_DOMAIN,
+      process.env.RAILWAY_STATIC_URL,
+      "https://www.apps.seqelo.com",
+      ...listed,
+    ]
       .map(asOrigin)
       .filter((o) => o && o !== "https://*")
   );

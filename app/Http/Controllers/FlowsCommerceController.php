@@ -298,7 +298,7 @@ class FlowsCommerceController extends Controller
         if ($phoneId === '' || $accessToken === '') {
             return response()->json(['ok' => false, 'error' => 'waba_creds_missing'], 422);
         }
-        $version = (string) (env('META_GRAPH_VERSION') ?: 'v21.0');
+        $version = (string) config('bridge.meta_graph_version', 'v21.0');
 
         try {
             $resp = \Illuminate\Support\Facades\Http::withToken($accessToken)

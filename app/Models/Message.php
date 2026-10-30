@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -20,7 +21,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  */
 class Message extends Model
 {
-    use HasEngineScope, HasFactory, SoftDeletes;
+    use HasEngineScope, HasFactory, SoftDeletes, BelongsToWorkspace;
 
     /**
      * Auto-stamp `provider` from the parent Conversation's engine (the

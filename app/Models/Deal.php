@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +15,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Deal extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     protected $fillable = [
         'workspace_id', 'pipeline_id', 'stage_id',
         'contact_id', 'company_id', 'conversation_id',

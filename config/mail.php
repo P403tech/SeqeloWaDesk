@@ -16,6 +16,9 @@ return [
 
     'default' => env('MAIL_MAILER', 'log'),
 
+    /** Raw MAIL_HOST, null when the env var was never set. */
+    'env_host' => env('MAIL_HOST'),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations

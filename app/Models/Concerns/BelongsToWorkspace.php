@@ -27,7 +27,9 @@ trait BelongsToWorkspace
             $owner = $q->getModel()->workspaceLegacyOwnerColumn();
             $userId = WorkspaceContext::userId();
 
-            $q->where(function (Builder $qq) use ($wsId, $owner, $userId) {
+            $shareUnowned = $q->getModel()->workspaceSharesUnownedRows();
+
+            $q->where(function (Builder $qq) use ($wsId, $owner, $userId, $shareUnowned) {
                 $qq->where($qq->getModel()->getTable().'.workspace_id', $wsId);
                 if ($owner && $userId && ! WorkspaceContext::impersonating()) {
                     $qq->orWhere(function (Builder $qqq) use ($owner, $userId) {
@@ -35,8 +37,23 @@ trait BelongsToWorkspace
                         $qqq->whereNull($table.'.workspace_id')->where($table.'.'.$owner, $userId);
                     });
                 }
+                if ($shareUnowned) {
+                    $qq->orWhere(function (Builder $qqq) {
+                        $table = $qqq->getModel()->getTable();
+                        $qqq->whereNull($table.'.workspace_id')->whereNull($table.'.user_id');
+                    });
+                }
             });
         });
+    }
+
+    /**
+     * Admin-seeded rows (workspace_id and user_id both NULL) stay visible
+     * in every workspace. WaTemplate uses this for platform templates.
+     */
+    public function workspaceSharesUnownedRows(): bool
+    {
+        return false;
     }
 
     /**

@@ -2,13 +2,14 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\LogsNotifications;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Webhook extends Model
 {
-    use HasFactory, LogsNotifications;
+    use HasFactory, LogsNotifications, BelongsToWorkspace;
 
     protected $table = 'webhooks';
 

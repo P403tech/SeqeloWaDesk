@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,6 +14,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class Task extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     public const PRIORITIES = ['low', 'medium', 'high'];
     public const STATUSES   = ['open', 'done'];
     public const RELATED    = ['contact', 'deal', 'company'];

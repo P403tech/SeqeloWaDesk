@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,6 +13,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class Payment extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     public const METHODS = ['manual', 'cash', 'bank', 'card', 'upi', 'gateway', 'wa_pay', 'storefront'];
     public const SOURCES = ['manual', 'gateway', 'wa_pay', 'storefront'];
 

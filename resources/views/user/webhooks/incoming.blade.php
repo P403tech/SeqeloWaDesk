@@ -70,7 +70,7 @@
                         <span class="w-2 h-2 rounded-full bg-wa-green"></span>
                         {{ __('Good to know') }}
                     </div>
-                    {{ __('The 40-character token in each URL is its password — keep it private. We never store auth/cookie headers, and keep the last 100 requests per URL.') }}
+                    {{ __('Send requests with POST. The token in the URL only identifies the listener. A template send also needs the X-Hook-Secret header from that hook’s settings.') }}
                 </div>
             </aside>
 
@@ -199,6 +199,9 @@
                                                         <span class="px-1.5 py-0.5 rounded bg-paper-100 text-ink-700 font-mono text-[10px] uppercase">{{ $ev->method }}</span>
                                                         <span class="text-ink-500 font-mono text-[10.5px]">{{ optional($ev->received_at)->diffForHumans() }}</span>
                                                         <span class="text-ink-400 font-mono text-[10.5px] truncate">{{ $ev->source_ip }}</span>
+                                                        @if ($ev->template_send_status === 'skipped:secret')
+                                                            <span class="ml-auto px-1.5 py-0.5 rounded text-[9.5px] font-mono bg-accent-coral/10 text-accent-coral">{{ __('template blocked') }}</span>
+                                                        @endif
                                                         @if ($ev->lead_contact_id)
                                                             <a href="{{ url('/contacts') }}?q={{ $ev->lead_contact_id }}" class="ml-auto px-1.5 py-0.5 rounded text-[9.5px] font-mono bg-wa-mint text-wa-deep no-underline">{{ __('lead saved') }}</a>
                                                         @endif
@@ -364,8 +367,21 @@
                                         <div data-tpl-vars data-saved='@json($tc['var_map'] ?? (object)[])' class="space-y-2"></div>
                                     </div>
 
+                                    <label class="flex items-center gap-2 text-[12px] text-ink-700">
+                                        <input type="checkbox" name="tpl_regen_secret" value="1" class="accent-wa-deep">
+                                        {{ __('Generate a new X-Hook-Secret') }}
+                                    </label>
+                                    @if (session('hook_secret') && (int) session('hook_secret_id') === (int) $hook->id)
+                                        <div class="rounded-lg border border-wa-green/40 bg-wa-bubble px-3 py-2">
+                                            <div class="text-[10px] font-mono uppercase tracking-wide text-ink-500">{{ __('X-Hook-Secret — copy now, it is not shown again') }}</div>
+                                            <code class="block mt-1 font-mono text-[11px] text-wa-deep break-all select-all">{{ session('hook_secret') }}</code>
+                                        </div>
+                                    @elseif (!empty($tc['secret_hash']))
+                                        <p class="text-[10.5px] text-ink-500">{{ __('A secret is already set. Requests without the X-Hook-Secret header are saved and do not send the template.') }}</p>
+                                    @endif
+
                                     <button type="submit" class="mt-3 w-full px-3 py-2 rounded-lg bg-wa-deep text-paper-0 text-[12px] font-semibold hover:bg-wa-teal">{{ __('Save template send') }}</button>
-                                    <p class="text-[10.5px] text-ink-500 mt-2 leading-relaxed">{{ __('Map the recipient number and each numbered template variable to a payload field (dot notation for nested, e.g. order.id). Sends through the same engine as your inbox — WABA, Twilio or Unofficial.') }}</p>
+                                    <p class="text-[10.5px] text-ink-500 mt-2 leading-relaxed">{{ __('Map the recipient number and each numbered template variable to a payload field (dot notation for nested, e.g. order.id). The caller must send header X-Hook-Secret. Saving with template send on creates that secret when one is missing.') }}</p>
                                 </form>
                             </aside>
                         </div>

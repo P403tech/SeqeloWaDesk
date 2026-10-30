@@ -63,6 +63,28 @@ return [
     ],
 
     /*
+    | Railway Bucket credentials. Read once here so config:cache keeps them.
+    | CloudStorageManager::railwayEnv() consumes this array.
+    */
+    'railway_bucket' => [
+        'id' => env('RAILWAY_BUCKET_ID', ''),
+        'key' => env('AWS_ACCESS_KEY_ID', ''),
+        'secret' => env('AWS_SECRET_ACCESS_KEY', ''),
+        'bucket' => env('AWS_BUCKET', ''),
+        'region' => env('AWS_DEFAULT_REGION', ''),
+        'endpoint' => env('AWS_ENDPOINT', ''),
+        'access_key_id' => env('ACCESS_KEY_ID', ''),
+        'bucket_access_key_id' => env('BUCKET_ACCESS_KEY_ID', ''),
+        'secret_access_key' => env('SECRET_ACCESS_KEY', ''),
+        'bucket_secret_access_key' => env('BUCKET_SECRET_ACCESS_KEY', ''),
+        'name' => env('BUCKET', ''),
+        'name_alt' => env('BUCKET_NAME', ''),
+        'region_alt' => env('REGION', ''),
+        'endpoint_alt' => env('ENDPOINT', ''),
+        'bucket_endpoint' => env('BUCKET_ENDPOINT', ''),
+    ],
+
+    /*
     |--------------------------------------------------------------------------
     | Symbolic Links
     |--------------------------------------------------------------------------

@@ -611,7 +611,7 @@ class UsersController extends Controller
 
         $cfg = config("mail.mailers.{$mailer}", []);
         if ($mailer === 'smtp') {
-            if (empty($cfg['host']) || $cfg['host'] === '127.0.0.1' && empty(env('MAIL_HOST'))) {
+            if (empty($cfg['host']) || ($cfg['host'] === '127.0.0.1' && ! config('mail.env_host'))) {
                 return 'SMTP host not set.';
             }
             if (empty($cfg['port'])) return 'SMTP port not set.';

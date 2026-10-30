@@ -60,6 +60,35 @@ class TemplateSyncSweeper
     }
 
     /**
+     * Refresh stale PENDING templates for workspaces that have nobody
+     * opening the templates page. The per-workspace lock inside
+     * forWorkspace still skips a tenant that was swept moments ago.
+     */
+    public function sweepQuietWorkspaces(): int
+    {
+        if (!SystemSetting::get('waba_templates_v2_enabled', false)) {
+            return 0;
+        }
+        if (!Cache::add('waba_tpl_sweep:all', 1, now()->addMinutes(self::SWEEP_DEBOUNCE_MIN))) {
+            return 0;
+        }
+
+        $ids = WaTemplate::withoutGlobalScope('workspace')
+            ->staleSweepTargets()
+            ->whereNotNull('workspace_id')
+            ->distinct()
+            ->limit(50)
+            ->pluck('workspace_id');
+
+        $n = 0;
+        foreach ($ids as $id) {
+            $n += $this->forWorkspace((int) $id);
+        }
+
+        return $n;
+    }
+
+    /**
      * Refresh a single template — used by the per-row "Refresh now"
      * button on the detail page. Caller is responsible for its own
      * rate limiting (the refresh route has a 15s cache lock).

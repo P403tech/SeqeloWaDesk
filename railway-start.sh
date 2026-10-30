@@ -115,6 +115,21 @@ fi
 
 chown -R www-data:www-data storage bootstrap/cache || true
 
+# Signed URLs, mail links, and the bridge CORS list follow APP_URL.
+# Railway often leaves that on the generated *.up.railway.app host while
+# customers use the attached custom domain. Prefer that public host.
+if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+  public_host="${RAILWAY_PUBLIC_DOMAIN#https://}"
+  public_host="${public_host#http://}"
+  public_host="${public_host%%/*}"
+  export APP_URL="https://${public_host}"
+elif [ -n "${RAILWAY_STATIC_URL:-}" ]; then
+  case "$RAILWAY_STATIC_URL" in
+    http*) export APP_URL="${RAILWAY_STATIC_URL%/}" ;;
+    *) export APP_URL="https://${RAILWAY_STATIC_URL%/}" ;;
+  esac
+fi
+
 port="${PORT:-8080}"
 sed "s/__PORT__/${port}/" docker/nginx.railway.conf > /tmp/nginx-railway.conf
 
@@ -128,12 +143,24 @@ php artisan schedule:work &
 sched_pid=$!
 
 worker_pid=""
-if [ -n "$REDIS_URL" ] || [ -n "$REDIS_HOST" ]; then
-  # --timeout must stay below REDIS_QUEUE_RETRY_AFTER so a long send is not
-  # picked up twice. The loop restarts the worker if it exits.
-  php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600 --max-time=3600 &
-  worker_pid=$!
-fi
+start_worker() {
+  # Redis when it is configured. Otherwise the database queue, which is
+  # the production default when QUEUE_CONNECTION is unset. sync/null have
+  # nothing to drain.
+  if [ -n "$REDIS_URL" ] || [ -n "$REDIS_HOST" ]; then
+    # --timeout must stay below REDIS_QUEUE_RETRY_AFTER so a long send is not
+    # picked up twice.
+    php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600 --max-time=3600 &
+    worker_pid=$!
+    return
+  fi
+  case "${QUEUE_CONNECTION:-database}" in
+    sync|null|redis) worker_pid="" ;;
+    *) php artisan queue:work "${QUEUE_CONNECTION:-database}" --sleep=1 --tries=3 --timeout=60 --max-time=3600 &
+       worker_pid=$! ;;
+  esac
+}
+start_worker
 
 while kill -0 "$fpm_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
   if ! kill -0 "$sched_pid" 2>/dev/null; then
@@ -141,8 +168,7 @@ while kill -0 "$fpm_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
     sched_pid=$!
   fi
   if [ -n "$worker_pid" ] && ! kill -0 "$worker_pid" 2>/dev/null; then
-    php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600 --max-time=3600 &
-    worker_pid=$!
+    start_worker
   fi
   sleep 2
 done

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\LogsNotifications;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -9,7 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Attribute extends Model
 {
-    use HasFactory, LogsNotifications;
+    use HasFactory, LogsNotifications, BelongsToWorkspace;
 
     protected $fillable = [
         'user_id', 'workspace_id', 'attribute_name', 'attribute_key',

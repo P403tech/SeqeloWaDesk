@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -11,6 +12,13 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AiCrmAction extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     protected $fillable = [
         'workspace_id', 'user_id', 'channel', 'tool', 'kind', 'status',
         'params', 'result_summary', 'provider', 'model', 'tokens',

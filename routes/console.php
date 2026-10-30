@@ -85,3 +85,11 @@ Schedule::call(function () {
         \Illuminate\Support\Facades\Log::warning('[SCHEDULE] campaign sweep failed: '.$e->getMessage());
     }
 })->everyMinute()->name('campaign-schedule-sweep')->withoutOverlapping();
+
+Schedule::call(function () {
+    try {
+        app(\App\Services\Waba\TemplateSyncSweeper::class)->sweepQuietWorkspaces();
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::warning('[SCHEDULE] template sweep failed: '.$e->getMessage());
+    }
+})->everyTenMinutes()->name('waba-template-sweep')->withoutOverlapping();

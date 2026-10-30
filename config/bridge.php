@@ -9,6 +9,10 @@ return [
     'url' => env('SERVER_URL', ''),
     'token' => env('NODE_WEBHOOK_TOKEN', ''),
     'meta_app_secret' => env('META_APP_SECRET', ''),
+    'meta_graph_version' => env('META_GRAPH_VERSION', 'v21.0'),
+    'node_log' => env('WADESK_NODE_LOG', ''),
+    'telegram_api_id' => env('TELEGRAM_API_ID', ''),
+    'telegram_api_hash' => env('TELEGRAM_API_HASH', ''),
 
     'twilio' => [
         'sid' => env('TWILIO_ACCOUNT_SID', ''),

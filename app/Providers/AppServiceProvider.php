@@ -3,18 +3,26 @@
 namespace App\Providers;
 
 use App\Models\Announcement;
+use App\Models\Contact;
 use App\Models\Conversation;
 use App\Models\Coupon;
 use App\Models\CreditPackage;
+use App\Models\Device;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\Team;
 use App\Models\User;
+use App\Models\WaTemplate;
 use App\Models\Workspace;
+use App\Models\WpCampaign;
 use App\Observers\AuditableObserver;
+use App\Policies\ContactPolicy;
 use App\Policies\ConversationPolicy;
+use App\Policies\DevicePolicy;
 use App\Policies\TeamPolicy;
+use App\Policies\WaTemplatePolicy;
 use App\Policies\WorkspacePolicy;
+use App\Policies\WpCampaignPolicy;
 use App\Services\Inbox\AuditLogger;
 use App\Support\WorkspacePermissions;
 use Illuminate\Auth\Events\Failed as AuthFailed;
@@ -342,6 +350,10 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Conversation::class, ConversationPolicy::class);
         Gate::policy(Team::class,         TeamPolicy::class);
         Gate::policy(Workspace::class,    WorkspacePolicy::class);
+        Gate::policy(Contact::class,      ContactPolicy::class);
+        Gate::policy(Device::class,       DevicePolicy::class);
+        Gate::policy(WaTemplate::class,   WaTemplatePolicy::class);
+        Gate::policy(WpCampaign::class,   WpCampaignPolicy::class);
 
         // Lets blade do `@canWorkspace('inbox.assign')` against the user's
         // current workspace. Resolved against the auth user, no extra args.

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use App\Models\Concerns\LogsNotifications;
 use Illuminate\Database\Eloquent\Builder;
@@ -20,7 +21,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Broadcast extends Model
 {
-    use HasEngineScope, HasFactory, LogsNotifications;
+    use HasEngineScope, HasFactory, LogsNotifications, BelongsToWorkspace;
 
     /**
      * Auto-stamp `provider` on create from the workspace's active engine.

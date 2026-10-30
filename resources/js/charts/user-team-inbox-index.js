@@ -7346,17 +7346,19 @@ Limits:
     function presenceLeave(convId) {
         if (!convId) return;
         const url = `/team-inbox/api/conversations/${convId}/presence/leave`;
-        const body = new Blob(['{}'], { type: 'application/json' });
-        // sendBeacon survives tab close; fetch doesn't.
-        if (navigator.sendBeacon) {
-            navigator.sendBeacon(url, body);
-        } else {
-            fetch(url, {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'X-CSRF-TOKEN': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
-                keepalive: true,
-            }).catch(() => {});
+        const token = csrf();
+        // sendBeacon cannot set headers. Laravel accepts the token in the body.
+        if (navigator.sendBeacon && token) {
+            const fd = new FormData();
+            fd.append('_token', token);
+            navigator.sendBeacon(url, fd);
+            return;
         }
+        fetch(url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'X-CSRF-TOKEN': token, 'X-Requested-With': 'XMLHttpRequest' },
+            keepalive: true,
+        }).catch(() => {});
     }
 
     function renderPresence(snap) {

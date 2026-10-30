@@ -24,4 +24,4 @@ jobs:
           cp .env.example .env
           php artisan key:generate
       - name: Tenancy and webhook tests
-        run: php artisan test --filter="WorkspaceContextIsolationTest|SmsInboundSignatureTest|InstagramWebhook"
+        run: php artisan test --filter="WorkspaceContextIsolationTest|SmsInboundSignatureTest|InstagramWebhook|PendingHardeningTest|WabaCampaignParallelSendTest|SubscriptionReconcilerTest"

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -13,6 +14,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class IncomingWebhook extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     protected $fillable = [
         'workspace_id', 'user_id', 'name', 'token',
         'forward_url', 'forward_enabled', 'is_active',
@@ -41,6 +49,22 @@ class IncomingWebhook extends Model
         return (bool) ($this->template_config['enabled'] ?? false)
             && !empty($this->template_config['template_id'])
             && !empty($this->template_config['sender']);
+    }
+
+    /**
+     * Template sends need X-Hook-Secret. The URL token only identifies the
+     * hook; it is not enough to fire a WhatsApp message. The stored value
+     * is a sha256 of the secret the operator copied from the settings page.
+     */
+    public function templateSecretOk(?string $presented): bool
+    {
+        $hash = (string) ($this->template_config['secret_hash'] ?? '');
+        $presented = trim((string) $presented);
+        if ($hash === '' || $presented === '') {
+            return false;
+        }
+
+        return hash_equals($hash, hash('sha256', $presented));
     }
 
     public function events(): HasMany

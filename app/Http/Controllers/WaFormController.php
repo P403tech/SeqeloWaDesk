@@ -282,7 +282,7 @@ class WaFormController extends Controller implements HasMiddleware
             $form->provider_config_id = $selectedCfg->id;
             $form->save();
         }
-        $version = (string) (env('META_GRAPH_VERSION') ?: 'v21.0');
+        $version = (string) config('bridge.meta_graph_version', 'v21.0');
         $base = "https://graph.facebook.com/{$version}";
 
         try {

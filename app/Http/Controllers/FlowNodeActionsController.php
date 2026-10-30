@@ -882,7 +882,7 @@ class FlowNodeActionsController extends Controller
             ],
         ];
 
-        $version = (string) (env('META_GRAPH_VERSION') ?: 'v21.0');
+        $version = (string) config('bridge.meta_graph_version', 'v21.0');
         try {
             $resp = \Illuminate\Support\Facades\Http::withToken($token)
                 ->acceptJson()->timeout(15)
@@ -971,7 +971,7 @@ class FlowNodeActionsController extends Controller
             'access_token'    => (string) ($creds['access_token'] ?? ''),
             'phone_number_id' => $phoneNumberId,
             'waba_id'         => $wabaId,
-            'graph_version'   => (string) (env('META_GRAPH_VERSION') ?: 'v21.0'),
+            'graph_version'   => (string) config('bridge.meta_graph_version', 'v21.0'),
         ]);
     }
 

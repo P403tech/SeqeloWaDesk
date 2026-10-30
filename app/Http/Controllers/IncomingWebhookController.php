@@ -43,7 +43,7 @@ class IncomingWebhookController extends Controller
         $headers = [];
         foreach ($request->headers->all() as $k => $v) {
             $kl = strtolower($k);
-            if (in_array($kl, ['cookie', 'authorization', 'x-csrf-token', 'x-xsrf-token'], true)) continue;
+            if (in_array($kl, ['cookie', 'authorization', 'x-csrf-token', 'x-xsrf-token', 'x-hook-secret'], true)) continue;
             $headers[$k] = is_array($v) ? implode(', ', $v) : (string) $v;
         }
         $raw = (string) $request->getContent();
@@ -81,11 +81,15 @@ class IncomingWebhookController extends Controller
         // WABA / Twilio / Unofficial all behave identically. Best-effort — never
         // blocks the 200 to the caller.
         if ($hook->templateSendEnabled()) {
-            try {
-                $this->sendTemplate($hook, $request, $event);
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning('[INCOMING-WH] template send failed: ' . $e->getMessage());
-                $event->forceFill(['template_send_status' => 'failed:exception'])->save();
+            if (! $hook->templateSecretOk($request->header('X-Hook-Secret'))) {
+                $event->forceFill(['template_send_status' => 'skipped:secret'])->save();
+            } else {
+                try {
+                    $this->sendTemplate($hook, $request, $event);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('[INCOMING-WH] template send failed: ' . $e->getMessage());
+                    $event->forceFill(['template_send_status' => 'failed:exception'])->save();
+                }
             }
         }
 
@@ -293,17 +297,32 @@ class IncomingWebhookController extends Controller
             if ($slot >= 1 && $path !== '') $varMap[(string) $slot] = $path;
         }
 
+        $existing = is_array($hook->template_config) ? $hook->template_config : [];
+        $secretHash = (string) ($existing['secret_hash'] ?? '');
+        $plain = null;
+        $enabled = (bool) ($data['tpl_enabled'] ?? false);
+        if ($enabled && ($secretHash === '' || $request->boolean('tpl_regen_secret'))) {
+            $plain = Str::random(40);
+            $secretHash = hash('sha256', $plain);
+        }
+
         $hook->update(['template_config' => [
-            'enabled'      => (bool) ($data['tpl_enabled'] ?? false),
+            'enabled'      => $enabled,
             'sender'       => $senderVal,
             'template_id'  => $tplId ?: null,
             'to_field'     => trim((string) ($data['tpl_to_field'] ?? '')) ?: null,
             'country_code' => preg_replace('/\D+/', '', (string) ($data['tpl_cc'] ?? '')) ?: null,
             'header_field' => trim((string) ($data['tpl_header_field'] ?? '')) ?: null,
             'var_map'      => $varMap ?: null,
+            'secret_hash'  => $secretHash !== '' ? $secretHash : null,
         ]]);
 
-        return back()->with('status', 'Template-send settings saved.');
+        $redirect = back()->with('status', 'Template-send settings saved.');
+        if ($plain !== null) {
+            $redirect->with('hook_secret', $plain)->with('hook_secret_id', $hook->id);
+        }
+
+        return $redirect;
     }
 
     /**

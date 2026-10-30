@@ -205,7 +205,8 @@ class InboxMessage extends Model
     /**
      * Workspace-shared visibility — inbox_messages has NO workspace_id
      * column of its own (it's on the parent Conversation), so we
-     * filter through the relationship instead.
+     * filter through the relationship instead. BelongsToWorkspace is
+     * not used here for that reason.
      */
     public function scopeForCurrentWorkspace(Builder $q): Builder
     {

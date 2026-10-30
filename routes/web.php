@@ -325,11 +325,12 @@ Route::get('/webhooks/whatsapp/inbound',  [\App\Http\Controllers\WaWebhookContro
 Route::post('/webhooks/whatsapp/inbound', [\App\Http\Controllers\WaWebhookController::class, 'receive']);
 
 
-// User-generated INCOMING webhooks. Any external service POSTs (or
-// GET/PUT/PATCH) here; we capture the request + optionally relay it to the
-// operator's forward_url. The random 40-char token is the access control;
-// CSRF is exempted in bootstrap/app.php (hooks/in/*).
-Route::match(['get', 'post', 'put', 'patch'], '/hooks/in/{token}',
+// User-generated INCOMING webhooks. External services POST here; we capture
+// the request and optionally relay it to the operator's forward_url. The
+// random token is the access control. GET/PUT/PATCH are not accepted so a
+// browser prefetch cannot fire a template send. CSRF is exempted
+// (hooks/in/*).
+Route::post('/hooks/in/{token}',
     [\App\Http\Controllers\IncomingWebhookController::class, 'receive'])
     ->name('hooks.incoming.receive');
 

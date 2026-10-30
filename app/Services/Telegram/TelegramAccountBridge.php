@@ -101,8 +101,8 @@ class TelegramAccountBridge
         // MTProto api_id/hash come from Admin → Channel Settings (falling back to
         // the Node process env). Passed per request so the admin never edits node/.env,
         // and so a blank config surfaces as a readable message instead of a crash.
-        $apiId   = trim((string) (SystemSetting::get('telegram_api_id', '') ?: env('TELEGRAM_API_ID', '')));
-        $apiHash = trim((string) (SystemSetting::get('telegram_api_hash', '') ?: env('TELEGRAM_API_HASH', '')));
+        $apiId   = trim((string) (SystemSetting::get('telegram_api_id', '') ?: config('bridge.telegram_api_id', '')));
+        $apiHash = trim((string) (SystemSetting::get('telegram_api_hash', '') ?: config('bridge.telegram_api_hash', '')));
         if ($apiId !== '') {
             $payload['apiId'] = $apiId;
         }

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use App\Models\Concerns\HasEngineScope;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
@@ -20,7 +21,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  */
 class ScheduledMessage extends Model
 {
-    use HasEngineScope, SoftDeletes;
+    use HasEngineScope, SoftDeletes, BelongsToWorkspace;
 
     /**
      * Auto-stamp `provider` on create from the workspace's active engine.

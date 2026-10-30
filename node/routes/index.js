@@ -49,7 +49,7 @@ export function initializeRoutes(app) {
   // token when RAILWAY_ENVIRONMENT is set (the bridge is a public host).
   //   'loopback' — token OR loopback peer.
   //   'token'    — require X-Node-Token on every /api call.
-  //   'off'      — no gate. Logged on boot. Do not use on a public host.
+  //   'off' is ignored. There is no switch that opens the gate.
   const apiAuthMode = resolveApiAuthMode();
   const remoteIsLoopback = (req) => {
     let ip = String((req.socket && req.socket.remoteAddress) || req.ip || "");
@@ -58,7 +58,6 @@ export function initializeRoutes(app) {
   };
   const apiTokenGuard = (req, res, next) => {
     if (req.method === "OPTIONS") return next();           // CORS preflight
-    if (apiAuthMode === "off") return next();
     const expected = process.env.NODE_WEBHOOK_TOKEN || "";
     // Accept the secret from the header OR body node_token (some Laravel
     // bridge calls send it in the body so header-stripping proxies can't

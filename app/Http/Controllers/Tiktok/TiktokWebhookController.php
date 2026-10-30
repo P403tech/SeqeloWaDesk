@@ -73,22 +73,23 @@ class TiktokWebhookController extends Controller
      * + region-locked. Signed with the BUSINESS app secret. Delivers new_message /
      * new_conversation events → the unified inbox via TiktokIngestService.
      *
-     * The exact BM webhook signature header + payload shape are unverified
-     * (SPA-blocked in research) — re-confirm against
-     * business-api.tiktok.com/portal/docs/business-messaging/v1.3 before prod.
-     * Structured defensively: we map a normalised event and never throw.
+     * Business Messaging and lead webhooks are held to the same check.
+     * TikTok's business-api docs were not available to confirm a different
+     * header, so this does not invent one: an empty secret is refused, and
+     * a present secret must match this HMAC. X-Tt-Signature is accepted
+     * only when it is the same t=,s= value.
      */
     public function business(Request $request)
     {
         $raw = $request->getContent();
         $secret = \App\Services\Tiktok\TiktokBusinessClient::appSecret();
 
-        // Business webhooks are signed with the business app secret. Verify when
-        // configured; the exact header name is confirmed at integration time.
+        // Same HMAC as the Login Kit webhook. An empty secret is a refusal,
+        // not a 200, so an unsigned body cannot create inbox messages.
         if ($secret === '') {
-            Log::warning('[TT-BM-HOOK] no app secret; event acknowledged and not stored');
+            Log::warning('[TT-BM-HOOK] no app secret; refusing unsigned event');
 
-            return response('ok', 200);
+            return response('unconfigured', 401);
         }
         $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
         if ($sig === '' || ! $this->verifySignature($raw, $sig, $secret)) {
@@ -136,17 +137,17 @@ class TiktokWebhookController extends Controller
      * TikTok Ads "New Lead" webhook (Marketing API). Lead-gen Instant Form
      * submissions arrive here — TikTok has NO bulk lead-download endpoint, so the
      * webhook is the only real-time path. Each lead becomes a Contact tagged
-     * `tiktok-lead`, which fires any contact_created flow trigger. Approval-gated;
-     * payload shape unverified (re-confirm at business-api.tiktok.com) — fails soft.
+     * `tiktok-lead`. The workspace comes from the connected TikTok account,
+     * never from a workspace id in the body.
      */
     public function leads(Request $request)
     {
         $secret = \App\Services\Tiktok\TiktokBusinessClient::appSecret();
         $raw = $request->getContent();
         if ($secret === '') {
-            Log::warning('[TT-LEAD-HOOK] no app secret; event acknowledged and not stored');
+            Log::warning('[TT-LEAD-HOOK] no app secret; refusing unsigned event');
 
-            return response('ok', 200);
+            return response('unconfigured', 401);
         }
         $sig = (string) ($request->header('TikTok-Signature', '') ?: $request->header('X-Tt-Signature', ''));
         if ($sig === '' || ! $this->verifySignature($raw, $sig, $secret)) {
@@ -161,7 +162,7 @@ class TiktokWebhookController extends Controller
             // connected TikTok account. Fall back to skipping when unknown.
             $openId  = (string) ($lead['open_id'] ?? $payload['user_openid'] ?? '');
             $account = $openId !== '' ? \App\Models\TiktokAccount::findByOpenId($openId) : null;
-            $wsId = $account ? (int) $account->workspace_id : (int) ($lead['workspace_id'] ?? 0);
+            $wsId = $account ? (int) $account->workspace_id : 0;
             if (! $wsId) {
                 continue;
             }

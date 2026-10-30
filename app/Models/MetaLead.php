@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +17,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class MetaLead extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     protected $fillable = [
         'workspace_id', 'meta_lead_form_id', 'leadgen_id',
         'form_id', 'ad_id', 'ad_name', 'adset_id', 'adset_name',

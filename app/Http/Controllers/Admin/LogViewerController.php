@@ -33,7 +33,7 @@ class LogViewerController extends Controller
             return is_file($p) ? $p : null;
         }
         if ($which === 'node') {
-            foreach (array_filter([(string) env('WADESK_NODE_LOG', ''), base_path('node/node.log')]) as $p) {
+            foreach (array_filter([(string) config('bridge.node_log', ''), base_path('node/node.log')]) as $p) {
                 if (is_file($p)) return $p;
             }
         }

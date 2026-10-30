@@ -350,22 +350,6 @@ return Application::configure(basePath: dirname(__DIR__))
             // absent (EnsureInstalled 302s them away afterwards), they hold no
             // user data, and there is no authenticated session to ride on.
             'install/*',
-            // Team-inbox AJAX API — the whole namespace (send message, retry,
-            // voice, media, react, presence, meet, assistants…). These are
-            // AUTHENTICATED, SAME-ORIGIN JSON endpoints. With SameSite=Lax
-            // session cookies a cross-site POST cannot carry the cookie, so such
-            // a request fails AUTH before CSRF would ever matter — the exact
-            // reason routes/api.php ships CSRF-exempt. Exempting the namespace
-            // stops the "CSRF token mismatch · failed" a client hit when the
-            // inbox tab OUTLIVED its session token (rotation / re-login / session
-            // GC): the long-open page held a stale token and every send 419'd.
-            // (The "leave" presence ping also fires via navigator.sendBeacon,
-            // which cannot attach an X-CSRF-TOKEN header at all.)
-            'team-inbox/api/*',
-            // Quick-Send /chat AJAX API — same shape as team-inbox/api above
-            // (authenticated, same-origin JSON send/reply/AI endpoints). Same
-            // SameSite=Lax reasoning, so a long-open /chat tab never 419s either.
-            'chat/api/*',
             // Chatbot widget public API — third-party browsers calling
             // /widget/{token}/api/message have no Laravel session
             // cookie and no way to obtain a CSRF token. The

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToWorkspace;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,6 +16,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class DealCustomField extends Model
 {
+    use BelongsToWorkspace;
+
+    public function workspaceLegacyOwnerColumn(): ?string
+    {
+        return null;
+    }
+
     protected $fillable = [
         'workspace_id', 'key', 'label',
         'type', 'options', 'required', 'show_in_panel', 'sort',
